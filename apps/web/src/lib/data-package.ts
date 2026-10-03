@@ -97,6 +97,7 @@ export async function buildDataPackageNupkgFile({
       basename: m.name,
     }));
   } catch {
+    // sanitizePayloadPath rejects names a package cannot carry.
     return { ok: false, message: t("developer:upload.invalidFileName") };
   }
 
@@ -118,6 +119,7 @@ export async function buildDataPackageNupkgFile({
         .decode(await file.arrayBuffer());
       rewritten = rewriteTemplateReferences(json, packagePath, materialEntries, id);
     } catch {
+      // The name or contents cannot be packaged; the user is told which file.
       return {
         ok: false,
         message: t("developer:upload.invalidFile", { name: file.name }),

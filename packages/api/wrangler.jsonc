@@ -12,7 +12,14 @@
   "limits": { "cpu_ms": 300000 },
   "observability": {
     "enabled": true,
-    "head_sampling_rate": 1
+    "head_sampling_rate": 1,
+    "traces": {
+      "enabled": true
+    },
+    // Issues は Wrangler 4.134.0 以上が必要。ここで有効にしないと次のデプロイで無効に戻る。
+    "issues": {
+      "enabled": true
+    }
   },
   "triggers": {
     "crons": ["*/5 * * * *"]

@@ -46,15 +46,10 @@ export async function submitFeedback(
 
   const { name, email, category, message } = validated.data;
 
-  let userId: string | null = null;
-  try {
-    const session = await auth.api.getSession({ headers: await headers() });
-    if (session?.user?.id) {
-      userId = session.user.id;
-    }
-  } catch {
-    // Anonymous is fine
-  }
+  // Signed-out senders have no session; only a failed lookup throws, and that
+  // is not the same as being anonymous.
+  const session = await auth.api.getSession({ headers: await headers() });
+  const userId = session?.user?.id ?? null;
 
   try {
     const categoryLabels: Record<string, string> = {

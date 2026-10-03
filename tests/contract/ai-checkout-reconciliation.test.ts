@@ -167,7 +167,13 @@ describe("AI Checkout return reconciliation", () => {
   });
 
   it("ignores an expired, forged, or inaccessible Checkout Session return", async () => {
-    mocks.checkoutRetrieve.mockRejectedValue(new Error("No such checkout session"));
+    mocks.checkoutRetrieve.mockRejectedValue(
+      Object.assign(new Error("No such checkout session"), {
+        type: "StripeInvalidRequestError",
+        statusCode: 404,
+        code: "resource_missing",
+      }),
+    );
 
     await expect(
       reconcileAiCheckoutSuccess("cs_unavailable"),
@@ -175,6 +181,20 @@ describe("AI Checkout return reconciliation", () => {
 
     expect(mocks.reconcileSubscriptionObservation).not.toHaveBeenCalled();
     expect(mocks.findSubscriptionCheckoutAttemptBySessionId).not.toHaveBeenCalled();
+  });
+
+  it("does not mistake Stripe being unreachable for a bad Checkout Session return", async () => {
+    mocks.checkoutRetrieve.mockRejectedValue(
+      Object.assign(new Error("Connection reset"), {
+        type: "StripeConnectionError",
+      }),
+    );
+
+    await expect(
+      reconcileAiCheckoutSuccess("cs_unreachable"),
+    ).rejects.toThrow("Connection reset");
+
+    expect(mocks.reconcileSubscriptionObservation).not.toHaveBeenCalled();
   });
 
   it("reconciles the exact completed and owned Checkout Session", async () => {

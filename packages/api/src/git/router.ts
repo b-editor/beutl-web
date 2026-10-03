@@ -99,7 +99,7 @@ export async function reconcileGitRepositoryDeletions(env: GitRouterEnvironment)
       }
     } catch (error) {
       await db.gitRepository.update({ where: { id: row.id }, data: { maintenanceFailures: { increment: 1 } } })
-        .catch(() => undefined);
+        .catch((failureError) => console.error("Failed to record Git cleanup failure", { repoId: row.id, error: failureError }));
       console.error("Git repository cleanup failed", { repoId: row.id, error,
         failures: row.maintenanceFailures + 1, interventionRequired: row.maintenanceFailures >= 4 });
     }
@@ -127,12 +127,13 @@ export async function reconcileGitAccountStorage(env: GitRouterEnvironment): Pro
         method: "POST", headers: { "x-beutl-repo-id": row.id, "x-beutl-git-scope": "admin",
           "x-beutl-git-owner-id": row.ownerId! },
       }));
-      if (result.status !== 204) throw new Error(`Git account storage reconciliation returned HTTP ${result.status}`);
+      if (result.status !== 204 && result.status !== 202) throw new Error(`Git account storage reconciliation returned HTTP ${result.status}`);
       await db.gitRepository.update({ where: { id: row.id }, data: { maintenanceFailures: 0 } });
+      if (result.status === 202) continue; // The persisted adoption cursor advances on the next scheduled run.
       completed++;
     } catch (error) {
       await db.gitRepository.update({ where: { id: row.id }, data: { maintenanceFailures: { increment: 1 } } })
-        .catch(() => undefined);
+        .catch((failureError) => console.error("Failed to record Git reconciliation failure", { repoId: row.id, error: failureError }));
       console.error("Git account storage reconciliation failed", { repoId: row.id, error,
         failures: row.maintenanceFailures + 1, interventionRequired: row.maintenanceFailures >= 4 });
     }
@@ -158,7 +159,7 @@ export async function reconcileGitLfsReservations(env: GitRouterEnvironment): Pr
       completed++;
     } catch (error) {
       await db.gitLfsStorage.updateMany({ where: { repoId: row.repoId, oid: row.oid },
-        data: { cleanupFailures: { increment: 1 } } }).catch(() => undefined);
+        data: { cleanupFailures: { increment: 1 } } }).catch((failureError) => console.error("Failed to record LFS cleanup failure", { repoId: row.repoId, oid: row.oid, error: failureError }));
       console.error("Git LFS reservation cleanup failed", { repoId: row.repoId, oid: row.oid, error,
         failures: row.cleanupFailures + 1, interventionRequired: row.cleanupFailures >= 4 });
     }
@@ -246,7 +247,10 @@ async function routeGitRequestCore(request: Request, env: GitRouterEnvironment):
   }
   if (isCollection && request.method === "POST") {
     let input: unknown;
-    try { input = await request.json(); } catch { return json({ message: "Invalid JSON" }, 400); }
+    try { input = await request.json(); } catch {
+      // Invalid request JSON is reported to the caller as HTTP 400.
+      return json({ message: "Invalid JSON" }, 400);
+    }
     const name = (input as { name?: unknown } | null)?.name;
     const creationId = (input as { creationId?: unknown } | null)?.creationId;
     const requestedOwner = (input as { ownerId?: unknown } | null)?.ownerId;
@@ -279,7 +283,10 @@ async function routeGitRequestCore(request: Request, env: GitRouterEnvironment):
   if (!repoMatch[2] && request.method === "GET") return json(view(row, repoUrl(env, request, repoId)));
   if (repoMatch[2] === "token" && request.method === "POST") {
     let input: unknown;
-    try { input = await request.json(); } catch { return json({ message: "Invalid JSON" }, 400); }
+    try { input = await request.json(); } catch {
+      // Invalid request JSON is reported to the caller as HTTP 400.
+      return json({ message: "Invalid JSON" }, 400);
+    }
     const scope = (input as { scope?: unknown } | null)?.scope;
     if (scope !== "read" && scope !== "write") return json({ message: "Invalid Git scope" }, 400);
     return json(await issueGitToken(secret, userId, repoId, scope));

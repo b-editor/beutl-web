@@ -26,8 +26,14 @@ export interface GitDurableStorage {
   get<T>(key: string): Promise<T | undefined>;
   put<T>(key: string, value: T): Promise<void>;
   delete(key: string): Promise<unknown>;
-  list<T>(options: { prefix: string }): Promise<Map<string, T>>;
+  list<T>(options: { prefix: string; startAfter?: string; limit?: number }): Promise<Map<string, T>>;
+  getAlarm(): Promise<number | null>;
   setAlarm(time: number): Promise<void>;
+}
+
+export async function scheduleGitMaintenance(storage: GitDurableStorage, time: number): Promise<void> {
+  const existing = await storage.getAlarm();
+  if (existing === null || time < existing) await storage.setAlarm(time);
 }
 
 export interface LfsEnvironment {
@@ -106,7 +112,7 @@ export async function cleanupExpiredLfsRecord(
   }
   if (now < finalSweepAt) {
     await storage.put(`lfs:${oid}`, { ...record, cleanupStarted: true });
-    await storage.setAlarm(finalSweepAt + 1000);
+    await scheduleGitMaintenance(storage, finalSweepAt + 1000);
     return;
   }
   await accounting?.releaseLfs(repoId, oid);
@@ -151,7 +157,7 @@ export async function pruneExpiredLfs(
   const orphanSweep = bucket.cleanupMultipartUploads ? now + 24 * 60 * 60 * 1000 : Infinity;
   const retry = pending ? now + 60_000 : Infinity;
   if (Number.isFinite(Math.min(nextExpiry, orphanSweep, retry))) {
-    await storage.setAlarm(Math.min(nextExpiry + 1000, orphanSweep, retry));
+    await scheduleGitMaintenance(storage, Math.min(nextExpiry + 1000, orphanSweep, retry));
   }
   return pending;
 }
@@ -290,7 +296,7 @@ export async function handleLfsBatch(
       const earliest = [...records.values()]
         .filter((value) => !value.verified)
         .reduce((time, value) => Math.min(time, value.expiresAt), Infinity);
-      await storage.setAlarm(earliest + 1000);
+      await scheduleGitMaintenance(storage, earliest + 1000);
     }
     const actionSeconds = Math.max(1, Math.floor((record.expiresAt - Date.now()) / 1000));
     const uploadHref = multipart

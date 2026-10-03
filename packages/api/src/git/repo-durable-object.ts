@@ -1,5 +1,5 @@
 import { handleGitHttp } from "./git-http";
-import { handleLfsBatch, handleLfsVerify, pruneExpiredLfs, cleanupExpiredLfsRecord, LFS_BASIC_CLEANUP_GRACE_MS, LFS_MAINTENANCE_BATCH_SIZE, type GitDurableStorage, type LfsEnvironment, type LfsRecord } from "./lfs";
+import { handleLfsBatch, handleLfsVerify, pruneExpiredLfs, cleanupExpiredLfsRecord, scheduleGitMaintenance, LFS_BASIC_CLEANUP_GRACE_MS, LFS_MAINTENANCE_BATCH_SIZE, type GitDurableStorage, type LfsEnvironment, type LfsRecord } from "./lfs";
 import type { GitObjectBucket } from "./git-object-store";
 import { S3GitObjectBucket, type GitS3Environment } from "./s3-object-store";
 import type { GitScope } from "./tokens";
@@ -126,13 +126,27 @@ export class GitRepositoryDurableObject {
       if (scope !== "admin" || !this.accounting) return new Response("Forbidden", { status: 403 });
       if (await this.state.storage.get<boolean>("deleted")) return new Response("Repository deleted", { status: 410 });
       const ownerId = request.headers.get("x-beutl-git-owner-id") ?? "";
-      const records = await this.state.storage.list<LfsRecord>({ prefix: "lfs:" });
-      for (const [key, record] of records) {
-        await this.accounting.adoptLfs({ repoId, oid: key.slice(4), ownerId,
-          size: record.size, verified: record.verified, expiresAt: record.expiresAt });
+      const previousOwner = await this.state.storage.get<string>("accountingOwnerId");
+      if (!ownerId || previousOwner && previousOwner !== ownerId) return new Response("Accounting owner mismatch", { status: 409 });
+      await this.state.storage.put("accountingOwnerId", ownerId);
+      if (!await this.state.storage.get<boolean>("accountingLfsComplete")) {
+        const cursor = await this.state.storage.get<string>("accountingLfsCursor");
+        const records = await this.state.storage.list<LfsRecord>({ prefix: "lfs:", startAfter: cursor,
+          limit: LFS_MAINTENANCE_BATCH_SIZE });
+        for (const [key, record] of records) {
+          await this.accounting.adoptLfs({ repoId, oid: key.slice(4), ownerId,
+            size: record.size, verified: record.verified, expiresAt: record.expiresAt });
+          // Persist each accepted upsert so a failed invocation resumes after it.
+          await this.state.storage.put("accountingLfsCursor", key);
+        }
+        if (records.size === LFS_MAINTENANCE_BATCH_SIZE) {
+          return new Response(null, { status: 202, headers: { "Retry-After": "60" } });
+        }
       }
       await this.accounting.settleHistory(repoId, await this.gitObjectBytes(bucket, repoId));
       await this.accounting.markAccounted(repoId, ownerId);
+      await this.state.storage.put("accountingLfsComplete", true);
+      await this.state.storage.delete("accountingLfsCursor");
       return new Response(null, { status: 204 });
     }
     if (request.method === "DELETE" && path === "/internal/git/cleanup") {
@@ -209,7 +223,7 @@ export class GitRepositoryDurableObject {
         } finally {
           if (bucket.pruneGitVersions) {
             await this.state.storage.put("gitGcPending", true);
-            await this.state.storage.setAlarm(Date.now() + 60_000);
+            await scheduleGitMaintenance(this.state.storage, Date.now() + 60_000);
           }
           if (this.accounting) {
             await this.accounting.settleHistory(repoId, await this.gitObjectBytes(bucket, repoId));

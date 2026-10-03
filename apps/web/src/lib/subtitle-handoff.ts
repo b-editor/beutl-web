@@ -30,6 +30,7 @@ export function saveSubtitleHandoff(
     window.sessionStorage.setItem(handoffKey(userId), JSON.stringify(handoff));
     return true;
   } catch {
+    // Browser storage is unavailable or full; the caller falls back.
     return false;
   }
 }
@@ -58,6 +59,7 @@ export function loadSubtitleHandoff(userId: string): SubtitleHandoff | null {
         typeof record.sourceName === "string" ? record.sourceName : null,
     };
   } catch {
+    // An unavailable store or corrupt record reads as no handoff.
     return null;
   }
 }

@@ -34,7 +34,10 @@ continues to serve unrelated Beutl user files and is not used for hosted Git.
    `PUBLIC_ORIGIN` must remain the public Beutl origin.
 4. Run scheduled account reconciliation with B2 configured. It adopts old
    repositories' LFS reservations, lists current Git object sizes, and marks
-   `accountedAt`. Until then, storage admission and Git traffic for an affected
+   `accountedAt` after the entire LFS pass. Each invocation adopts at most 50
+   records and persists its last accepted key. A partial pass returns HTTP 202
+   and continues on the next scheduled run; a failed call or DO restart does
+   not restart the accepted prefix. Until then, storage admission and Git traffic for an affected
    account fail closed. Check that no active repository has `accountedAt IS NULL`
    and compare account usage before and after reconciliation. Existing bytes
    remain counted even if they exceed the current plan; new uploads then wait
@@ -45,7 +48,8 @@ continues to serve unrelated Beutl user files and is not used for hosted Git.
 `BEUTL_GIT_LFS_REPO_QUOTA_BYTES` optionally changes the 20 GiB per repository
 LFS quota. A single object is capped at 20 GiB even if that quota is raised.
 Git history is limited to 16 MiB of stored objects, an 8 MiB incoming pack,
-and 9,000 stored object entries. A non-empty push reserves two entries for its
+and 9,000 stored object entries. A 2 MiB upload-pack negotiation allowance covers
+want/have packets for the supported ref count. A non-empty push reserves two entries for its
 pack and index and is rejected before it could make listings unusable. Fetches,
 ref-only pushes and repository deletion remain available at this limit.
 Branches, tags and other refs are also limited to 9,000 per repository, even
@@ -179,7 +183,8 @@ behavior before enabling production traffic.
   keys, resumes after a DO restart, and schedules another alarm in one minute
   while work remains. A new full pass starts at least 24 hours after the last
   completed pass, independently of push/expiry alarms, and collects versions
-  from very late PUTs.
+  from very late PUTs. LFS batches and pushes preserve any earlier scheduled
+  maintenance alarm instead of postponing its next page.
   Each queued DO invocation lazily opens
   one DB client and closes it at completion, including cold-start alarms.
 
@@ -202,11 +207,15 @@ renewal in the user's local application data, scoped by project and OID.
 The agent locks each OID and rehashes the saved prefix before a range request;
 it reports completion only after checking the full size and SHA-256. It saves
 bytes without transfer URLs or headers. The next download for this project
-collects idle partials older than 24 hours; lock files are removed at close.
+collects idle partials and unconsumed verified handoff files older than 24 hours;
+locked handoffs are retained and lock files are removed at close. A failed
+completion-message write removes its current handoff immediately.
 Authentication expiry, cancellation and exhausted transient retries retain
 resumable bytes. Disk errors, malformed ranges and hash failures discard them;
 progressing downloads have no minimum speed cutoff. Headers and each network
 read have a two-minute idle timeout; a stalled final EOF check fails the transfer.
+Upload idle deadlines restart for outgoing writes and incoming response bytes;
+advancing uploads and their control responses have no total-duration cutoff.
 
 Local tests cover real Git CLI push, clone, pull after a second push, and
 competing pushes against an in-memory bucket and Durable Object; LFS quota,

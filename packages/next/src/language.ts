@@ -15,6 +15,7 @@ function getRequestPathname(h: Headers): string | null {
   try {
     return new URL(url).pathname;
   } catch {
+    // A value that is not a URL has no path.
     return null;
   }
 }

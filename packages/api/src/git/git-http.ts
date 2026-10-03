@@ -8,6 +8,7 @@ import {
   receivePackResponse,
 } from "git-fs-s3/http";
 import type { GitScope } from "./tokens";
+import { MAX_GIT_NEGOTIATION_BYTES } from "@beutl/core";
 import { GitObjectStore, type GitObjectBucket } from "./git-object-store";
 
 // git-fs-s3's HTTP handlers and isomorphic-git build full packs in memory.
@@ -18,7 +19,6 @@ export const MAX_GIT_REPOSITORY_BYTES = 16 * 1024 * 1024;
 // directories. Rejected pushes must leave the repository readable and deletable.
 export const MAX_GIT_REPOSITORY_OBJECTS = 9_000;
 export const MAX_GIT_REPOSITORY_REFS = 9_000;
-const MAX_GIT_NEGOTIATION_BYTES = 64 * 1024;
 const GITDIR = "/repo.git";
 
 export function incomingGitObjectBytes(pack: Uint8Array): number {
@@ -122,7 +122,10 @@ export async function handleGitHttp(
     const parsed = parseReceivePackBody(body);
     let additionalBytes: number;
     try { additionalBytes = incomingGitObjectBytes(parsed.packData); }
-    catch { return new Response("Invalid Git pack header", { status: 400 }); }
+    catch {
+      // Malformed pack metadata is a client protocol error, returned as HTTP 400.
+      return new Response("Invalid Git pack header", { status: 400 });
+    }
     if (parsed.packData.byteLength > 0 &&
         new DataView(parsed.packData.buffer, parsed.packData.byteOffset).getUint32(8) === 0) {
       // Native Git can send a checksum-bearing, zero-object pack for a ref-only

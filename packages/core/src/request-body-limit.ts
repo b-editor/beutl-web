@@ -18,6 +18,8 @@ import {
  */
 export const MAX_REQUEST_BODY_BYTES = 100 * 1024 * 1024;
 export const MAX_API_JSON_REQUEST_BYTES = 32 * 1024;
+// Allow want/have packets for all 9,000 supported refs, plus capabilities.
+export const MAX_GIT_NEGOTIATION_BYTES = 2 * 1024 * 1024;
 export const MAX_AUTH_REQUEST_BODY_BYTES = 64 * 1024;
 export const MAX_INTERNAL_STORAGE_START_BODY_BYTES = 4 * 1024;
 // A completion names every part, so the cap follows the part count rather
@@ -61,7 +63,7 @@ export function apiRequestBodyLimit(
     return 8 * 1024 * 1024;
   }
   if (normalizedMethod === "POST" && /^\/api\/v3\/git\/[0-9a-f-]+\.git\/git-upload-pack$/u.test(path)) {
-    return 64 * 1024;
+    return MAX_GIT_NEGOTIATION_BYTES;
   }
   if (normalizedMethod === "PUT" && /^\/api\/v3\/git\/[0-9a-f-]+\.git\/info\/lfs\/objects\/[0-9a-f]{64}\/multipart\/parts\/\d+$/u.test(path)) {
     return 64 * 1024 * 1024;

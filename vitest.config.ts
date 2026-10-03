@@ -20,6 +20,9 @@ function workspacePackage(name: string) {
 const nextModulesDir = path.resolve(__dirname, "apps/web/node_modules/next");
 
 export default defineConfig({
+  // Next preserves JSX for its compiler. Component contract tests need Vite to
+  // lower it before import analysis instead of inheriting that setting.
+  oxc: { jsx: { runtime: "automatic" } },
   test: {
     include: ["tests/**/*.test.ts"],
     environment: "node",

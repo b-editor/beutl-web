@@ -19,6 +19,7 @@ import {
 } from "@beutl/ui/ui/sidebar";
 import {
   ChevronRight,
+  ChartNoAxesCombined,
   CreditCard,
   HardDrive,
   LayoutDashboard,
@@ -65,6 +66,7 @@ export function AdminSidebar({ lang }: { lang: string }) {
     { section: undefined, href: `/${lang}/admin`, label: t("admin:nav.dashboard"), icon: LayoutDashboard },
     { section: "users", href: `/${lang}/admin/users`, label: t("admin:nav.users"), icon: Users },
     { section: "feedback", href: `/${lang}/admin/feedback`, label: t("admin:nav.feedback"), icon: MessageSquare },
+    { section: "usage", href: `/${lang}/admin/usage`, label: t("admin:nav.desktopUsage"), icon: ChartNoAxesCombined },
     { section: "packages", href: `/${lang}/admin/packages`, label: t("admin:nav.packages"), icon: Package },
     { section: "ai", label: t("admin:nav.ai"), icon: Sparkles },
     { section: "storage", label: t("admin:nav.storage"), icon: HardDrive },

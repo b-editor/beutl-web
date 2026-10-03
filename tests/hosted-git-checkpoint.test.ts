@@ -14,6 +14,7 @@ class Storage implements GitDurableStorage {
     return new Map([...this.values].filter(([key]) => key.startsWith(prefix))) as Map<string, T>;
   }
   async setAlarm(_time: number) { }
+  async getAlarm() { return null; }
 }
 
 describe("version-pinned resumable SHA-256", () => {

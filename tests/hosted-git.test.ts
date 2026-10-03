@@ -10,7 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import { sign } from "hono/jwt";
 import { handleLfsBatch, handleLfsVerify, type GitDurableStorage, type LfsRecord } from "../packages/api/src/git/lfs";
 import { pruneExpiredLfs, LFS_BASIC_CLEANUP_GRACE_MS, MAX_LFS_SINGLE_PUT_BYTES, MAX_LFS_RECORDS_PER_REPOSITORY } from "../packages/api/src/git/lfs";
-import { incomingGitObjectBytes, handleGitHttp, MAX_GIT_REPOSITORY_OBJECTS, MAX_GIT_REPOSITORY_REFS } from "../packages/api/src/git/git-http";
+import { incomingGitObjectBytes, handleGitHttp, readBodyAtMost, MAX_GIT_REPOSITORY_OBJECTS, MAX_GIT_REPOSITORY_REFS } from "../packages/api/src/git/git-http";
 import { createGitRepositoryForOwner, reserveGitLfs, commitGitLfs, GitLfsQuotaExceededError } from "@beutl/db";
 import { STORAGE_FREE_QUOTA_BYTES } from "@beutl/core";
 import type { GitStorageAccounting } from "../packages/api/src/git/accounting";
@@ -18,7 +18,7 @@ import { handleMultipart } from "../packages/api/src/git/multipart";
 import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable-object";
 import { GitObjectStore, type GitObjectBucket, type GitMultipartUpload } from "../packages/api/src/git/git-object-store";
 import { issueGitToken, issueMultipartToken, verifyGitToken, verifyMultipartToken } from "../packages/api/src/git/tokens";
-import { apiRequestBodyLimit, MAX_API_JSON_REQUEST_BYTES } from "../packages/core/src/request-body-limit";
+import { apiRequestBodyLimit, MAX_API_JSON_REQUEST_BYTES, MAX_GIT_NEGOTIATION_BYTES } from "../packages/core/src/request-body-limit";
 import { setDbProvider } from "../packages/db/src/provider";
 import {
   GIT_DELETE_SWEEP_GRACE_MS,
@@ -47,9 +47,11 @@ class MemoryStorage implements GitDurableStorage {
   async get<T>(key: string) { return this.values.get(key) as T | undefined; }
   async put<T>(key: string, value: T) { this.values.set(key, value); }
   async delete(key: string) { return this.values.delete(key); }
-  async list<T>({ prefix }: { prefix: string }) {
-    return new Map([...this.values].filter(([key]) => key.startsWith(prefix))) as Map<string, T>;
+  async list<T>({ prefix, startAfter, limit }: { prefix: string; startAfter?: string; limit?: number }) {
+    return new Map([...this.values].filter(([key]) => key.startsWith(prefix) && (!startAfter || key > startAfter))
+      .sort(([a], [b]) => a.localeCompare(b)).slice(0, limit)) as Map<string, T>;
   }
+  async getAlarm() { return this.alarms.at(-1) ?? null; }
   async setAlarm(time: number) { this.alarms.push(time); }
 }
 
@@ -180,7 +182,7 @@ class MemoryAccounting implements GitStorageAccounting {
   async releaseRepository(repoId: string) {
     for (const key of this.entries.keys()) if (key.startsWith(`${repoId}:`)) this.entries.delete(key);
   }
-  async adoptLfs() { }
+  async adoptLfs(_input: Parameters<GitStorageAccounting["adoptLfs"]>[0]) { }
   async markAccounted() { }
 }
 
@@ -488,7 +490,7 @@ it("allocates the larger body cap only to the Git pack and LFS part methods", ()
   expect(apiRequestBodyLimit("POST", `${base}/git-receive-pack`, "application/x-git-receive-pack-request"))
     .toBe(8 * 1024 * 1024);
   expect(apiRequestBodyLimit("POST", `${base}/git-upload-pack`, "application/x-git-upload-pack-request"))
-    .toBe(64 * 1024);
+    .toBe(MAX_GIT_NEGOTIATION_BYTES);
   expect(apiRequestBodyLimit("PUT", `${base}/info/lfs/objects/${"a".repeat(64)}/multipart/parts/1`, "application/octet-stream"))
     .toBe(64 * 1024 * 1024);
   expect(apiRequestBodyLimit("PATCH", `${base}/info/lfs/objects/${"a".repeat(64)}/tus/12345678-1234-1234-1234-123456789012`,
@@ -1411,6 +1413,87 @@ describe("tus 1.0 upload backed by B2 multipart", () => {
 });
 
 describe("Durable Object queue", () => {
+  it("adopts legacy LFS records in bounded batches across failures and DO restarts", async () => {
+    const storage = new MemoryStorage();
+    const bucket = new MemoryBucket();
+    const accounting = new MemoryAccounting(1_000);
+    const adopted = new Set<string>();
+    let calls = 0;
+    let marked = 0;
+    let fail = true;
+    accounting.adoptLfs = async (input) => {
+      calls++;
+      if (adopted.size === 74 && fail) { fail = false; throw new Error("Database interrupted"); }
+      adopted.add(input.oid);
+    };
+    accounting.markAccounted = async () => { marked++; };
+    // Reverse insertion order exercises the DO's lexicographic list cursor.
+    for (let i = 124; i >= 0; i--) await storage.put(`lfs:${i.toString(16).padStart(64, "0")}`, {
+      kind: "basic", size: 1, verified: i % 2 === 0, expiresAt: Date.now() + 60_000,
+    } satisfies LfsRecord);
+    const request = () => new Request("https://git.internal/internal/git/accounting", {
+      method: "POST", headers: { "x-beutl-repo-id": repoId, "x-beutl-git-scope": "admin", "x-beutl-git-owner-id": "owner" },
+    });
+    const invoke = () => new GitRepositoryDurableObject({ storage }, env, bucket, accounting).fetch(request());
+    expect((await invoke()).status).toBe(202);
+    expect([calls, adopted.size, marked]).toEqual([50, 50, 0]);
+    await expect(invoke()).rejects.toThrow("Database interrupted");
+    expect([calls, adopted.size, marked]).toEqual([75, 74, 0]);
+    const before = calls;
+    expect((await invoke()).status).toBe(202);
+    expect(calls - before).toBe(50);
+    expect([adopted.size, marked]).toEqual([124, 0]);
+    expect((await invoke()).status).toBe(204);
+    expect([calls, adopted.size, marked]).toEqual([126, 125, 1]);
+    expect(await storage.get("accountingLfsCursor")).toBeUndefined();
+    expect((await invoke()).status).toBe(204);
+    expect(calls).toBe(126); // Later history reconciliation never readopts the completed pass.
+  });
+
+  it("does not classify pending account migration as a scheduled maintenance failure", async () => {
+    const updates: any[] = [];
+    setDbProvider(async () => ({ gitRepository: {
+      findMany: async () => [{ id: repoId, ownerId: "owner", maintenanceFailures: 0 }],
+      update: async (args: any) => { updates.push(args.data); return {}; },
+    } }) as never);
+    const environment = { ...env, BEUTL_GIT_REPOSITORIES: {
+      idFromName: (name: string) => name,
+      get: () => ({ fetch: async () => new Response(null, { status: 202 }) }),
+    } } as never;
+    expect(await reconcileGitAccountStorage(environment)).toBe(0);
+    expect(updates.some((data) => data.maintenanceFailures?.increment)).toBe(false);
+    expect(updates.at(-1)).toEqual({ maintenanceFailures: 0 });
+  });
+
+  it.each(["upload", "download"] as const)("keeps an earlier maintenance alarm after an LFS %s batch", async (operation) => {
+    const storage = new MemoryStorage();
+    const bucket = new MemoryBucket();
+    bucket.cleanupMultipartUploads = async () => {};
+    const deadline = Date.now() + 60_000;
+    await storage.setAlarm(deadline);
+    await storage.put("gitGcPending", true);
+    await storage.put("lfsSweepProgress", { startedAt: Date.now(), cursor: "page-one" });
+    await handleLfsBatch(lfsRequest(operation, [{ oid: "7".repeat(64), size: 1 }]),
+      bucket, storage, env, repoId, "write", "Bearer token");
+    expect(await storage.getAlarm()).toBe(deadline);
+    expect(await storage.get("gitGcPending")).toBe(true);
+    expect(await storage.get("lfsSweepProgress")).toMatchObject({ cursor: "page-one" });
+  });
+
+  it("accepts bounded negotiation packets for all supported ref tips", async () => {
+    const tips = Array.from({ length: MAX_GIT_REPOSITORY_REFS }, (_, i) => i.toString(16).padStart(40, "0"));
+    const lines = tips.map((oid) => `0032want ${oid}\n`).join("") + "0000" +
+      tips.map((oid) => `0032have ${oid}\n`).join("") + "0009done\n";
+    const bytes = new TextEncoder().encode(lines);
+    expect(bytes.length).toBeGreaterThan(64 * 1024);
+    expect(bytes.length).toBeLessThan(MAX_GIT_NEGOTIATION_BYTES);
+    const limit = apiRequestBodyLimit("POST", `/api/v3/git/${repoId}.git/git-upload-pack`, null);
+    expect(await readBodyAtMost(new Request("https://git.internal", { method: "POST", body: bytes }), limit)).toEqual(bytes);
+    await expect(readBodyAtMost(new Request("https://git.internal", {
+      method: "POST", body: new Uint8Array(MAX_GIT_NEGOTIATION_BYTES + 1),
+    }), limit)).rejects.toThrow("too large");
+  });
+
   it("initializes one DB client per cold invocation, including alarms", async () => {
     setDbProvider(async () => { throw new Error("Worker.fetch was never initialized"); });
     const storage = new MemoryStorage();

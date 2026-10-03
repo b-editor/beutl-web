@@ -24,7 +24,9 @@ const mocks = vi.hoisted(() => ({
   recordBillingRefundCancellation: vi.fn(),
   recordStripeCustomerProvisioningRemote: vi.fn(),
   replaceCustomerMappingWithVerifiedOwnership: vi.fn(),
+  retrieveCharge: vi.fn(),
   retrieveCustomer: vi.fn(),
+  retrievePaymentIntent: vi.fn(),
   retrieveSubscription: vi.fn(),
   scheduleBillingRefundAttempt: vi.fn(),
   scheduleStripeCustomerProvisioningCleanup: vi.fn(),
@@ -76,6 +78,8 @@ vi.mock("@/lib/stripe/config", () => ({
       },
     },
     invoicePayments: { list: mocks.invoicePaymentList },
+    paymentIntents: { retrieve: mocks.retrievePaymentIntent },
+    charges: { retrieve: mocks.retrieveCharge },
     customers: {
       create: mocks.createCustomer,
       del: mocks.deleteCustomer,
@@ -613,6 +617,34 @@ describe("application-owned Stripe customer lifecycle", () => {
       stripeCheckoutSessionId: "cs_topup",
     }));
     expect(mocks.expireCheckoutSession).toHaveBeenCalledWith("cs_topup");
+  });
+
+  it.each([
+    ["paymentIntent", "missing"], ["charge", "missing"], ["subscription", "missing"],
+    ["paymentIntent", "unavailable"], ["charge", "unavailable"], ["subscription", "unavailable"],
+  ] as const)("fails closed when a recent completion's %s retrieval is %s", async (kind, failure) => {
+    const failed = (message: string) => failure === "missing" ? Object.assign(new Error(message), resourceMissing) : new Error(message);
+    mocks.findCustomerByUserId.mockResolvedValue(mapping("cus_existing"));
+    const metadata = kind === "subscription"
+      ? { ...ownerMetadata(), billingOfferId: "offer_pro_v1", planId: "pro" }
+      : { ...ownerMetadata(), beutlPurchaseKind: "package", packageId: "package-1" };
+    mocks.listCheckoutSessions.mockImplementation(async ({ status }: any) => ({
+      data: status === "complete" ? [{ id: "cs_recent", metadata, payment_intent: "pi_recent", subscription: "sub_recent" }] : [],
+      has_more: false,
+    }));
+    if (kind === "paymentIntent") mocks.retrievePaymentIntent.mockRejectedValue(failed("PI unavailable"));
+    else mocks.retrievePaymentIntent.mockResolvedValue({ id: "pi_recent", latest_charge: "ch_recent" });
+    if (kind === "charge") mocks.retrieveCharge.mockRejectedValue(failed("charge unavailable"));
+    else mocks.retrieveCharge.mockResolvedValue({ id: "ch_recent", created: 2_000_000_000 });
+    if (kind === "subscription") mocks.retrieveSubscription.mockRejectedValue(failed("subscription unavailable"));
+
+    const closing = closeStripeCustomerForAccountDeletion({ userId: "user-1", deletionAuthorizedAt: new Date("2026-08-25T00:00:00Z") });
+
+    // A missing object is evidence against ownership. Stripe being unreachable
+    // is not, and is reported as the failure it is.
+    if (failure === "missing") await expect(closing).resolves.toMatchObject({ status: "owner-mismatch" });
+    else await expect(closing).rejects.toThrow("unavailable");
+    expect(mocks.deleteCustomer).not.toHaveBeenCalled();
   });
 
   it("does not close a metadata-free legacy customer", async () => {

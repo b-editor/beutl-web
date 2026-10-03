@@ -55,6 +55,7 @@ export async function verifyGitToken(
     ) return null;
     return { ownerId: payload.sub, scope: payload.scope };
   } catch {
+    // A malformed/expired JWT is unauthenticated; do not log its token material.
     return null;
   }
 }
@@ -88,6 +89,7 @@ export async function verifyMultipartToken(
         typeof payload.iat !== "number" || payload.iat > now) return null;
     return { ownerId: payload.sub };
   } catch {
+    // A malformed/expired JWT is unauthenticated; do not log its token material.
     return null;
   }
 }

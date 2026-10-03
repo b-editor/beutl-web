@@ -47,7 +47,8 @@ export default function Form({
       router.push(
         resolveSafeRedirectPath(returnUrl, window.location.origin) ?? "/",
       );
-    } catch {
+    } catch (error) {
+      console.error("Passkey sign-in failed", error);
       toast({
         title: t("error"),
         description: t("auth:errors.passkey"),

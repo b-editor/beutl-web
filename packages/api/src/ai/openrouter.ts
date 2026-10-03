@@ -546,6 +546,7 @@ async function request(
         MAX_OPENROUTER_ERROR_RESPONSE_BYTES,
         "OpenRouter error response",
       )
+      // The status still reports the failure when its body cannot be read.
       .catch(() => "")
       .finally(release);
     throw new OpenRouterRequestError(

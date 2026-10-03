@@ -50,6 +50,8 @@ async function verifyBearer(authHeader: string | null) {
       ? userId
       : null;
   } catch {
+    // Only the token is read here (the secret was checked above), so a token
+    // that cannot be verified is simply not an identity.
     return null;
   }
 }
@@ -65,9 +67,11 @@ export async function getUserIdFromHeaders(headers: Headers) {
 export async function tryGetUserIdFromHeaders(headers: Headers) {
   try {
     return await getUserIdFromHeaders(headers);
-  } catch {
+  } catch (error) {
     // Optional identity lookups (for example, public content downloads) must
-    // remain anonymous when authentication is unavailable or misconfigured.
+    // remain anonymous when authentication is unavailable or misconfigured,
+    // but the misconfiguration itself still has to be seen.
+    console.error("Optional bearer authentication failed", error);
     return null;
   }
 }

@@ -1,6 +1,7 @@
 import Stripe from "stripe";
 import {
   allowsStripePromotionCodes,
+  isStripeInvalidRequestError,
   isValidStripeCheckoutAmount,
   isValidStripeCheckoutSessionAmount,
   isZeroCostStripeCheckoutSessionAmount,
@@ -331,7 +332,7 @@ export async function reconcileStripeCheckoutCleanups(
               const chosen = refreshed.status === "multiple" ? refreshed.sessions.find((session) => session.id === storedResolution.canonicalSessionId && session.status === "complete") : refreshed.status === "single" && refreshed.session.id === storedResolution.canonicalSessionId ? refreshed.session : null;
               if (!chosen) throw new Error("Stored legacy canonical Session is no longer valid");
               for (const open of refreshed.status === "multiple" ? refreshed.sessions.filter((session) => session.status === "open") : []) {
-                const expired = await stripe.checkout.sessions.expire(open.id).catch(() => stripe.checkout.sessions.retrieve(open.id));
+                const expired = await stripe.checkout.sessions.expire(open.id).catch((error) => { rethrowUnlessInvalidRequest(error); return stripe.checkout.sessions.retrieve(open.id); });
                 if (expired.status === "open") throw new Error("Legacy duplicate Checkout Session remains open");
               }
               const finalDiscovery = await discoverLegacyPackageCheckoutAttempt({ stripe, params: JSON.parse(attempt.paramsJson), customerId: attempt.customerId, userId: attempt.userId, packageId: attempt.packageId });
@@ -349,7 +350,7 @@ export async function reconcileStripeCheckoutCleanups(
             } else {
               const beforeTerminal = await discoverLegacyPackageCheckoutAttempt({ stripe, params: JSON.parse(attempt.paramsJson), customerId: attempt.customerId, userId: attempt.userId, packageId: attempt.packageId });
               for (const open of beforeTerminal.status === "multiple" ? beforeTerminal.sessions.filter((session) => session.status === "open") : beforeTerminal.status === "single" && beforeTerminal.session.status === "open" ? [beforeTerminal.session] : []) {
-                const expired = await stripe.checkout.sessions.expire(open.id).catch(() => stripe.checkout.sessions.retrieve(open.id));
+                const expired = await stripe.checkout.sessions.expire(open.id).catch((error) => { rethrowUnlessInvalidRequest(error); return stripe.checkout.sessions.retrieve(open.id); });
                 if (expired.status === "open") throw new Error("Legacy all-refund Session remains open");
               }
               const finalLegacy = await discoverLegacyPackageCheckoutAttempt({ stripe, params: JSON.parse(attempt.paramsJson), customerId: attempt.customerId, userId: attempt.userId, packageId: attempt.packageId });
@@ -409,7 +410,8 @@ export async function reconcileStripeCheckoutCleanups(
           try {
             const expired = await stripe.checkout.sessions.expire(open.id);
             finalSessions.set(expired.id, expired);
-          } catch {
+          } catch (error) {
+            rethrowUnlessInvalidRequest(error);
             const current = await stripe.checkout.sessions.retrieve(open.id, { expand: ["payment_intent"] });
             finalSessions.set(current.id, current);
             if (current.status === "open") unresolved = true;
@@ -687,7 +689,8 @@ export async function reconcileStripeCheckoutCleanups(
             const expired = await stripe.checkout.sessions.expire(session.id);
             if (expired.status === "complete") complete.set(expired.id, expired);
             else if (expired.status === "open") unresolved = true;
-          } catch {
+          } catch (error) {
+            rethrowUnlessInvalidRequest(error);
             const current = await stripe.checkout.sessions.retrieve(session.id);
             if (current.status === "complete") complete.set(current.id, current);
             else if (current.status === "open") unresolved = true;
@@ -731,7 +734,8 @@ export async function reconcileStripeCheckoutCleanups(
         if (discovered.status === "open" && expireOpenSessions) {
           try {
             discovered = await stripe.checkout.sessions.expire(discovered.id);
-          } catch {
+          } catch (error) {
+            rethrowUnlessInvalidRequest(error);
             discovered = await stripe.checkout.sessions.retrieve(discovered.id);
           }
         }
@@ -986,4 +990,11 @@ export async function reconcileStripeCheckoutCleanups(
     }
   }
   return { inspected: rows.length, completed, pending, interventionRequired, detachedInspected: detached.length, detachedRecovered, detachedPending, detachedIntervention };
+}
+
+// Stripe refuses to expire a Session that has already completed or expired, and
+// the Session is read back to learn which. Any other failure means Stripe could
+// not be asked at all, and reading it back would only hide that.
+function rethrowUnlessInvalidRequest(error: unknown): void {
+  if (!isStripeInvalidRequestError(error)) throw error;
 }

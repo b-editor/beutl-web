@@ -123,6 +123,7 @@ export function decodeFileCursor(
   try {
     decoded = Buffer.from(value, "base64url").toString("utf8");
   } catch {
+    // A cursor that does not decode is a malformed request, not a server error.
     return null;
   }
   const separator = decoded.indexOf("\n");
