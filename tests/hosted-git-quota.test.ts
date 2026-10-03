@@ -1,10 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { runWithDbProvider, reserveGitLfs, createFileWithStorageQuota, sumFileSizeByUserId, sumStorageUploadSizeByUserId } from "@beutl/db";
+import { runWithDbProvider, reserveGitLfs, createFileWithStorageQuota, createDedicatedStorageReservation, commitDedicatedStorageReservation, sumFileSizeByUserId, sumStorageUploadSizeByUserId } from "@beutl/db";
 import { getStorageEntitlement } from "@beutl/api";
 import { STORAGE_FREE_QUOTA_BYTES } from "@beutl/core";
 import { createInMemoryPrisma } from "./stubs/in-memory-prisma";
 
 describe("shared File and hosted Git storage admission", () => {
+  it.each(["history", "lfs"])("keeps pending %s bytes reserved when a dedicated file completes after a quota reduction", async (kind) => {
+    const memory = createInMemoryPrisma(), userId = "owner";
+    memory.state.files.set("existing", { id: "existing", userId, size: STORAGE_FREE_QUOTA_BYTES - 32,
+      objectKey: "existing", visibility: "PRIVATE", name: "existing", mimeType: "application/octet-stream" } as never);
+    await runWithDbProvider(async () => memory.prisma as never, async () => {
+      // Both writes were admitted under the former, larger plan.
+      const reserved = await createDedicatedStorageReservation({ userId, id: "upload", objectKey: "new",
+        name: "new", mimeType: "application/octet-stream", size: 24n,
+        quotaBytes: BigInt(STORAGE_FREE_QUOTA_BYTES) + 100n, fileCountLimit: 10_000 });
+      expect(reserved.kind).toBe("reserved");
+      memory.state.gitRepositories.set("repo", { ownerId: userId, deletedAt: null,
+        historyBytes: 0n, historyReservedBytes: kind === "history" ? 16n : 0n } as never);
+      if (kind === "lfs") memory.state.gitLfsStorage.set("repo:pending", { ownerId: userId, verified: false, size: 16n });
+      // The account now resolves to the free quota. The File alone fits, but
+      // completing it must leave room for the pending Git reservation.
+      expect(await commitDedicatedStorageReservation({ id: "upload", userId, objectKey: "new" })).toEqual({ kind: "overQuota" });
+      expect(memory.state.files.size).toBe(1);
+      expect(memory.state.storageUploads.get("upload")?.completedFileId).toBeNull();
+    });
+  });
+
   it("reflects committed Git/LFS and pending Git bytes in the existing API meter", async () => {
     const memory = createInMemoryPrisma(), userId = "owner";
     memory.state.gitRepositories.set("repo", { ownerId: userId, deletedAt: null,

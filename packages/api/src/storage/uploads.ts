@@ -30,6 +30,7 @@ import {
   sumFileSizeByUserId,
   sumStorageUploadSizeByUserId,
   lockStorageAccount,
+  sumGitReservedBytes,
   resolveStorageQuota,
 } from "@beutl/db";
 import { getR2Bucket } from "../ai/r2-provider";
@@ -774,14 +775,19 @@ async function finalizeUpload(
       // 掃除が取っていった行。控えは書けないし、書いてはいけない。
       if (current.abandonedAt) return { kind: "abandoned" as const };
 
+      // Share the admission lock with Git so a concurrent history commit
+      // cannot consume capacity this finalizer has just checked.
+      await lockStorageAccount(userId, prisma);
+
       // 開始から完了までの間にプランが失効していれば、ここで拒否されて
       // オブジェクトは掃除される (新規のアップロードは受けない、の一部)。
-      const [quota, stored, files] = await Promise.all([
+      const [quota, stored, files, gitReserved] = await Promise.all([
         resolveStorageQuota({ userId, prisma }),
         sumFileSizeByUserId({ userId, prisma }),
         countFilesByUserId({ userId, prisma }),
+        sumGitReservedBytes(userId, prisma),
       ]);
-      if (stored + actual > BigInt(quota.quotaBytes)) {
+      if (stored + gitReserved + actual > BigInt(quota.quotaBytes)) {
         return { kind: "overQuota" as const };
       }
       if (files >= quota.fileCountLimit) {

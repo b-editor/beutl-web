@@ -439,12 +439,13 @@ export async function commitDedicatedStorageReservation({
     // Read the quota again here, as the multipart finalizer does, and refuse
     // what no longer fits; the caller releases the reservation, which queues
     // the object it already wrote for cleanup.
-    const [quota, stored, files] = await Promise.all([
+    const [quota, stored, files, gitReserved] = await Promise.all([
       resolveStorageQuota({ userId, prisma: tx }),
       sumFileSizeByUserId({ userId, prisma: tx }),
       countFilesByUserId({ userId, prisma: tx }),
+      sumGitReservedBytes(userId, tx),
     ]);
-    if (stored + BigInt(reservation.size) > BigInt(quota.quotaBytes)) {
+    if (stored + gitReserved + BigInt(reservation.size) > BigInt(quota.quotaBytes)) {
       return { kind: "overQuota" as const };
     }
     if (files >= quota.fileCountLimit) {
