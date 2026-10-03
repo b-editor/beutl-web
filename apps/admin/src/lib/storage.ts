@@ -16,10 +16,12 @@ import {
   releaseFileStorageMoveLease,
   renewFileStorageMoveLease,
 } from "@beutl/db";
-import { env } from "cloudflare:workers";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 // 管理画面は Web と同じストレージ設定 (BEUTL_R2_BUCKET / BEUTL_S3_*) を持つ。
+// getCloudflareContext はリクエストコンテキストでのみ使えるため、呼び出し時に引く。
 export async function getStorageStores(): Promise<StorageStores> {
+  const { env } = await getCloudflareContext({ async: true });
   return resolveStorageStores(env);
 }
 

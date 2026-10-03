@@ -6,14 +6,14 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "vite build",
-    "start": "wrangler dev --config dist/server/wrangler.json",
+    "build": "next build --webpack",
+    "start": "next start",
     "lint": "oxlint",
     "typecheck": "tsc --noEmit",
-    "dev": "vite dev --port 3001",
-    "preview": "vite build && wrangler dev --config dist/server/wrangler.json",
-    "deploy": "vite build && vinext-cloudflare deploy --skip-build --config dist/server/wrangler.json",
-    "upload": "vite build && wrangler versions upload --config dist/server/wrangler.json",
+    "dev": "next dev --turbopack -p 3001",
+    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
     "cf-typegen": "wrangler types --env-interface CloudflareEnv worker-configuration.d.ts"
   },
   "dependencies": {
@@ -25,35 +25,28 @@
     "@beutl/i18n": "workspace:*",
     "@beutl/next": "workspace:*",
     "@beutl/ui": "workspace:*",
+    "@opennextjs/cloudflare": "^1.20.8",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
-    "@vinext/cloudflare": "^1.0.1",
     "better-auth": "^1.7.7",
     "lucide-react": "^0.575.0",
     "next": "16.3.8",
     "pg": "^8.23.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "react-server-dom-webpack": "^19.3.0",
     "stripe": "^20.4.1",
-    "tailwindcss-animate": "^1.0.7",
-    "vinext": "^1.0.1"
+    "tailwindcss-animate": "^1.0.7"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "1",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^22.20.5",
     "@types/react": "19.1.0",
     "@types/react-dom": "19.1.1",
-    "@vitejs/plugin-react": "^6.1.1",
-    "@vitejs/plugin-rsc": "^0.5.35",
     "oxlint": "^1.86.0",
     "postcss": "^8.5.28",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",
-    "vite": "^8.3.2",
     "wrangler": "^4.147.0"
   },
-  "packageManager": "pnpm@9.13.2+sha512.88c9c3864450350e65a33587ab801acf946d7c814ed1134da4a924f6df5a2120fd36b46aab68f7cd1d413149112d53c7db3a4136624cfd00ff1846a0c6cef48a",
-  "type": "module"
+  "packageManager": "pnpm@9.13.2+sha512.88c9c3864450350e65a33587ab801acf946d7c814ed1134da4a924f6df5a2120fd36b46aab68f7cd1d413149112d53c7db3a4136624cfd00ff1846a0c6cef48a"
 }

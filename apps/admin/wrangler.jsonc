@@ -1,25 +1,27 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "main": "vinext/server/fetch-handler",
+  "main": ".open-next/worker.js",
   "name": "beutl-admin",
   "compatibility_date": "2025-04-04",
   "compatibility_flags": [
     "nodejs_compat",
-    "global_fetch_strictly_public",
-    // vinext の開発サーバーはバンドルせずに依存を読み込むため、React の開発ビルドが
-    // 使う WeakRef と、依存が import する node:worker_threads が必要になる。
-    // どちらも 2025-04-04 の互換日付では既定で無効。
-    "enable_weak_ref",
-    "enable_nodejs_worker_threads_module"
+    "global_fetch_strictly_public"
   ],
   "keep_vars": true,
   // 管理画面: admin.beutl.beditor.net にカスタムドメインで配信する。
   // ルート設定は Cloudflare ダッシュボード側で行う。
   "assets": {
-    "directory": "dist/client",
-    "not_found_handling": "none",
+    "directory": ".open-next/assets",
     "binding": "ASSETS"
   },
+  "services": [
+    {
+      // @opennextjs/cloudflare のインクリメンタルキャッシュ再検証 (revalidatePath)
+      // は自分自身への service binding を必要とする。"service" は "name" と一致させる。
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "beutl-admin"
+    }
+  ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1,
@@ -32,6 +34,13 @@
     }
   },
   "r2_buckets": [
+    {
+      "binding": "NEXT_INC_CACHE_R2_BUCKET",
+      // 管理画面専用バケット。beutl-web (beutl-web-inc-cache) と共有しない
+      // (パス名キーのインクリメンタルキャッシュがドメイン跨ぎで衝突し、
+      // 誤ったコンテンツを配信するのを防ぐ)。
+      "bucket_name": "beutl-admin-inc-cache"
+    },
     {
       // MUST MATCH beutl-web / beutl-web-api. /admin/storage がファイルの所在を
       // 確認し、ストア間で移動するのに使う。BEUTL_STORAGE_PROVIDER と BEUTL_S3_*

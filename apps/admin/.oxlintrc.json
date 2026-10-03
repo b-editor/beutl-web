@@ -20,10 +20,9 @@
     "out/**",
     "build/**",
     "next-env.d.ts",
+    ".open-next/**",
     ".wrangler/**",
-    "worker-configuration.d.ts",
-    "dist/**",
-    ".vinext/**"
+    "worker-configuration.d.ts"
   ],
   "rules": {
     "no-array-constructor": "error",
