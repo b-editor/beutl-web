@@ -177,7 +177,9 @@ behavior before enabling production traffic.
   LFS reservation cleanup and the daily object sweep each process at most 50
   records per alarm. The sweep persists its S3 continuation token and completed
   keys, resumes after a DO restart, and schedules another alarm in one minute
-  while work remains. Daily passes also collect versions from very late PUTs.
+  while work remains. A new full pass starts at least 24 hours after the last
+  completed pass, independently of push/expiry alarms, and collects versions
+  from very late PUTs.
   Each queued DO invocation lazily opens
   one DB client and closes it at completion, including cold-start alarms.
 

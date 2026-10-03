@@ -889,6 +889,22 @@ describe("Git LFS reservation and integrity", () => {
     expect([...completed.values()]).toEqual(Array(120).fill(1));
     expect(gitSweeps).toBe(1);
     expect(await storage.get("lfsSweepProgress")).toBeUndefined();
+    const completedAt = (await storage.get<number>("lfsSweepCompletedAt"))!;
+    const priorRequests = requests;
+    const time = vi.spyOn(Date, "now").mockReturnValue(completedAt + 24 * 3600_000 - 1);
+    try {
+      // Push/expiry alarms still run other maintenance, without restarting the full pass.
+      await storage.put("gitGcPending", true);
+      await new GitRepositoryDurableObject({ storage }, env, bucket).alarm();
+      expect(requests).toBe(priorRequests);
+      expect(gitSweeps).toBe(2);
+      expect(storage.alarms.at(-1)).toBe(completedAt + 24 * 3600_000);
+      time.mockReturnValue(completedAt + 24 * 3600_000);
+      await new GitRepositoryDurableObject({ storage }, env, bucket).alarm();
+      expect(requests - priorRequests).toBe(50);
+      expect(await storage.get("lfsSweepProgress")).toBeDefined();
+      expect(storage.alarms.at(-1)).toBe(completedAt + 24 * 3600_000 + 60_000);
+    } finally { time.mockRestore(); }
   });
 
   it("bounds the first version-pruning pass and keeps adjacent orphan cleanup resumable", async () => {

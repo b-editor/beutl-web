@@ -66,10 +66,14 @@ export class GitRepositoryDurableObject {
             await this.state.storage.setAlarm(Date.now() + 24 * 60 * 60 * 1000);
             return;
           }
-          if (!await this.state.storage.get<LfsSweepProgress>("lfsSweepProgress"))
-            await this.state.storage.put<LfsSweepProgress>("lfsSweepProgress", { startedAt: Date.now() });
+          let progress = await this.state.storage.get<LfsSweepProgress>("lfsSweepProgress");
+          const lastSweep = await this.state.storage.get<number>("lfsSweepCompletedAt");
+          if (!progress && (lastSweep === undefined || Date.now() - lastSweep >= 24 * 60 * 60 * 1000)) {
+            progress = { startedAt: Date.now() };
+            await this.state.storage.put("lfsSweepProgress", progress);
+          }
           const reservationsPending = await pruneExpiredLfs(this.state.storage, this.objectBucket(), repoId, Date.now(), this.accounting);
-          const sweepPending = await this.sweepLfsObjects(this.objectBucket(), repoId);
+          const sweepPending = progress ? await this.sweepLfsObjects(this.objectBucket(), repoId) : false;
           await this.cleanupMultipartUploads(this.objectBucket(), repoId, Date.now() - 26 * 60 * 60 * 1000);
           if (await this.state.storage.get<boolean>("gitGcPending")) {
             await this.objectBucket().pruneGitVersions?.(`git/repos/${repoId}/`);
@@ -84,6 +88,7 @@ export class GitRepositoryDurableObject {
             .filter((time) => time > now);
           await this.state.storage.setAlarm(Math.min(
             now + (reservationsPending || sweepPending ? 60_000 : 24 * 60 * 60 * 1000),
+            sweepPending ? Infinity : (await this.state.storage.get<number>("lfsSweepCompletedAt") ?? now) + 24 * 60 * 60 * 1000,
             ...next.map((time) => time + 1000)));
         } catch (error) {
           await this.state.storage.setAlarm(Date.now() + 60_000);
@@ -268,6 +273,7 @@ export class GitRepositoryDurableObject {
       await this.state.storage.put<LfsSweepProgress>("lfsSweepProgress", { ...progress, cursor: page.cursor });
       return true;
     }
+    await this.state.storage.put("lfsSweepCompletedAt", Date.now());
     await this.state.storage.delete("lfsSweepProgress");
     return false;
   }
