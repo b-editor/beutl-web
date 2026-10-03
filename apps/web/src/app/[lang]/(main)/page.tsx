@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Download } from "lucide-react";
 import { getTranslation } from "@beutl/i18n";
 import { cn } from "@beutl/core";
-import EasingDemo, { EASING_CURVES } from "@/components/easing-demo";
+import EasingDemo, { type EasingName } from "@/components/easing-demo";
 import EffectsDemo from "@/components/effects-demo";
 import FeaturesToc from "@/components/features-toc";
 import BentoSection from "@/components/landing/bento-section";
@@ -34,35 +34,29 @@ const LANDING_PACKAGE_COUNT = 2;
 const DOWNLOAD_HREF = "https://github.com/b-editor/beutl/releases/latest";
 const GITHUB_HREF = "https://github.com/b-editor/beutl";
 
-const EASINGS = [
+const EASINGS: { easing: EasingName; color: string }[] = [
   {
-    labelKey: "easeIn",
-    path: EASING_CURVES.easeIn,
+    easing: "easeIn",
     color: "var(--color-lp-indigo-bright)",
   },
   {
-    labelKey: "easeInOut",
-    path: EASING_CURVES.easeInOut,
+    easing: "easeInOut",
     color: "var(--color-lp-cyan)",
   },
   {
-    labelKey: "easeOut",
-    path: EASING_CURVES.easeOut,
+    easing: "easeOut",
     color: "var(--color-lp-coral)",
   },
   {
-    labelKey: "easeElastic",
-    path: EASING_CURVES.easeElastic,
+    easing: "easeElastic",
     color: "var(--color-lp-lime)",
   },
   {
-    labelKey: "easeBack",
-    path: EASING_CURVES.easeBack,
+    easing: "easeBack",
     color: "var(--color-lp-indigo-bright)",
   },
   {
-    labelKey: "easeBounce",
-    path: EASING_CURVES.easeBounce,
+    easing: "easeBounce",
     color: "var(--color-lp-coral)",
   },
 ];
@@ -132,10 +126,10 @@ export default async function Home(props: {
         <div className="grid grid-cols-3 gap-3 [&>*]:min-w-0">
           {EASINGS.map((easing) => (
             <EasingDemo
-              key={easing.labelKey}
-              path={easing.path}
+              key={easing.easing}
+              easing={easing.easing}
               color={easing.color}
-              label={t(`main:${easing.labelKey}`)}
+              label={t(`main:${easing.easing}`)}
             />
           ))}
         </div>

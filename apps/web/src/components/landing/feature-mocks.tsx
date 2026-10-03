@@ -3,363 +3,39 @@ import Link from "next/link";
 import type { Translator } from "@beutl/i18n";
 import { cn } from "@beutl/core";
 import type { LandingPackage } from "@/lib/store-utils";
+import InteractiveExportMock from "./export-mock";
+import InteractiveNodeGraphMock from "./node-graph-mock";
+import InteractiveTimelineMock from "./timeline-mock";
 
-const TIMELINE_RULER = [
-  "00:00:00",
-  "00:00:01",
-  "00:00:02",
-  "00:00:03",
-  "00:00:04",
-];
-
-/** How much of the ruler survives below 440px. See TimelineMock. */
-const MOBILE_RULER_TICKS = 3;
-
-/** Track lane height. Clips sit on even lanes so the odd lane below each one is
- * free for its keyframe editor, mirroring how the editor lays a timeline out. */
-const LANE_H = 30;
-const LANE_COUNT = 7;
-
-const TIMELINE_CLIPS = [
-  {
-    key: "timelineClipScene",
-    lane: 0,
-    left: "2%",
-    width: "46%",
-    background:
-      "linear-gradient(90deg,var(--color-lp-indigo-bright),var(--color-lp-indigo))",
-  },
-  {
-    key: "timelineClipText",
-    lane: 2,
-    left: "18%",
-    width: "40%",
-    background: "linear-gradient(90deg,var(--color-lp-coral),#ff9d7a)",
-  },
-  {
-    key: "timelineClipShape",
-    lane: 4,
-    left: "30%",
-    width: "55%",
-    background: "linear-gradient(90deg,var(--color-lp-cyan),#3aa9d6)",
-  },
-] as const;
-
-const AUDIO_CLIP = {
-  key: "timelineClipAudio",
-  lane: 6,
-  left: "8%",
-  width: "80%",
-  background: "linear-gradient(90deg,var(--color-lp-lime),#8fd23a)",
-} as const;
-
-/** Keyframe editor for the shape clip, drawn on the lane below it and aligned to
- * the clip's own time range. */
-const KEYFRAME_CLIP = TIMELINE_CLIPS[2];
-const KEYFRAME_LANE = KEYFRAME_CLIP.lane + 1;
-const KEYFRAME_CURVE = "M3 24 C 20 24, 32 11, 45 11 C 62 11, 80 7, 97 7";
-/** Markers sit centred on the lane rather than riding the curve. */
-const KEYFRAME_XS = [3, 45, 97];
-
-/** A hash rather than Math.random, so the paths below can be built once at
- * module load instead of per render. */
-function fract(i: number) {
-  const n = Math.sin(i * 12.9898) * 43758.5453;
-  return n - Math.floor(n);
-}
-
-/** The waveform is one filled path mirrored about the centre line, the way an
- * audio editor draws it. Discrete bars read as a chart no matter how thin. */
-const WAVE_SAMPLES = 240;
-const WAVE_MID = 15;
-
-const AUDIO_WAVE_PATH = (() => {
-  const top: string[] = [];
-  const bottom: string[] = [];
-
-  for (let i = 0; i < WAVE_SAMPLES; i++) {
-    const t = i / (WAVE_SAMPLES - 1);
-    const envelope =
-      0.32 +
-      0.4 * Math.abs(Math.sin(t * Math.PI * 2.6)) +
-      0.22 * Math.abs(Math.sin(t * Math.PI * 9.3 + 0.8));
-    const amplitude =
-      Math.min(1, Math.max(0.06, envelope * (0.45 + 0.55 * fract(i)))) *
-      WAVE_MID;
-    const x = (t * 100).toFixed(2);
-    top.push(`${x},${(WAVE_MID - amplitude).toFixed(2)}`);
-    bottom.push(`${x},${(WAVE_MID + amplitude).toFixed(2)}`);
-  }
-
-  return `M${top.join("L")}L${bottom.reverse().join("L")}Z`;
-})();
+export { default as AudioMock } from "./audio-mock";
 
 export function TimelineMock({ t }: { t: Translator }) {
   return (
-    <div>
-      {/* A timestamp has no break opportunity, so five seconds of ruler do not
-          fit a phone-width panel at a legible size. Below 440px the ruler shows
-          three seconds instead, which gives each one half again as much width.
-          min-w-0 keeps any remaining overflow inside its own cell rather than
-          pushing the row wide enough for the panel to clip the last label. */}
-      <div className="flex h-5 text-[12px] tabular-nums text-lp-faint">
-        {TIMELINE_RULER.map((label, index) => (
-          <span
-            key={label}
-            className={cn(
-              "min-w-0 flex-1 overflow-hidden border-l border-lp-border pl-1.5",
-              index >= MOBILE_RULER_TICKS && "hidden min-[440px]:block",
-            )}
-          >
-            {label}
-          </span>
-        ))}
-      </div>
-
-      <div
-        className="relative border-t border-lp-border"
-        style={{ height: LANE_COUNT * LANE_H }}
-      >
-        {Array.from({ length: LANE_COUNT }, (_, lane) => (
-          <div
-            key={lane}
-            className="absolute right-0 left-0 border-b border-white/[0.07]"
-            style={{ top: lane * LANE_H, height: LANE_H }}
-          />
-        ))}
-
-        {TIMELINE_CLIPS.map((clip) => (
-          <div
-            key={clip.key}
-            className="absolute flex items-center overflow-hidden px-2 text-[14px] font-bold whitespace-nowrap text-[#0c0a18] rounded-sm"
-            style={{
-              left: clip.left,
-              width: clip.width,
-              top: clip.lane * LANE_H + 2,
-              height: LANE_H - 4,
-              background: clip.background,
-            }}
-          >
-            {t(`main:${clip.key}`)}
-          </div>
-        ))}
-
-        <div
-          className="absolute"
-          style={{
-            left: KEYFRAME_CLIP.left,
-            width: KEYFRAME_CLIP.width,
-            top: KEYFRAME_LANE * LANE_H,
-            height: LANE_H,
-          }}
-        >
-          <svg
-            viewBox="0 0 100 30"
-            preserveAspectRatio="none"
-            className="absolute inset-0 h-full w-full"
-            aria-hidden="true"
-          >
-            <path
-              d={KEYFRAME_CURVE}
-              fill="none"
-              stroke="#E8E6F5"
-              strokeWidth="1.5"
-              vectorEffect="non-scaling-stroke"
-            />
-          </svg>
-          {KEYFRAME_XS.map((x) => (
-            <span
-              key={x}
-              className="absolute h-[9px] w-[9px] rotate-45 bg-[#F5D14E]"
-              style={{
-                left: `${x}%`,
-                top: LANE_H / 2,
-                marginLeft: -4.5,
-                marginTop: -4.5,
-              }}
-            />
-          ))}
-        </div>
-
-        <div
-          className="absolute flex items-center overflow-hidden rounded-sm"
-          style={{
-            left: AUDIO_CLIP.left,
-            width: AUDIO_CLIP.width,
-            top: AUDIO_CLIP.lane * LANE_H + 2,
-            height: LANE_H - 4,
-            background: AUDIO_CLIP.background,
-          }}
-        >
-          <span className="shrink-0 px-2 text-[14px] font-bold whitespace-nowrap text-[#0c0a18]">
-            {t(`main:${AUDIO_CLIP.key}`)}
-          </span>
-          <div className="h-full flex-1 py-[3px] pr-1.5">
-            <svg
-              viewBox="0 0 100 30"
-              preserveAspectRatio="none"
-              className="block h-full w-full"
-              aria-hidden="true"
-            >
-              <path d={AUDIO_WAVE_PATH} fill="rgba(0,0,0,0.55)" />
-            </svg>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-const NODE_HEADER_H = 22;
-const NODE_BODY_FILL = "#14121F";
-const NODE_STROKE = "rgba(255,255,255,0.16)";
-/** Wires and the ports they land on share one colour, as in the editor. */
-const NODE_WIRE = "#3FB950";
-
-function GraphNode({
-  x,
-  y,
-  width,
-  height,
-  accent,
-  title,
-  param,
-}: {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  accent: string;
-  title: string;
-  param: string;
-}) {
-  const headerMid = y + NODE_HEADER_H / 2;
-  const paramY = y + NODE_HEADER_H + (height - NODE_HEADER_H) / 2 + 3.5;
-
-  return (
-    <g>
-      <rect
-        x={x}
-        y={y}
-        width={width}
-        height={height}
-        rx="6"
-        fill={NODE_BODY_FILL}
-      />
-      <rect
-        x={x}
-        y={y}
-        width={width}
-        height={NODE_HEADER_H}
-        rx="6"
-        fill={accent}
-      />
-      <path
-        d={`M${x + 8} ${headerMid + 1.25} L${x + 10.5} ${headerMid - 1.25} L${x + 13} ${headerMid + 1.25}`}
-        fill="none"
-        stroke="#fff"
-        strokeWidth="1.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <text
-        x={x + 22}
-        y={headerMid + 3.4}
-        fill="#fff"
-        fontSize="9.5"
-        fontWeight="700"
-      >
-        {title}
-      </text>
-      <text x={x + 10} y={paramY} fill="#A8A3C6" fontSize="9">
-        {param}
-      </text>
-      <rect
-        x={x}
-        y={y}
-        width={width}
-        height={height}
-        rx="6"
-        fill="none"
-        stroke={NODE_STROKE}
-      />
-    </g>
+    <InteractiveTimelineMock
+      clipLabels={{
+        scene: t("main:timelineClipScene"),
+        text: t("main:timelineClipText"),
+        shape: t("main:timelineClipShape"),
+        audio: t("main:timelineClipAudio"),
+      }}
+    />
   );
 }
 
 export function NodeGraphMock({ t }: { t: Translator }) {
   return (
-    <svg
-      viewBox="0 0 380 210"
-      width="100%"
-      className="block max-w-full [font-family:inherit]"
-      aria-hidden="true"
-    >
-      <defs>
-        <pattern
-          id="node-graph-grid"
-          width="19"
-          height="19"
-          patternUnits="userSpaceOnUse"
-        >
-          <path
-            d="M19 0H0V19"
-            fill="none"
-            stroke="rgba(255,255,255,0.055)"
-            strokeWidth="1"
-          />
-        </pattern>
-      </defs>
-      <rect width="380" height="210" fill="url(#node-graph-grid)" />
-
-      <path
-        d="M126 58 C 168 58, 174 103, 214 103"
-        fill="none"
-        stroke={NODE_WIRE}
-        strokeWidth="2"
-      />
-      <path
-        d="M126 170 C 168 170, 174 121, 214 121"
-        fill="none"
-        stroke={NODE_WIRE}
-        strokeWidth="2"
-      />
-      <path d="M338 112 L 372 112" fill="none" stroke={NODE_WIRE} strokeWidth="2" />
-
-      <GraphNode
-        x={14}
-        y={22}
-        width={112}
-        height={50}
-        accent="#2EA043"
-        title={t("main:nodeShape")}
-        param={t("main:nodeShapeParams")}
-      />
-      <GraphNode
-        x={14}
-        y={134}
-        width={112}
-        height={50}
-        accent="#0D9488"
-        title={t("main:nodeRandom")}
-        param={t("main:nodeRandomParams")}
-      />
-      <GraphNode
-        x={214}
-        y={70}
-        width={124}
-        height={63}
-        accent="#0284C7"
-        title={t("main:nodeEffect")}
-        param={t("main:nodeEffectParams")}
-      />
-
-      <circle cx="126" cy="58" r="3.5" fill={NODE_WIRE} />
-      <circle cx="126" cy="170" r="3.5" fill={NODE_WIRE} />
-      <circle cx="214" cy="103" r="3.5" fill={NODE_WIRE} />
-      <circle cx="214" cy="121" r="3.5" fill={NODE_WIRE} />
-      <circle cx="338" cy="112" r="3.5" fill={NODE_WIRE} />
-    </svg>
+    <InteractiveNodeGraphMock
+      titles={{
+        shape: t("main:nodeShape"),
+        random: t("main:nodeRandom"),
+        effect: t("main:nodeEffect"),
+      }}
+      params={{
+        shape: t("main:nodeShapeParams"),
+        random: t("main:nodeRandomParams"),
+        effect: t("main:nodeEffectParams"),
+      }}
+    />
   );
 }
 
@@ -403,125 +79,32 @@ export function ShaderCodeMock() {
   );
 }
 
-/**
- * The mock builds these bars in the browser, but the expressions are
- * deterministic, so they are evaluated once on the server instead.
- */
-const WAVE_W = 480;
-const WAVE_H = 70;
-const WAVE_N = 48;
-const WAVE_GAP = 3;
-const WAVE_BAR_W = (WAVE_W - WAVE_GAP * (WAVE_N - 1)) / WAVE_N;
-
-const WAVE_BARS = Array.from({ length: WAVE_N }, (_, i) => {
-  const level =
-    Math.abs(Math.sin(i * 0.5)) * 0.6 + Math.abs(Math.sin(i * 0.17)) * 0.4;
-  const height = 10 + level * 56;
-  return {
-    x: i * (WAVE_BAR_W + WAVE_GAP),
-    y: (WAVE_H - height) / 2,
-    height,
-  };
-});
-
-const SPEC_W = 480;
-const SPEC_H = 56;
-const SPEC_N = 40;
-const SPEC_GAP = 4;
-const SPEC_BAR_W = (SPEC_W - SPEC_GAP * (SPEC_N - 1)) / SPEC_N;
-
-/** A spectrum leans left: loud down at the low frequencies and trailing away
- * to almost nothing at the high end. */
-const SPECTRUM_BARS = Array.from({ length: SPEC_N }, (_, i) => {
-  const t = i / (SPEC_N - 1);
-  const decay = Math.pow(1 - t, 1.5);
-  const rise = Math.min(1, 0.35 + t * 3);
-  const level = Math.min(1, decay * rise * (0.65 + 0.35 * fract(i * 3.7)) * 1.5);
-  const height = Math.max(2, level * SPEC_H);
-  return {
-    x: i * (SPEC_BAR_W + SPEC_GAP),
-    y: SPEC_H - height,
-    height,
-  };
-});
-
-export function AudioMock() {
-  return (
-    <>
-      {/* One gradient per visualiser, in user space, so the ramp belongs to the
-          whole group: a short bar samples only the middle of it while a tall one
-          reaches the top. Filling each bar on its own restarts the ramp. */}
-      <svg
-        viewBox={`0 0 ${WAVE_W} ${WAVE_H}`}
-        className="block h-auto w-full max-w-full"
-        aria-hidden="true"
-      >
-        <defs>
-          <linearGradient
-            id="lp-audio-wave"
-            gradientUnits="userSpaceOnUse"
-            x1="0"
-            y1="0"
-            x2="0"
-            y2={WAVE_H}
-          >
-            <stop offset="0" style={{ stopColor: "var(--color-lp-cyan)" }} />
-            <stop offset="1" style={{ stopColor: "var(--color-lp-indigo)" }} />
-          </linearGradient>
-        </defs>
-        {WAVE_BARS.map((bar, index) => (
-          <rect
-            key={`wave-${index}`}
-            x={bar.x}
-            y={bar.y}
-            width={WAVE_BAR_W}
-            height={bar.height}
-            rx={WAVE_BAR_W / 2}
-            fill="url(#lp-audio-wave)"
-          />
-        ))}
-      </svg>
-      <svg
-        viewBox={`0 0 ${SPEC_W} ${SPEC_H}`}
-        className="mt-[14px] block h-auto w-full max-w-full"
-        aria-hidden="true"
-      >
-        <defs>
-          <linearGradient
-            id="lp-audio-spectrum"
-            gradientUnits="userSpaceOnUse"
-            x1="0"
-            y1="0"
-            x2="0"
-            y2={SPEC_H}
-          >
-            <stop offset="0" style={{ stopColor: "var(--color-lp-coral)" }} />
-            <stop offset="1" style={{ stopColor: "var(--color-lp-indigo)" }} />
-          </linearGradient>
-        </defs>
-        {SPECTRUM_BARS.map((bar, index) => (
-          <rect
-            key={`spectrum-${index}`}
-            x={bar.x}
-            y={bar.y}
-            width={SPEC_BAR_W}
-            height={bar.height}
-            rx={SPEC_BAR_W / 2}
-            fill="url(#lp-audio-spectrum)"
-          />
-        ))}
-      </svg>
-    </>
-  );
-}
-
 const TEXT_MOCK_TYPE =
   "text-[clamp(52px,9vw,92px)] font-black tracking-[-0.02em] leading-none";
 
+const TEXT_MOCK_CHAR =
+  "inline-block whitespace-pre animate-lp-char motion-reduce:animate-none";
+
+/**
+ * Each character enters, holds and leaves on its own delay, so the word ripples
+ * in and out. The outlined echo behind it runs the same animation a beat later.
+ *
+ * Every character carries the whole word's gradient, sized to the word and
+ * shifted to its own slot, so the ramp stays continuous across the separately
+ * transformed spans. Slots are equal-width, which is close enough for a sweep
+ * between two neighbouring hues.
+ */
+const TEXT_CHAR_STAGGER_S = 0.07;
+const TEXT_ECHO_DELAY_S = 0.12;
+
 export function TextMock({ t }: { t: Translator }) {
   const sample = t("main:textSample");
+  const chars = Array.from(sample);
+  const last = Math.max(1, chars.length - 1);
+
   return (
     <div className="relative flex h-[220px] items-center justify-center">
+      <span className="sr-only">{sample}</span>
       <span
         aria-hidden="true"
         className={cn(
@@ -529,15 +112,35 @@ export function TextMock({ t }: { t: Translator }) {
           "absolute translate-x-[10px] translate-y-[10px] text-transparent [-webkit-text-stroke:1.5px_color-mix(in_srgb,var(--color-lp-indigo-bright)_35%,transparent)]",
         )}
       >
-        {sample}
+        {chars.map((char, index) => (
+          <span
+            key={index}
+            className={TEXT_MOCK_CHAR}
+            style={{
+              animationDelay: `${index * TEXT_CHAR_STAGGER_S + TEXT_ECHO_DELAY_S}s`,
+            }}
+          >
+            {char}
+          </span>
+        ))}
       </span>
-      <span
-        className={cn(
-          TEXT_MOCK_TYPE,
-          "bg-[linear-gradient(100deg,var(--color-lp-indigo-bright),var(--color-lp-coral))] bg-clip-text text-transparent",
-        )}
-      >
-        {sample}
+      <span aria-hidden="true" className={TEXT_MOCK_TYPE}>
+        {chars.map((char, index) => (
+          <span
+            key={index}
+            className={cn(
+              TEXT_MOCK_CHAR,
+              "bg-[linear-gradient(100deg,var(--color-lp-indigo-bright),var(--color-lp-coral))] bg-clip-text text-transparent",
+            )}
+            style={{
+              animationDelay: `${index * TEXT_CHAR_STAGGER_S}s`,
+              backgroundSize: `${chars.length * 100}% 100%`,
+              backgroundPosition: `${(index / last) * 100}% 0`,
+            }}
+          >
+            {char}
+          </span>
+        ))}
       </span>
     </div>
   );
@@ -683,27 +286,8 @@ export function GpuMock({ t }: { t: Translator }) {
   );
 }
 
-const EXPORT_FORMATS = [".mp4", ".mov", ".mkv", ".webm"];
-
 export function ExportMock({ t }: { t: Translator }) {
-  return (
-    <>
-      <div className="flex flex-wrap gap-2.5">
-        {EXPORT_FORMATS.map((format) => (
-          <span
-            key={format}
-            className="rounded-md border border-lp-border2 bg-white/[0.03] px-3.5 py-[9px] font-mono text-[13px] font-bold text-lp-text"
-          >
-            {format}
-          </span>
-        ))}
-      </div>
-      <div className="mt-[18px] h-2 overflow-hidden rounded-full bg-white/[0.08]">
-        <i className="block h-full w-[72%] rounded-full bg-[linear-gradient(90deg,var(--color-lp-indigo),var(--color-lp-coral))]" />
-      </div>
-      <p className="mt-2.5 text-xs text-lp-faint">{t("main:exportStatus")}</p>
-    </>
-  );
+  return <InteractiveExportMock statusLabel={t("main:exportStatus")} />;
 }
 
 function WindowsLogo({ className }: { className?: string }) {
