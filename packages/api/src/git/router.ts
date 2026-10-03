@@ -248,13 +248,29 @@ async function routeGitRequestCore(request: Request, env: GitRouterEnvironment):
     let input: unknown;
     try { input = await request.json(); } catch { return json({ message: "Invalid JSON" }, 400); }
     const name = (input as { name?: unknown } | null)?.name;
+    const creationId = (input as { creationId?: unknown } | null)?.creationId;
+    const requestedOwner = (input as { ownerId?: unknown } | null)?.ownerId;
     if (typeof name !== "string" || name.trim().length < 1 || name.length > 80 ||
         /[\x00-\x1f\x7f/\\]/u.test(name)) {
       return json({ message: "Invalid repository name" }, 400);
     }
-    const row = await createGitRepositoryForOwner(userId, name.trim(), MAX_REPOSITORIES_PER_USER, db);
-    if (!row) return json({ message: "Repository limit reached" }, 409);
-    return json(view(row, repoUrl(env, request, row.id)), 201);
+    if (creationId !== undefined && (typeof creationId !== "string" || !UUID.test(creationId) || creationId === "00000000-0000-0000-0000-000000000000")) {
+      return json({ message: "Invalid repository creation identifier" }, 400);
+    }
+    if (requestedOwner !== undefined && requestedOwner !== userId) {
+      return json({ message: "The authenticated account changed; retry with the original account" }, 409);
+    }
+    try {
+      const row = await createGitRepositoryForOwner(userId, name.trim(), MAX_REPOSITORIES_PER_USER, db, creationId);
+      if (!row) return json({ message: "Repository limit reached" }, 409);
+      return json(view(row, repoUrl(env, request, row.id)), 201);
+    } catch (error) {
+      if (error instanceof Error && error.message === "Repository creation identifier is already used" ||
+          typeof error === "object" && error !== null && "code" in error && error.code === "P2002") {
+        return json({ message: "Repository creation identifier conflicts with an existing repository" }, 409);
+      }
+      throw error;
+    }
   }
   if (!repoMatch || !UUID.test(repoMatch[1])) return new Response("Not found", { status: 404 });
   const repoId = repoMatch[1];

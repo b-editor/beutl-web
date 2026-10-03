@@ -48,6 +48,9 @@ Git history is limited to 16 MiB of stored objects, an 8 MiB incoming pack,
 and 9,000 stored object entries. A non-empty push reserves two entries for its
 pack and index and is rejected before it could make listings unusable. Fetches,
 ref-only pushes and repository deletion remain available at this limit.
+Branches, tags and other refs are also limited to 9,000 per repository, even
+for ref-only pushes. Updating or deleting existing refs remains allowed at
+capacity; a successful deletion frees a slot for a subsequent push.
 Each repository can retain at most 10,000 LFS records, counting both pending
 reservations and verified objects, including zero-byte objects. Reusing an OID
 does not consume another slot; completed cleanup frees expired reservations.
@@ -59,6 +62,12 @@ alongside File bytes. Pending LFS, Git push, and File writes reserve capacity
 against the same account quota. CockroachDB serializes admission through the
 user's `storageRevision` row. Repository creation uses the same serializable
 user lock to enforce the active repository count under concurrent requests.
+The desktop persists a random creation ID in its local Git config, scoped by
+account and repository name, before sending the POST. `/api/v3/repos` accepts
+optional `creationId` and `ownerId`: a retry with the same ID returns the same
+repository even at the count limit; another account, changed name, or deleted
+repository conflicts. The authenticated account must match `ownerId` when it
+is supplied. No new database migration is required for these recovery IDs.
 A Git push reserves the incoming pack and its index bound, then settles to
 actual stored size. Small pushes can use the remaining account capacity.
 Git history counts current

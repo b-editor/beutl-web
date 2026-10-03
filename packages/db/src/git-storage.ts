@@ -33,13 +33,22 @@ export async function lockStorageAccount(userId: string, tx: PrismaTransaction):
   }
 }
 
-export async function createGitRepositoryForOwner(ownerId: string, name: string, limit = 20, prisma?: PrismaClient) {
+export async function createGitRepositoryForOwner(ownerId: string, name: string, limit = 20, prisma?: PrismaClient, creationId?: string) {
   const db = prisma ?? await getDb();
   return runWithDbProvider(async () => db, () => startRetryableTransaction(async (tx) => {
     await tx.user.update({ where: { id: ownerId }, data: { storageRevision: { increment: 1 } } });
+    if (creationId) {
+      const existing = await tx.gitRepository.findUnique({ where: { id: creationId } });
+      if (existing) {
+        if (existing.ownerId !== ownerId || existing.name !== name || existing.deletedAt !== null) {
+          throw new Error("Repository creation identifier is already used");
+        }
+        return existing;
+      }
+    }
     const count = await tx.gitRepository.count({ where: { ownerId, deletedAt: null } });
     if (count >= limit) return null;
-    return tx.gitRepository.create({ data: { ownerId, name, accountedAt: new Date() } });
+    return tx.gitRepository.create({ data: { ...(creationId ? { id: creationId } : {}), ownerId, name, accountedAt: new Date() } });
   }, { isolationLevel: "Serializable" }));
 }
 

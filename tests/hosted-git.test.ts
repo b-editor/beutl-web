@@ -7,9 +7,10 @@ import { join, sep } from "node:path";
 import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import { sign } from "hono/jwt";
 import { handleLfsBatch, handleLfsVerify, type GitDurableStorage, type LfsRecord } from "../packages/api/src/git/lfs";
 import { pruneExpiredLfs, LFS_BASIC_CLEANUP_GRACE_MS, MAX_LFS_SINGLE_PUT_BYTES, MAX_LFS_RECORDS_PER_REPOSITORY } from "../packages/api/src/git/lfs";
-import { incomingGitObjectBytes, MAX_GIT_REPOSITORY_OBJECTS } from "../packages/api/src/git/git-http";
+import { incomingGitObjectBytes, handleGitHttp, MAX_GIT_REPOSITORY_OBJECTS, MAX_GIT_REPOSITORY_REFS } from "../packages/api/src/git/git-http";
 import { createGitRepositoryForOwner } from "@beutl/db";
 import type { GitStorageAccounting } from "../packages/api/src/git/accounting";
 import { handleMultipart } from "../packages/api/src/git/multipart";
@@ -183,6 +184,77 @@ class MemoryAccounting implements GitStorageAccounting {
 }
 
 describe("hosted Git maintenance and admission", () => {
+  it("recovers an accepted creation using its persisted ID at capacity without creating duplicates or crossing accounts", async () => {
+    const rows = new Map<string, any>();
+    let count = 19;
+    let creations = 0;
+    let locks = 0;
+    const tx = {
+      user: { update: async () => { locks++; } },
+      gitRepository: {
+        findUnique: async ({ where }: { where: { id: string } }) => rows.get(where.id) ?? null,
+        count: async () => count,
+        create: async ({ data }: { data: { id?: string; ownerId: string; name: string } }) => {
+          const row = { ...data, id: data.id ?? crypto.randomUUID(), deletedAt: null, createdAt: new Date(), updatedAt: new Date() };
+          rows.set(row.id, row); count++; creations++;
+          return row;
+        },
+      },
+    };
+    const db = { $transaction: async (work: (value: unknown) => Promise<unknown>) => work(tx) };
+    setDbProvider(async () => db as never);
+    vi.stubEnv("JWT_SECRET", secret);
+    vi.stubEnv("JWT_ISSUER", "");
+    vi.stubEnv("JWT_AUDIENCE", "");
+    try {
+      const token = async (owner: string) => sign({
+        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": owner,
+        exp: Math.floor(Date.now() / 1000) + 300,
+      }, secret);
+      const routeEnv = { ...env, BEUTL_GIT_ENABLED: "true", BEUTL_GIT_REPOSITORIES: {
+        idFromName: (id: string) => id, get: () => ({ fetch: async () => new Response(null, { status: 204 }) }),
+      } };
+      const create = async (owner: string, body: Record<string, unknown>) => routeGitRequest(
+        new Request("https://beutl.example/api/v3/repos", {
+          method: "POST", headers: { Authorization: `Bearer ${await token(owner)}`, "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }), routeEnv);
+      const intent = { name: "project", creationId: repoId, ownerId: "owner-a" };
+      // Simulate losing the first response, then reissuing the same persisted intent.
+      expect((await create("owner-a", intent))?.status).toBe(201);
+      const recovered = await create("owner-a", intent);
+      expect(recovered?.status).toBe(201);
+      expect(await recovered!.json()).toMatchObject({ id: repoId, name: "project", url: expect.stringContaining(repoId) });
+      expect(count).toBe(20);
+      expect(creations).toBe(1);
+      expect((await create("owner-a", { ...intent, name: "changed" }))?.status).toBe(409);
+      expect((await create("owner-b", { ...intent, ownerId: "owner-b" }))?.status).toBe(409);
+      const previousLocks = locks;
+      expect((await create("owner-b", intent))?.status).toBe(409);
+      expect(locks).toBe(previousLocks);
+      expect((await create("owner-a", { ...intent, creationId: "invalid" }))?.status).toBe(400);
+      expect((await create("owner-a", { name: "legacy client" }))?.status).toBe(409);
+      rows.get(repoId).deletedAt = new Date();
+      expect((await create("owner-a", intent))?.status).toBe(409);
+      expect(creations).toBe(1);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.each([2, 3])("rejects a corrupt zero-object pack version %s before creating refs", async (version) => {
+    const bucket = new MemoryBucket();
+    const pack = Buffer.alloc(32);
+    pack.write("PACK");
+    pack.writeUInt32BE(version, 4);
+    const command = Buffer.from(`${"0".repeat(40)} ${"1".repeat(40)} refs/heads/corrupt-empty\0report-status\n`);
+    const body = Buffer.concat([Buffer.from((command.length + 4).toString(16).padStart(4, "0")), command, Buffer.from("0000"), pack]);
+    const response = await handleGitHttp(new Request(`https://beutl.example/api/v3/git/${repoId}.git/git-receive-pack`, {
+      method: "POST", body,
+    }), bucket, repoId, "write");
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("checksum");
+    expect([...bucket.objects.keys()].filter((key) => key.includes("/refs/"))).toEqual([]);
+  });
+
   it("reserves pack plus index bytes, including highly compressed object counts", () => {
     const pack = new Uint8Array(64);
     pack.set(new TextEncoder().encode("PACK"));
@@ -374,6 +446,7 @@ describe("Git Smart HTTP with the native Git CLI", () => {
   it("pushes and clones a repository through the Durable Object", async () => {
     class CountedBucket extends MemoryBucket {
       padding = 0;
+      refPadding = 0;
       override async list(options: Parameters<MemoryBucket["list"]>[0]) {
         const page = await super.list(options);
         // Model many small stored objects for admission without transferring
@@ -381,6 +454,11 @@ describe("Git Smart HTTP with the native Git CLI", () => {
         if (options.prefix === `git/repos/${repoId}/repo.git/objects/` && !options.delimiter && !options.cursor) {
           page.objects.push(...Array.from({ length: this.padding }, (_, i) => ({
             key: `${options.prefix}count-fixture/${i}`, size: 0,
+          })));
+        }
+        if (options.prefix === `git/repos/${repoId}/repo.git/refs/` && !options.delimiter && !options.cursor) {
+          page.objects.push(...Array.from({ length: this.refPadding }, (_, i) => ({
+            key: `${options.prefix}heads/count-fixture/${i}`, size: 41,
           })));
         }
         return page;
@@ -479,6 +557,18 @@ describe("Git Smart HTTP with the native Git CLI", () => {
       expect(readFileSync(join(root, "copy-at-limit", "at-limit.txt"), "utf8").replace(/\r\n/gu, "\n"))
         .toBe("last admitted pack\n");
       expect(() => readFileSync(join(root, "copy-at-limit", "too-many.txt"))).toThrow();
+      const admittedOid = (await git(join(root, "copy-at-limit"), "rev-parse", "HEAD")).stdout.trim();
+      const refsPrefix = `git/repos/${repoId}/repo.git/refs/`;
+      bucket.refPadding = MAX_GIT_REPOSITORY_REFS - (await new GitObjectStore(bucket).list(refsPrefix)).objects.length - 1;
+      await git(root, "push", "origin", `${admittedOid}:refs/heads/ref-at-limit`);
+      expect((await new GitObjectStore(bucket).list(refsPrefix)).objects).toHaveLength(MAX_GIT_REPOSITORY_REFS);
+      const refsAtLimit = [...bucket.objects].filter(([key]) => key.includes("/refs/"));
+      expect((await new GitObjectStore(bucket).list(prefix)).objects).toHaveLength(MAX_GIT_REPOSITORY_OBJECTS);
+      await expect(git(root, "push", "origin", `${admittedOid}:refs/tags/one-too-many`)).rejects.toThrow("413");
+      expect([...bucket.objects].filter(([key]) => key.includes("/refs/"))).toEqual(refsAtLimit);
+      await git(root, "push", "origin", ":ref-at-limit");
+      await git(root, "push", "origin", `${admittedOid}:refs/tags/last-slot-reused`);
+      expect((await new GitObjectStore(bucket).list(refsPrefix)).objects).toHaveLength(MAX_GIT_REPOSITORY_REFS);
       await git(root, "push", "origin", ":main");
       expect((await fetch(`${url}/info/refs?service=git-upload-pack`)).status).toBe(200);
     } finally {

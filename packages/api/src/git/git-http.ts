@@ -17,6 +17,7 @@ export const MAX_GIT_REPOSITORY_BYTES = 16 * 1024 * 1024;
 // Leave room below the object adapter's 10,000-entry listing ceiling, including
 // directories. Rejected pushes must leave the repository readable and deletable.
 export const MAX_GIT_REPOSITORY_OBJECTS = 9_000;
+export const MAX_GIT_REPOSITORY_REFS = 9_000;
 const MAX_GIT_NEGOTIATION_BYTES = 64 * 1024;
 const GITDIR = "/repo.git";
 
@@ -122,6 +123,28 @@ export async function handleGitHttp(
     let additionalBytes: number;
     try { additionalBytes = incomingGitObjectBytes(parsed.packData); }
     catch { return new Response("Invalid Git pack header", { status: 400 }); }
+    if (parsed.packData.byteLength > 0 &&
+        new DataView(parsed.packData.buffer, parsed.packData.byteOffset).getUint32(8) === 0) {
+      // Native Git can send a checksum-bearing, zero-object pack for a ref-only
+      // creation. Validate it, then avoid retaining a useless pack/index pair.
+      if (parsed.packData.byteLength !== 32) return new Response("Invalid empty Git pack", { status: 400 });
+      const checksum = new Uint8Array(await crypto.subtle.digest("SHA-1", Uint8Array.from(parsed.packData.subarray(0, 12))));
+      if (!checksum.every((byte, index) => byte === parsed.packData[12 + index])) {
+        return new Response("Invalid empty Git pack checksum", { status: 400 });
+      }
+      parsed.packData = new Uint8Array();
+      additionalBytes = 0;
+    }
+    const refs = await store.list(`${prefix}/repo.git/refs/`);
+    const projectedRefs = new Set(refs.objects.map((ref) => ref.key));
+    for (const update of parsed.refUpdates) {
+      if (update.newOid !== "0".repeat(40)) projectedRefs.add(`${prefix}/repo.git/${update.refName}`);
+    }
+    // Do not credit deletions until they succeed: a stale deletion must not
+    // create room for new refs in the same request. Existing refs stay mutable.
+    if (projectedRefs.size > refs.objects.length && projectedRefs.size > MAX_GIT_REPOSITORY_REFS) {
+      return new Response("Git repository ref count limit exceeded", { status: 413 });
+    }
     const objects = await store.list(`${prefix}/repo.git/objects/`);
     const storedBytes = objects.objects.reduce((size, object) => size + object.size, 0);
     if (parsed.packData.byteLength > 0 && objects.objects.length + 2 > MAX_GIT_REPOSITORY_OBJECTS) {
