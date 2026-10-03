@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit",
     "dev": "vite dev --port 3001",
     "preview": "vite build && wrangler dev --config dist/server/wrangler.json",
-    "deploy": "vite build && vinext-cloudflare deploy --config dist/server/wrangler.json",
+    "deploy": "vite build && vinext-cloudflare deploy --skip-build --config dist/server/wrangler.json",
     "upload": "vite build && wrangler versions upload --config dist/server/wrangler.json",
     "cf-typegen": "wrangler types --env-interface CloudflareEnv worker-configuration.d.ts"
   },
