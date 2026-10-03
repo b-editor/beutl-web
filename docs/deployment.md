@@ -69,9 +69,11 @@ Prisma model.
 
 ## Object storage
 
-Optional hosted Git uses its own private Backblaze B2 bucket and adds Git/LFS
+Optional hosted Git uses private Backblaze B2 storage and adds Git/LFS
 bytes to the existing account meter. See [Hosted Git and large media](hosted-git.md)
 for the required migration, Web Worker configuration, transfer limits and cleanup.
+Its `BEUTL_GIT_S3_*` settings are separate configuration; the physical bucket
+can be shared with File/AI storage when its lifecycle rules preserve Git versions.
 
 User files and AI outputs live in one object store used by the Web Worker's
 UI, public APIs and scheduled reconcilers. The admin and private image Workers
@@ -120,6 +122,9 @@ delete marker, while the cleanup outboxes and the storage console take a
 successful delete as the object being gone; the noncurrent versions would
 then stay stored and billed with nothing tracking them. If versioning cannot
 be turned off, add a lifecycle rule that expires noncurrent versions promptly.
+On a bucket shared with Git, scope that expiration to ordinary object prefixes
+as described in [Hosted Git storage configuration](hosted-git.md#storage-configuration).
+Never apply a bucket-wide expiration rule to `git/` or `git-lfs/`.
 
 Uploads stream each part straight from the browser request to the service with
 an unsigned payload (`x-amz-content-sha256: UNSIGNED-PAYLOAD`). This has been

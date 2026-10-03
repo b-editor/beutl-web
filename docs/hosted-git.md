@@ -10,8 +10,10 @@ Git storage uses `BEUTL_GIT_S3_*`, separately from the ordinary File/AI
 `BEUTL_S3_*` configuration. Set development and production Git credentials on
 their respective environments; the existing S3 settings do not enable Git.
 Git/LFS pins object versions, so its bucket must retain referenced versions.
-The ordinary storage lifecycle that expires noncurrent versions must not be
-applied to the Git bucket. Enable Git through the environment only after its
+It can share the environment's existing private File/AI bucket when lifecycle
+rules expire ordinary objects only, without matching `git/` or `git-lfs/`.
+Backblaze applies every matching lifecycle rule; adding a more specific rule
+does not override a bucket-wide expiration rule. Enable Git through the environment only after its
 bucket, secrets and database schema are ready; deployments preserve that setting.
 
 ## Enablement
@@ -21,7 +23,7 @@ procedure before enabling the API. Web (including its APIs) and admin must use t
 because their account storage queries include Git usage. The migration adds
 new tables and a storage admission counter; it does not import old repositories.
 
-Configure the Web Worker (`apps/web/wrangler.jsonc`) with a dedicated private B2 bucket and these values:
+Configure the Web Worker (`apps/web/wrangler.jsonc`) with a private B2 bucket and these values:
 
 | Setting | Value |
 | --- | --- |
@@ -39,6 +41,13 @@ for `git/` and `git-lfs/`. Keep credentials in Worker secrets and ignored local
 configuration. The checked-in Web Wrangler configuration includes the SQLite Durable
 Object binding/migration and leaves the feature disabled. Use Workers Paid for
 the bundle size and bounded Git pack processing.
+
+When sharing a bucket, ordinary File keys are lowercase UUIDs, and AI/upload
+keys use `ai/` and `storage-upload/`. Scope their noncurrent-version expiration
+to the UUID first-character prefixes `0`–`9`, `a`–`f` (which also cover `ai/`)
+and `storage-upload/`; remove the equivalent rule with an empty prefix.
+Git prefixes retain versions and can abort unfinished multipart uploads after
+seven days. Update these rules when introducing another ordinary key prefix.
 
 Retain the existing five-minute API cron and Hyperdrive binding. Do not add an
 age-based lifecycle rule that deletes noncurrent versions in these prefixes:
