@@ -60,7 +60,9 @@ export async function fetchDesktopUsage(
             Accept: "application/json",
           },
           cache: "no-store",
-          redirect: "error",
+          // Workers rejects "error" before sending the request. Return 3xx
+          // responses for the !ok check below without forwarding credentials.
+          redirect: "manual",
           signal: AbortSignal.any([deadline, AbortSignal.timeout(10_000)]),
         });
         if (!response.ok) throw new Error("Usage backend unavailable");
