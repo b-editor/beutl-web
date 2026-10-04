@@ -5,11 +5,10 @@ import { api } from "@beutl/api";
 import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable-object";
 import { gitRepositoryObject } from "../packages/api/src/git/environment";
 import { appendTusUpload, createTusUpload, downloadLfsObject, readTusUpload, type LfsObject } from "../packages/api/src/git/media-worker";
-import { issueGitToken, issueUploadToken } from "../packages/api/src/git/tokens";
+import { basicCredential, gitAccessTokenDelegate, gitAccessTokenFixture } from "./stubs/git-access-tokens";
 import { type GitDurableStorage, type LfsRecord, lfsKey } from "../packages/api/src/git/lfs";
 
 const repoId = "12345678-1234-1234-1234-123456789abc";
-const secret = "hosted-git-test-secret-for-scoped-jwts";
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 class Storage implements GitDurableStorage {
   values = new Map<string, any>(); alarm: number | null = null;
@@ -77,7 +76,7 @@ function fixture() {
   const storage = new Storage(), bucket = new Bucket();
   const accounting = { reserveLfs: vi.fn(async () => "reserved"), commitLfs: vi.fn(async () => undefined),
     releaseLfs: vi.fn(async () => undefined), releaseRepository: vi.fn(async () => undefined) };
-  const durable = new GitRepositoryDurableObject({ storage }, { BEUTL_GIT_TOKEN_SECRET: secret }, bucket as never, accounting as never);
+  const durable = new GitRepositoryDurableObject({ storage }, {}, bucket as never, accounting as never);
   const bodies: number[] = [];
   const repository = gitRepositoryObject({ BEUTL_GIT_REPOSITORIES: { idFromName: (name) => name, get: () => ({ fetch: async (r: Request) => {
     if (r.body) bodies.push((await r.clone().text()).length);
@@ -87,9 +86,14 @@ function fixture() {
   const object = (oid: string): LfsObject => ({ bucket: bucket as never, repository, access, oid });
   async function reserve(oid: string, size: number) {
     const r = await repository.forward(new Request(`https://beutl.test/api/v3/git/${repoId}.git/info/lfs/objects/batch`, {
-      method: "POST", body: JSON.stringify({ operation: "upload", transfers: ["beutl-tus"], objects: [{ oid, size }] }),
+      method: "POST", headers: { Authorization: "Basic client-credential" },
+      body: JSON.stringify({ operation: "upload", transfers: ["beutl-tus"], objects: [{ oid, size }] }),
     }), access);
-    expect(r.status).toBe(200); expect((await r.json()).transfer).toBe("beutl-tus");
+    expect(r.status).toBe(200);
+    const batch = await r.json();
+    expect(batch.transfer).toBe("beutl-tus");
+    // The client's own repository credential authorizes the transfer.
+    expect(batch.objects[0].actions.upload.header).toEqual({ Authorization: "Basic client-credential" });
     const base = `https://beutl.test/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/tus`;
     const created = await createTusUpload(new Request(base, { method: "POST", headers: {
       "Tus-Resumable": "1.0.0", "Upload-Length": String(size),
@@ -172,27 +176,27 @@ describe("Worker media transfers and durable metadata", () => {
     expect(f.storage.alarm).toBe(earlier);
     expect((await f.transfer(url, oid, record.resourceId, 0)).headers.get("upload-verified")).toBe("true");
   });
-  it("binds upload credentials to repository, OID and reservation expiry", async () => {
-    const now = Date.now(), oid = "b".repeat(64);
-    const token = await issueUploadToken(secret, "owner", repoId, oid, now + 15_000);
-    const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString());
-    expect(payload.exp * 1000).toBeLessThanOrEqual(now + 15_000);
-    const env = { BEUTL_GIT_ENABLED: "true", BEUTL_GIT_TOKEN_SECRET: secret,
+  it("requires a write access token for tus uploads", async () => {
+    const oid = "b".repeat(64);
+    const read = await gitAccessTokenFixture({ repoId, scope: "read" });
+    const write = await gitAccessTokenFixture({ repoId, scope: "write" });
+    const elsewhere = await gitAccessTokenFixture({ repoId: "87654321-4321-4321-4321-cba987654321" });
+    const moved = await gitAccessTokenFixture({ repoId, repository: { ownerId: "new-owner", deletedAt: null } });
+    const env = { BEUTL_GIT_ENABLED: "true",
       BEUTL_S3_ENDPOINT: "https://s3.us-east-005.backblazeb2.com/", BEUTL_S3_REGION: "us-east-005",
       BEUTL_S3_BUCKET: "beutl-test", BEUTL_S3_ACCESS_KEY_ID: "test", BEUTL_S3_SECRET_ACCESS_KEY: "test",
       BEUTL_GIT_REPOSITORIES: { idFromName: (v: string) => v, get: vi.fn() } };
-    const read = (await issueGitToken(secret, "owner", repoId, "read")).token;
-    const db = { gitRepository: { findFirst: async () => null } };
+    const db = { gitAccessToken: gitAccessTokenDelegate([read.row, write.row, elsewhere.row, moved.row]) };
     await runWithDbProvider(async () => db as never, async () => {
       const url = `https://beutl.test/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/tus`;
-      const send = (target: string, authorization: string, headers: Record<string, string> = {}) =>
-        api.fetch(new Request(target, { method: "POST", headers: { Authorization: `Bearer ${authorization}`, "Tus-Resumable": "1.0.0", ...headers } }), env);
-      const readOnly = await send(url, read);
-      expect(readOnly.status).toBe(401);
+      const send = (token: string) => api.fetch(new Request(url, { method: "POST",
+        headers: { Authorization: basicCredential(token), "Tus-Resumable": "1.0.0" } }), env);
+      const readOnly = await send(read.token);
+      expect(readOnly.status).toBe(403);
       expect(readOnly.headers.get("tus-resumable")).toBe("1.0.0");
-      expect((await send(url.replace(oid, "c".repeat(64)), token)).status).toBe(401);
-      // A valid upload token still needs an active repository owned by its subject.
-      expect((await send(url, token, { "x-beutl-git-owner-id": "owner", "x-beutl-git-scope": "write" })).status).toBe(404);
+      expect((await send(elsewhere.token)).status).toBe(401);
+      // A token stops working once its repository changes owner.
+      expect((await send(moved.token)).status).toBe(404);
       expect(env.BEUTL_GIT_REPOSITORIES.get).not.toHaveBeenCalled();
     });
   });

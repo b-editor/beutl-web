@@ -1,12 +1,12 @@
 import { Hono, type Context } from "hono";
-import { isGitRepositoryId, isValidGitRepositoryName } from "@beutl/core";
+import { isGitRepositoryId, isValidGitAccessTokenName, isValidGitRepositoryName } from "@beutl/core";
 import { getUserId } from "../api/auth";
+import { createGitAccessToken, listGitAccessTokens, revokeGitAccessToken } from "../git/access-tokens";
 import { gitPublicOrigin, type GitEnvironment } from "../git/environment";
 import {
   createGitRepository,
   deleteGitRepository,
   findGitRepository,
-  issueGitRepositoryToken,
   listGitRepositories,
   renameGitRepository,
 } from "../git/repositories";
@@ -14,7 +14,8 @@ import { requireHostedGit } from "./git";
 
 type Routes = { Bindings: GitEnvironment; Variables: { ownerId: string } };
 
-const REPOSITORY = "/:id{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}";
+const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const REPOSITORY = `/:id{${UUID}}`;
 
 async function jsonInput(c: Context): Promise<Record<string, unknown> | null | undefined> {
   try { return await c.req.json(); } catch {
@@ -26,7 +27,7 @@ const message = (c: Context, text: string, status: 400 | 401 | 409) => c.json({ 
 const origin = (c: Context<Routes>) => gitPublicOrigin(c.env, c.req.url);
 
 // Desktop clients manage repositories with their API JWT. Git traffic itself
-// uses the repository-scoped tokens issued here (see ./git).
+// uses the repository access tokens issued here (see ./git).
 const repos = new Hono<Routes>()
   .use(async (c, next) => {
     c.header("Cache-Control", "no-store");
@@ -75,13 +76,24 @@ const repos = new Hono<Routes>()
   .delete(REPOSITORY, async (c) =>
     await deleteGitRepository(c.env, c.get("ownerId"), c.req.param("id"))
       ? c.body(null, 204) : c.text("Not found", 404))
-  .post(`${REPOSITORY}/token`, async (c) => {
+  .get(`${REPOSITORY}/tokens`, async (c) => {
+    const tokens = await listGitAccessTokens(c.get("ownerId"), c.req.param("id"));
+    return tokens ? c.json({ tokens }) : c.text("Not found", 404);
+  })
+  // The response carries the token secret; it cannot be read again later.
+  .post(`${REPOSITORY}/tokens`, async (c) => {
     const input = await jsonInput(c);
     if (input === undefined) return message(c, "Invalid JSON", 400);
-    const scope = input?.scope;
+    const { name, scope } = input ?? {};
+    if (!isValidGitAccessTokenName(name)) return message(c, "Invalid token name", 400);
     if (scope !== "read" && scope !== "write") return message(c, "Invalid Git scope", 400);
-    const token = await issueGitRepositoryToken(c.env, c.get("ownerId"), c.req.param("id"), scope);
-    return token ? c.json(token) : c.text("Not found", 404);
-  });
+    const result = await createGitAccessToken(c.get("ownerId"), c.req.param("id"), name.trim(), scope);
+    if (result.status === "notFound") return c.text("Not found", 404);
+    if (result.status === "limitReached") return message(c, "Access token limit reached", 409);
+    return c.json(result.token, 201);
+  })
+  .delete(`${REPOSITORY}/tokens/:tokenId{${UUID}}`, async (c) =>
+    await revokeGitAccessToken(c.get("ownerId"), c.req.param("id"), c.req.param("tokenId"))
+      ? c.body(null, 204) : c.text("Not found", 404));
 
 export default repos;

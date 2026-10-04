@@ -345,10 +345,8 @@
     "tokenScope": "Access",
     "read": "Read only",
     "write": "Read and write",
-    "generateToken": "Issue token",
     "token": "Connection token",
     "copyToken": "Copy token",
-    "tokenExpires": "Expires: {{date}} UTC",
     "copyCloneCommand": "Copy clone command",
     "close": "Close",
     "errors": {
@@ -359,12 +357,27 @@
       "invalidName": "Use 1–80 characters without slashes, backslashes, or control characters.",
       "limitReached": "You can create up to 20 repositories. Delete an unused repository first.",
       "conflict": "This operation could not be completed. Refresh the list and try again.",
-      "accountChanged": "The signed-in account changed. Please reload this page."
+      "accountChanged": "The signed-in account changed. Please reload this page.",
+      "invalidTokenName": "Use 1–80 characters without control characters.",
+      "tokenLimitReached": "You can create up to 50 tokens per repository. Revoke an unused token first."
     },
-    "regenerateToken": "Issue new token",
     "createTitle": "Create repository",
     "createSubmit": "Create",
     "createdDate": "Created",
-    "visibility": "Visibility"
+    "visibility": "Visibility",
+    "tokens": "Access tokens",
+    "tokensDescription": "Git and Git LFS sign in with a token in the clone URL. Tokens do not expire; revoke one when it is no longer needed.",
+    "tokenName": "Token name",
+    "tokenNamePlaceholder": "e.g. Work laptop",
+    "createToken": "Create token",
+    "newTokenNotice": "Copy the token now. It is shown only once.",
+    "authenticatedCloneUrl": "Clone URL with token",
+    "revokeToken": "Revoke",
+    "confirmRevokeToken": "Revoke \"{{name}}\"? Git clients using it will stop working.",
+    "tokenRevoked": "The token was revoked.",
+    "noTokens": "No access tokens yet.",
+    "tokenCreatedAt": "Created {{date}}",
+    "tokenLastUsed": "Last used {{date}}",
+    "tokenNeverUsed": "Never used"
   }
 }

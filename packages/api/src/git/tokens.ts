@@ -1,95 +1,42 @@
-import { sign, verify } from "hono/jwt";
+import type { GitAccessTokenScope } from "@beutl/core";
 
-export type GitScope = "read" | "write";
-const TOKEN_LIFETIME_SECONDS = 60 * 60;
-const ISSUER = "beutl-hosted-git";
-const UPLOAD_AUDIENCE = "beutl-lfs-upload";
-const UPLOAD_LIFETIME_SECONDS = 24 * 60 * 60;
+export type GitScope = GitAccessTokenScope;
 
-export function gitTokenSecret(env: { BEUTL_GIT_TOKEN_SECRET?: string }): string {
-  const secret = env.BEUTL_GIT_TOKEN_SECRET?.trim();
-  if (!secret || secret.length < 32) {
-    throw new Error("BEUTL_GIT_TOKEN_SECRET must contain at least 32 characters");
-  }
-  return secret;
+// Access tokens are opaque random strings; only their SHA-256 is stored.
+const TOKEN_PREFIX = "bgt_";
+const TOKEN_PATTERN = /^bgt_[A-Za-z0-9_-]{43}$/u;
+
+export function generateGitAccessToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return TOKEN_PREFIX + btoa(String.fromCharCode(...bytes))
+    .replace(/\+/gu, "-").replace(/\//gu, "_").replace(/=+$/u, "");
 }
 
-export async function issueGitToken(
-  secret: string,
-  ownerId: string,
-  repoId: string,
-  scope: GitScope,
-  now = Math.floor(Date.now() / 1000),
-): Promise<{ token: string; expiresAt: string }> {
-  const exp = now + TOKEN_LIFETIME_SECONDS;
-  const token = await sign(
-    { sub: ownerId, repo_id: repoId, scope, iss: ISSUER, aud: ISSUER, iat: now, nbf: now, exp },
-    secret,
-  );
-  return { token, expiresAt: new Date(exp * 1000).toISOString() };
+export async function hashGitAccessToken(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export async function verifyGitToken(
-  secret: string,
-  authorization: string | null,
-  repoId: string,
-  requiredScope: GitScope,
-  now = Math.floor(Date.now() / 1000),
-): Promise<{ ownerId: string; scope: GitScope } | null> {
-  const match = /^Bearer[\t ]+([^\s]+)[\t ]*$/iu.exec(authorization ?? "");
+/**
+ * Git and Git LFS send `https://USER:TOKEN@host/...` as Basic credentials; the
+ * user name is ignored, and a token given as the user name with no password is
+ * accepted too. API clients may send the token as a Bearer credential.
+ */
+export function gitAccessTokenFrom(authorization: string | null): string | null {
+  const match = /^(Basic|Bearer)[\t ]+([^\s]+)[\t ]*$/iu.exec(authorization ?? "");
   if (!match) return null;
-  try {
-    const payload = await verify(match[1], secret, {
-      alg: "HS256",
-      iss: ISSUER,
-      aud: ISSUER,
-    });
-    if (
-      typeof payload.sub !== "string" || payload.sub.length === 0 ||
-      payload.repo_id !== repoId ||
-      (payload.scope !== "read" && payload.scope !== "write") ||
-      (requiredScope === "write" && payload.scope !== "write") ||
-      typeof payload.exp !== "number" || payload.exp <= now ||
-      typeof payload.nbf !== "number" || payload.nbf > now ||
-      typeof payload.iat !== "number" || payload.iat > now
-    ) return null;
-    return { ownerId: payload.sub, scope: payload.scope };
-  } catch {
-    // A malformed/expired JWT is unauthenticated; do not log its token material.
-    return null;
+  let token = match[2];
+  if (match[1].toLowerCase() === "basic") {
+    let decoded: string;
+    try { decoded = new TextDecoder().decode(Uint8Array.from(atob(token), (c) => c.charCodeAt(0))); }
+    catch {
+      // Malformed Basic credentials are no credentials.
+      return null;
+    }
+    const separator = decoded.indexOf(":");
+    const user = separator < 0 ? decoded : decoded.slice(0, separator);
+    const password = separator < 0 ? "" : decoded.slice(separator + 1);
+    token = password || user;
   }
-}
-
-export async function issueUploadToken(
-  secret: string, ownerId: string, repoId: string, oid: string,
-  expiresAt: number,
-  now = Math.floor(Date.now() / 1000),
-): Promise<string> {
-  return sign({
-    sub: ownerId, repo_id: repoId, oid, scope: "upload",
-    iss: ISSUER, aud: UPLOAD_AUDIENCE,
-    iat: now, nbf: now, exp: Math.min(now + UPLOAD_LIFETIME_SECONDS, Math.floor(expiresAt / 1000)),
-  }, secret);
-}
-
-export async function verifyUploadToken(
-  secret: string, authorization: string | null, repoId: string, oid: string,
-  now = Math.floor(Date.now() / 1000),
-): Promise<{ ownerId: string } | null> {
-  const match = /^Bearer[\t ]+([^\s]+)[\t ]*$/iu.exec(authorization ?? "");
-  if (!match) return null;
-  try {
-    const payload = await verify(match[1], secret, {
-      alg: "HS256", iss: ISSUER, aud: UPLOAD_AUDIENCE,
-    });
-    if (typeof payload.sub !== "string" || payload.sub.length === 0 ||
-        payload.repo_id !== repoId || payload.oid !== oid || payload.scope !== "upload" ||
-        typeof payload.exp !== "number" || payload.exp <= now ||
-        typeof payload.nbf !== "number" || payload.nbf > now ||
-        typeof payload.iat !== "number" || payload.iat > now) return null;
-    return { ownerId: payload.sub };
-  } catch {
-    // A malformed/expired JWT is unauthenticated; do not log its token material.
-    return null;
-  }
+  return TOKEN_PATTERN.test(token) ? token : null;
 }

@@ -345,10 +345,8 @@
     "tokenScope": "アクセス権限",
     "read": "読み取り",
     "write": "読み取りと書き込み",
-    "generateToken": "トークンを発行",
     "token": "接続トークン",
     "copyToken": "トークンをコピー",
-    "tokenExpires": "有効期限: {{date}} UTC",
     "copyCloneCommand": "クローンコマンドをコピー",
     "close": "閉じる",
     "errors": {
@@ -359,12 +357,27 @@
       "invalidName": "1〜80文字で入力してください。スラッシュ、バックスラッシュ、制御文字は使用できません。",
       "limitReached": "リポジトリは20件まで作成できます。不要なリポジトリを削除してください。",
       "conflict": "この操作を完了できません。一覧を更新してからお試しください。",
-      "accountChanged": "ログイン中のアカウントが変わりました。ページを再読み込みしてください。"
+      "accountChanged": "ログイン中のアカウントが変わりました。ページを再読み込みしてください。",
+      "invalidTokenName": "1〜80文字で入力してください。制御文字は使用できません。",
+      "tokenLimitReached": "トークンは1つのリポジトリにつき50件まで作成できます。不要なトークンを取り消してください。"
     },
-    "regenerateToken": "トークンを再発行",
     "createTitle": "リポジトリを作成",
     "createSubmit": "作成",
     "createdDate": "作成日",
-    "visibility": "公開設定"
+    "visibility": "公開設定",
+    "tokens": "アクセストークン",
+    "tokensDescription": "Git と Git LFS は、クローンURLに含めたトークンで認証します。トークンに有効期限はありません。不要になったら取り消してください。",
+    "tokenName": "トークン名",
+    "tokenNamePlaceholder": "例: 仕事用PC",
+    "createToken": "トークンを作成",
+    "newTokenNotice": "今すぐトークンをコピーしてください。表示されるのはこの一度だけです。",
+    "authenticatedCloneUrl": "トークン付きクローンURL",
+    "revokeToken": "取り消す",
+    "confirmRevokeToken": "「{{name}}」を取り消しますか？このトークンを使う Git クライアントは接続できなくなります。",
+    "tokenRevoked": "トークンを取り消しました。",
+    "noTokens": "アクセストークンはまだありません。",
+    "tokenCreatedAt": "作成: {{date}}",
+    "tokenLastUsed": "最終使用: {{date}}",
+    "tokenNeverUsed": "未使用"
   }
 }

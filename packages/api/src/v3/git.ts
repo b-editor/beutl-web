@@ -1,9 +1,9 @@
 import { Hono, type Context } from "hono";
 import { createMiddleware } from "hono/factory";
+import { findGitAccess } from "../git/access-tokens";
 import { gitAvailability, gitRepositoryObject, type GitAccess, type GitEnvironment } from "../git/environment";
-import { ownsActiveGitRepository } from "../git/repositories";
 import { S3GitObjectBucket } from "../git/s3-object-store";
-import { gitTokenSecret, verifyGitToken, verifyUploadToken, type GitScope } from "../git/tokens";
+import type { GitScope } from "../git/tokens";
 import {
   appendTusUpload,
   createTusUpload,
@@ -20,7 +20,7 @@ const REPOSITORY = `/:repo{${UUID}\\.git}`;
 const LFS_OBJECT = `${REPOSITORY}/info/lfs/objects/:oid{[0-9a-f]{64}}`;
 const TUS_UPLOAD = `${LFS_OBJECT}/tus/:resource{${UUID}}`;
 
-/** Hosted Git is opt-in per environment and needs its storage, object binding and token secret. */
+/** Hosted Git is opt-in per environment and needs its storage and object binding. */
 export const requireHostedGit = createMiddleware<{ Bindings: GitEnvironment }>(async (c, next) => {
   const availability = gitAvailability(c.env);
   if (availability === "disabled") return c.text("Not found", 404);
@@ -32,29 +32,22 @@ export const requireHostedGit = createMiddleware<{ Bindings: GitEnvironment }>(a
 
 const repositoryId = (c: Context) => c.req.param("repo")!.slice(0, -".git".length);
 
-async function grant(c: Context<Routes>, identity: { ownerId: string; scope: GitScope } | null, next: () => Promise<void>) {
-  if (!identity) {
-    return c.text("Unauthorized", 401, { "WWW-Authenticate": "Bearer realm=\"Beutl Git\"", "Cache-Control": "no-store" });
-  }
+/**
+ * Git and Git LFS authenticate with a repository access token, sent as
+ * `https://USER:TOKEN@host/...` (Basic) or as a Bearer credential.
+ */
+const authorize = (scope: GitScope | ((c: Context<Routes>) => GitScope)) => createMiddleware<Routes>(async (c, next) => {
   const repoId = repositoryId(c);
-  if (!await ownsActiveGitRepository(identity.ownerId, repoId)) return c.text("Not found", 404);
-  c.set("access", { repoId, ...identity });
+  const access = await findGitAccess(c.req.header("authorization") ?? null, repoId);
+  if (!access) {
+    // A Basic challenge makes Git send the credentials embedded in the remote URL.
+    return c.text("Unauthorized", 401, { "WWW-Authenticate": "Basic realm=\"Beutl Git\", charset=\"UTF-8\"", "Cache-Control": "no-store" });
+  }
+  if (!access.active) return c.text("Not found", 404);
+  const required = typeof scope === "function" ? scope(c) : scope;
+  if (required === "write" && access.scope !== "write") return c.text("This token is read-only", 403, { "Cache-Control": "no-store" });
+  c.set("access", { repoId, ownerId: access.ownerId, scope: access.scope });
   await next();
-}
-
-/** Git clients present the repository-scoped token issued by POST /repos/:id/token. */
-const authorize = (scope: GitScope | ((c: Context<Routes>) => GitScope)) => createMiddleware<Routes>(async (c, next) =>
-  grant(c, await verifyGitToken(gitTokenSecret(c.env), c.req.header("authorization") ?? null,
-    repositoryId(c), typeof scope === "function" ? scope(c) : scope), next));
-
-/** tus also accepts the OID-scoped upload token returned by the LFS batch response. */
-const authorizeUpload = createMiddleware<Routes>(async (c, next) => {
-  const secret = gitTokenSecret(c.env);
-  const authorization = c.req.header("authorization") ?? null;
-  const upload = await verifyUploadToken(secret, authorization, repositoryId(c), c.req.param("oid")!);
-  return grant(c, upload
-    ? { ownerId: upload.ownerId, scope: "write" }
-    : await verifyGitToken(secret, authorization, repositoryId(c), "write"), next);
 });
 
 const tusVersion = createMiddleware(async (c, next) => {
@@ -89,13 +82,13 @@ const git = new Hono<Routes>()
   // A batch may only download; the object rejects an upload batch without write scope.
   .post(`${REPOSITORY}/info/lfs/objects/batch`, authorize("read"), forward)
   .get(`${LFS_OBJECT}/download`, authorize("read"), (c) => downloadLfsObject(c.req.raw, lfsObject(c)))
-  .options(`${LFS_OBJECT}/tus/:resource{${UUID}}?`, authorizeUpload, () => tusOptions())
-  .post(`${LFS_OBJECT}/tus`, authorizeUpload, tusVersion, (c) => createTusUpload(c.req.raw, lfsObject(c)))
+  .options(`${LFS_OBJECT}/tus/:resource{${UUID}}?`, authorize("write"), () => tusOptions())
+  .post(`${LFS_OBJECT}/tus`, authorize("write"), tusVersion, (c) => createTusUpload(c.req.raw, lfsObject(c)))
   // Hono serves HEAD through GET routes; a tus resource has no GET representation.
-  .get(TUS_UPLOAD, authorizeUpload, tusVersion, (c) => c.req.method === "HEAD"
+  .get(TUS_UPLOAD, authorize("write"), tusVersion, (c) => c.req.method === "HEAD"
     ? readTusUpload(c.req.raw, lfsObject(c), c.req.param("resource"))
     : c.body(null, 405, { "Cache-Control": "no-store" }))
-  .patch(TUS_UPLOAD, authorizeUpload, tusVersion, (c) =>
+  .patch(TUS_UPLOAD, authorize("write"), tusVersion, (c) =>
     appendTusUpload(c.req.raw, lfsObject(c), c.req.param("resource")));
 
 export default git;

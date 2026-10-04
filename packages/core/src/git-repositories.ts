@@ -20,4 +20,23 @@ export type GitRepositorySummary = {
   updatedAt: string;
 };
 
-export type GitRepositoryToken = { token: string; expiresAt: string };
+export const GIT_ACCESS_TOKEN_LIMIT = 50;
+export const GIT_ACCESS_TOKEN_NAME_MAX_LENGTH = 80;
+export type GitAccessTokenScope = "read" | "write";
+
+export function isValidGitAccessTokenName(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 &&
+    value.length <= GIT_ACCESS_TOKEN_NAME_MAX_LENGTH && !/\p{Cc}/u.test(value);
+}
+
+/** A token as the dashboard and API list it; the secret itself is shown only once. */
+export type GitAccessTokenSummary = {
+  id: string;
+  name: string;
+  scope: GitAccessTokenScope;
+  hint: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+};
+
+export type CreatedGitAccessToken = GitAccessTokenSummary & { token: string };

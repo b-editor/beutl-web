@@ -17,7 +17,7 @@ vi.mock("@prisma/client", async (importOriginal) => ({
   PrismaClient: class { constructor() { return mocks.db; } },
 }));
 import web from "../../apps/web/worker.js";
-import { issueGitToken } from "../../packages/api/src/git/tokens";
+import { basicCredential, gitAccessTokenDelegate, gitAccessTokenFixture, type GitAccessTokenRow } from "../stubs/git-access-tokens";
 
 type Handler = (request: Request) => Response | Promise<Response>;
 let next: Record<string, Handler>;
@@ -32,17 +32,24 @@ const env = {
   BEUTL_DATABASE_HYPERDRIVE: { connectionString: "postgres://routes-test" },
   JWT_SECRET: "hosted-git-routes-test-secret", JWT_ISSUER: "", JWT_AUDIENCE: "",
   PUBLIC_ORIGIN: origin, BEUTL_GIT_ENABLED: "true",
-  BEUTL_GIT_TOKEN_SECRET: "hosted-git-routes-signing-secret-32-characters",
   BEUTL_S3_ENDPOINT: "https://s3.example.test", BEUTL_S3_REGION: "test",
   BEUTL_S3_BUCKET: "git", BEUTL_S3_ACCESS_KEY_ID: "test", BEUTL_S3_SECRET_ACCESS_KEY: "test",
   BEUTL_GIT_REPOSITORIES: { idFromName: (name: string) => name, get: () => ({ fetch: objectFetch }) },
 };
 const context = () => ({ waitUntil: (_promise: Promise<unknown>) => undefined, passThroughOnException() {}, props: {} });
+const readTokenId = "44444444-4444-4444-8444-444444444444";
+const secrets = { read: "", write: "" };
+let tokenRows: GitAccessTokenRow[] = [];
 
 beforeAll(async () => {
   const fromWeb = createRequire(new URL("../../apps/web/package.json", import.meta.url));
   vi.doMock(fromWeb.resolve("@opennextjs/cloudflare"), () => ({ getCloudflareContext: mocks.context }));
   next = await import("../../apps/web/src/app/api/v3/[[...route]]/route") as unknown as Record<string, Handler>;
+  const read = await gitAccessTokenFixture({ repoId, scope: "read" });
+  const write = await gitAccessTokenFixture({ repoId, scope: "write" });
+  read.row.id = readTokenId;
+  secrets.read = read.token; secrets.write = write.token;
+  tokenRows = [read.row, write.row];
 });
 beforeEach(() => {
   vi.clearAllMocks();
@@ -58,6 +65,12 @@ beforeEach(() => {
       update: vi.fn(async ({ data }) => ({ ...row, ...data })),
       updateMany: vi.fn(async () => ({ count: 1 })),
     },
+    gitAccessToken: {
+      ...gitAccessTokenDelegate(tokenRows),
+      findMany: vi.fn(async () => tokenRows), count: vi.fn(async () => tokenRows.length),
+      create: vi.fn(async ({ data }) => ({ ...data, id: "55555555-5555-4555-8555-555555555555",
+        createdAt: createdAt, lastUsedAt: null, revokedAt: null })),
+    },
   };
   // The Worker binds its own client per invocation; Next uses the global provider.
   setDbProvider(async () => mocks.db);
@@ -69,8 +82,9 @@ async function apiToken() {
   return `Bearer ${await sign({ "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": "owner",
     exp: Math.floor(Date.now() / 1000) + 300 }, env.JWT_SECRET, "HS256")}`;
 }
+// Git sends the token embedded in `https://USER:TOKEN@host/...` as Basic credentials.
 async function gitToken(scope: "read" | "write") {
-  return `Bearer ${(await issueGitToken(env.BEUTL_GIT_TOKEN_SECRET, "owner", repoId, scope)).token}`;
+  return basicCredential(secrets[scope]);
 }
 async function both(method: string, path: string, init: { authorization?: string; body?: unknown; headers?: Record<string, string> } = {}) {
   const request = () => new Request(`${origin}${path}`, {
@@ -100,7 +114,11 @@ describe("Hosted Git routes in the Worker and the Next.js v3 route", () => {
     ["PATCH", `/api/v3/repos/${repoId}`, { name: "renamed" }],
     ["DELETE", `/api/v3/repos/${repoId}`, undefined],
     ["GET", "/api/v3/repos/22222222-2222-4222-8222-222222222222", undefined],
-    ["POST", `/api/v3/repos/${repoId}/token`, { scope: "admin" }],
+    ["GET", `/api/v3/repos/${repoId}/tokens`, undefined],
+    ["POST", `/api/v3/repos/${repoId}/tokens`, { name: " ", scope: "write" }],
+    ["POST", `/api/v3/repos/${repoId}/tokens`, { name: "laptop", scope: "admin" }],
+    ["DELETE", `/api/v3/repos/${repoId}/tokens/${readTokenId}`, undefined],
+    ["DELETE", `/api/v3/repos/${repoId}/tokens/not-a-token`, undefined],
   ])("serves %s %s identically", async (method, path, body) => {
     const authorization = await apiToken();
     const { worker, route } = await both(method, path, { authorization, body });
@@ -109,10 +127,39 @@ describe("Hosted Git routes in the Worker and the Next.js v3 route", () => {
     expect(mocks.next).not.toHaveBeenCalled();
   });
 
-  it("issues equivalent repository tokens through both paths", async () => {
-    const { worker, route } = await both("POST", `/api/v3/repos/${repoId}/token`, { authorization: await apiToken(), body: { scope: "write" } });
-    expect(worker.status).toBe(200); expect(route.status).toBe(200);
-    expect(Object.keys(await worker.json()).sort()).toEqual(Object.keys(await route.json()).sort());
+  it("creates equivalent access tokens through both paths and shows the secret once", async () => {
+    const { worker, route } = await both("POST", `/api/v3/repos/${repoId}/tokens`, { authorization: await apiToken(), body: { name: " laptop ", scope: "write" } });
+    expect(worker.status).toBe(201); expect(route.status).toBe(201);
+    const [fromWorker, fromRoute] = [await worker.json(), await route.json()];
+    expect(Object.keys(fromWorker).sort()).toEqual(Object.keys(fromRoute).sort());
+    expect(fromWorker).toMatchObject({ name: "laptop", scope: "write", lastUsedAt: null });
+    expect(fromWorker.token).toMatch(/^bgt_[A-Za-z0-9_-]{43}$/u);
+    expect(fromWorker.token).not.toBe(fromRoute.token);
+    // Only the hash is stored.
+    const stored = mocks.db.gitAccessToken.create.mock.calls[0][0].data;
+    expect(stored).not.toHaveProperty("token");
+    expect(stored.tokenHash).toMatch(/^[0-9a-f]{64}$/u);
+    expect(stored.hint).toBe(fromWorker.token.slice(-4));
+  });
+
+  it.each([
+    ["the password of USER:TOKEN", (token: string) => basicCredential(token, "anyone")],
+    ["the user name with no password", (token: string) => `Basic ${btoa(token)}`],
+    ["a Bearer credential", (token: string) => `Bearer ${token}`],
+  ])("accepts an access token as %s", async (_form, credential) => {
+    const { worker, route } = await both("GET", `/api/v3/git/${repoId}.git/info/refs?service=git-upload-pack`, { authorization: credential(secrets.read) });
+    expect([worker.status, route.status]).toEqual([200, 200]);
+  });
+
+  it("refuses revoked tokens and tokens whose repository was deleted or changed owner", async () => {
+    for (const variant of [{ revokedAt: new Date() }, { repository: { ownerId: "owner", deletedAt: new Date() } },
+      { repository: { ownerId: "someone-else", deletedAt: null } }]) {
+      const fixture = await gitAccessTokenFixture({ repoId, ...variant });
+      mocks.db.gitAccessToken.findUnique.mockResolvedValueOnce(fixture.row).mockResolvedValueOnce(fixture.row);
+      const { worker, route } = await both("GET", `/api/v3/git/${repoId}.git/info/refs?service=git-upload-pack`, { authorization: basicCredential(fixture.token) });
+      expect([worker.status, route.status]).toEqual(variant.revokedAt ? [401, 401] : [404, 404]);
+    }
+    expect(objectFetch).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -129,8 +176,9 @@ describe("Hosted Git routes in the Worker and the Next.js v3 route", () => {
   });
 
   it.each([
-    ["GET", `/api/v3/git/${repoId}.git/info/refs?service=git-receive-pack`, "read", 401],
-    ["POST", `/api/v3/git/${repoId}.git/git-receive-pack`, "read", 401],
+    ["GET", `/api/v3/git/${repoId}.git/info/refs?service=git-receive-pack`, "read", 403],
+    ["POST", `/api/v3/git/${repoId}.git/git-receive-pack`, "read", 403],
+    ["POST", `/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/tus`, "read", 403],
     ["GET", `/api/v3/git/${repoId}.git/info/refs?service=git-upload-pack`, undefined, 401],
     ["GET", `/api/v3/git/22222222-2222-4222-8222-222222222222.git/info/refs?service=git-upload-pack`, "read", 401],
     ["GET", `/api/v3/git/${repoId}.git/config`, "read", 404],
@@ -145,7 +193,7 @@ describe("Hosted Git routes in the Worker and the Next.js v3 route", () => {
     expect(result).toEqual(await snapshot(route));
     expect(result.status).toBe(status);
     if (path.includes("/tus")) expect(result.tus).toBe("1.0.0");
-    if (status === 401) expect(result.auth).toBe("Bearer realm=\"Beutl Git\"");
+    if (status === 401) expect(result.auth).toBe("Basic realm=\"Beutl Git\", charset=\"UTF-8\"");
   });
 
   it("keeps Hosted Git hidden on both paths when the environment disables it", async () => {

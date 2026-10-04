@@ -17,7 +17,7 @@ vi.mock("@prisma/client", async (importOriginal) => ({
 }));
 import web, { GitRepositoryDurableObject } from "../../apps/web/worker.js";
 import apiRuntime, { type Env } from "../../packages/api/src/runtime";
-import { issueGitToken } from "../../packages/api/src/git/tokens";
+import { basicCredential, gitAccessTokenDelegate, gitAccessTokenFixture } from "../stubs/git-access-tokens";
 
 const repoId = "11111111-1111-4111-8111-111111111111";
 const repo = { id: repoId, ownerId: "owner", name: "demo", deletedAt: null,
@@ -27,7 +27,6 @@ const env = {
   BEUTL_DATABASE_HYPERDRIVE: { connectionString: "postgres://entrypoint-test" },
   JWT_SECRET: "web-entrypoint-test-secret", JWT_ISSUER: "", JWT_AUDIENCE: "",
   PUBLIC_ORIGIN: "https://beutl.beditor.net", BEUTL_GIT_ENABLED: "true",
-  BEUTL_GIT_TOKEN_SECRET: "web-entrypoint-git-secret-long-enough",
   BEUTL_S3_ENDPOINT: "https://s3.example.test", BEUTL_S3_REGION: "test",
   BEUTL_S3_BUCKET: "git", BEUTL_S3_ACCESS_KEY_ID: "test",
   BEUTL_S3_SECRET_ACCESS_KEY: "test",
@@ -89,11 +88,12 @@ describe("public Web Worker API entrypoint", () => {
   });
 
   it("streams authenticated Git bodies directly and preserves cancellation", async () => {
-    const token = await issueGitToken(env.BEUTL_GIT_TOKEN_SECRET, "owner", repoId, "write");
+    const { token, row } = await gitAccessTokenFixture({ repoId });
+    mocks.db.gitAccessToken = gitAccessTokenDelegate([row]);
     const abort = new AbortController();
     const payload = "git-pack";
     const response = await web.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/v3/git/${repoId}.git/git-receive-pack`, {
-      method: "POST", headers: { authorization: `Bearer ${token.token}` },
+      method: "POST", headers: { authorization: basicCredential(token) },
       body: payload, signal: abort.signal,
     }), env, context());
     expect(response.status).toBe(200);

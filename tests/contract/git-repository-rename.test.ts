@@ -9,7 +9,7 @@ const row = { id, ownerId: "owner", name: "Project", deletedAt: null, createdAt:
 const update = vi.fn();
 const db = { gitRepository: { update } } as unknown as PrismaClient;
 const env: GitEnvironment = {
-  BEUTL_GIT_ENABLED: "true", BEUTL_GIT_TOKEN_SECRET: "git-test-secret-at-least-thirty-two-characters",
+  BEUTL_GIT_ENABLED: "true",
   BEUTL_S3_ENDPOINT: "https://s3.example", BEUTL_S3_REGION: "test",
   BEUTL_S3_BUCKET: "test", BEUTL_S3_ACCESS_KEY_ID: "test", BEUTL_S3_SECRET_ACCESS_KEY: "test",
   BEUTL_GIT_REPOSITORIES: { idFromName: (name) => name, get: () => ({ fetch: async () => new Response(null, { status: 204 }) }) },
