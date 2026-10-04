@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   activateBillingOffer,
   findCheckoutBillingOffer,
-  listBillingOfferPriceIds,
   setDbProvider,
   type BillingOfferTerms,
 } from "@beutl/db";
@@ -117,10 +116,6 @@ describe("storage billing offers", () => {
     await activateBillingOffer({ terms: storageTerms("price_100_v2", "100gb", { unitAmount: 600 }) });
     expect((await findCheckoutBillingOffer({ kind: "storage", tier: "100gb" }))?.stripePriceId).toBe("price_100_v2");
     expect((await findCheckoutBillingOffer({ kind: "storage", tier: "200gb" }))?.stripePriceId).toBe("price_200_v1");
-    expect(await listBillingOfferPriceIds({ kind: "storage" })).toEqual(
-      expect.arrayContaining(["price_100_v1", "price_100_v2", "price_200_v1"]),
-    );
-    expect(await listBillingOfferPriceIds({ kind: "storage", tier: "200gb" })).toEqual(["price_200_v1"]);
   });
 
   it("never disables a Pro offer when a storage offer rotates", async () => {

@@ -458,19 +458,19 @@ export type AiCostRequestShape = {
 };
 
 /** A model to price, and who serves it. */
-export type AiPricingModelRef = {
+type AiPricingModelRef = {
   modelId: string;
   provider: string;
   imageOutputTokenProfile?: AiImageOutputTokenProfile;
 };
 
-export type AiCostEstimateEntry = {
+type AiCostEstimateEntry = {
   operation: string;
   model: string;
   estimate: AiCostEstimate;
 };
 
-export type AiCostEstimates = {
+type AiCostEstimates = {
   fetchedAt: Date;
   entries: AiCostEstimateEntry[];
 };
@@ -516,7 +516,7 @@ export async function loadAiCostEstimates({
       pairs
         .filter(({ operation }) => operation === "image.generate" && request === undefined)
         .map((pair) => [
-          `${pair.provider} ${pair.model}`,
+          `${pair.provider}\u0000${pair.model}`,
           { modelId: pair.model, provider: pair.provider },
         ]),
     ).values(),
@@ -561,11 +561,6 @@ export async function loadAiCostEstimates({
   );
 
   return { fetchedAt: now, entries };
-}
-
-// Entries are keyed by the pair, since one operation now has several.
-export function aiCostEstimateKey(operation: string, model: string): string {
-  return `${operation}\u0000${model}`;
 }
 
 // The Gateway's rate card for one model, cached like OpenRouter's: every

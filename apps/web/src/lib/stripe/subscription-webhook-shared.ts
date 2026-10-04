@@ -12,7 +12,7 @@ import {
   type StripeCustomerOwnershipRecord,
 } from "./ownership";
 
-export type VersionedInvoice = Stripe.Invoice & {
+type VersionedInvoice = Stripe.Invoice & {
   subscription?: string | Stripe.Subscription | null;
 };
 
@@ -51,7 +51,7 @@ export function getInvoiceSubscription(
   );
 }
 
-export function subscriptionRank(
+function subscriptionRank(
   subscription: Stripe.Subscription,
   recognizedProOffer: boolean,
 ): [number, number, number] {
@@ -145,12 +145,12 @@ export function isOwnedSubscription(
   );
 }
 
-export type StripeListPage<T> = {
+type StripeListPage<T> = {
   data: T[];
   has_more: boolean;
 };
 
-export async function listAllStripeObjects<T extends { id: string }>(
+async function listAllStripeObjects<T extends { id: string }>(
   resourceName: string,
   listPage: (startingAfter?: string) => Promise<StripeListPage<T>>,
 ): Promise<T[]> {
@@ -179,7 +179,7 @@ export async function listAllStripeObjects<T extends { id: string }>(
   }
 }
 
-export async function listAllInvoicePayments(
+async function listAllInvoicePayments(
   stripe: StripeClient,
   params: Omit<
     Stripe.InvoicePaymentListParams,
@@ -195,7 +195,7 @@ export async function listAllInvoicePayments(
   );
 }
 
-export async function listAllPaymentIntentCharges(
+async function listAllPaymentIntentCharges(
   stripe: StripeClient,
   stripePaymentIntentId: string,
 ): Promise<Stripe.Charge[]> {
@@ -208,7 +208,7 @@ export async function listAllPaymentIntentCharges(
   );
 }
 
-export async function listAllChargeDisputes(
+async function listAllChargeDisputes(
   stripe: StripeClient,
   stripeChargeId: string,
 ): Promise<Stripe.Dispute[]> {
@@ -227,14 +227,14 @@ export function assertMoneyAmount(value: number, name: string): void {
   }
 }
 
-export function addMoneyAmount(total: number, amount: number, name: string): number {
+function addMoneyAmount(total: number, amount: number, name: string): number {
   assertMoneyAmount(amount, name);
   const result = total + amount;
   assertMoneyAmount(result, `aggregate ${name}`);
   return result;
 }
 
-export async function getActivePaymentIntentDisputeAmount({
+async function getActivePaymentIntentDisputeAmount({
   stripe,
   paymentIntent,
   customerId,

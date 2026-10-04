@@ -10,7 +10,7 @@ export const AI_JOB_FAILURE_MESSAGES = {
   providerBilling: "AI provider billing refusal",
 } as const;
 
-export const PUBLIC_AI_JOB_ERROR = "aiProviderError";
+const PUBLIC_AI_JOB_ERROR = "aiProviderError";
 
 /** Log only bounded classifications, never a provider body, prompt, or uploaded media. */
 export function reportAiProviderFailure({

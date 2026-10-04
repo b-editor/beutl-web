@@ -4,7 +4,7 @@ import {
   type PrismaTransaction,
 } from "./transaction";
 
-export const BILLING_REFUND_PROCESSING_STATUSES = [
+const BILLING_REFUND_PROCESSING_STATUSES = [
   "required",
   "refund_pending",
 ] as const;

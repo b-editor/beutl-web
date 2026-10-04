@@ -10,7 +10,7 @@ import {
 } from "./transaction";
 import { scheduleTopUpDuplicateRefundAttempt } from "./topup-duplicate-refund-attempt";
 
-export const TOP_UP_REFUND_PROCESSING_STATUSES = [
+const TOP_UP_REFUND_PROCESSING_STATUSES = [
   "refund_required",
   "refund_pending",
   "refund_failed",
@@ -190,7 +190,7 @@ export async function getOrCreateTopUpCheckoutAttempt({
   }
 }
 
-export type TopUpCheckoutCreationClaim =
+type TopUpCheckoutCreationClaim =
   | { status: "claimed"; attempt: NonNullable<Awaited<ReturnType<typeof findTopUpCheckoutAttempt>>> }
   | { status: "busy" };
 
@@ -502,20 +502,6 @@ export async function findTopUpCheckoutAttemptBySessionId({
   const db = prisma ?? (await getDb());
   return await db.topUpCheckoutAttempt.findUnique({
     where: { stripeCheckoutSessionId },
-    include: { billingOffer: true },
-  });
-}
-
-export async function findTopUpCheckoutAttemptByPaymentIntentId({
-  stripePaymentIntentId,
-  prisma,
-}: {
-  stripePaymentIntentId: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma ?? (await getDb());
-  return await db.topUpCheckoutAttempt.findUnique({
-    where: { stripePaymentIntentId },
     include: { billingOffer: true },
   });
 }

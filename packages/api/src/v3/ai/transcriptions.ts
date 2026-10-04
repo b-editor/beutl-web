@@ -19,7 +19,6 @@ import {
 import {
   AiProviderError,
   aiProviderFailureCode,
-  transcribeAudio,
 } from "../../ai/openrouter";
 import { AI_JOB_FAILURE_MESSAGES, aiJobFailureMessage, publicAiJobError, reportAiProviderFailure } from "../../ai/job-errors";
 import { readAiJsonResult, saveAiJsonResult } from "../../ai/storage";

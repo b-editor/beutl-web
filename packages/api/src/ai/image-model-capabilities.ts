@@ -42,7 +42,7 @@ export type AiImageModelCapabilities = {
   resolution: boolean;
 };
 
-export type UnsupportedImageRequestReason =
+type UnsupportedImageRequestReason =
   | "aspectRatio"
   | "background"
   | "seed"
@@ -293,7 +293,7 @@ async function loadOne(
  * A bare id is read as the provider every registered row carried before the
  * column existed, so a caller with no catalog in hand keeps working.
  */
-export type AiImageModelRef = string | { modelId: string; provider: string };
+type AiImageModelRef = string | { modelId: string; provider: string };
 
 // The Gateway catalog's modalities omit image inputs even for documented
 // editors. The SDK accepting prompt.images is also not a model capability.

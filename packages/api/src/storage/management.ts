@@ -33,8 +33,8 @@ export const storageIdSchema = z
   .regex(/^[^\u0000-\u001f\u007f/]+$/u);
 const nameSchema = z.string().trim().refine(isValidStorageName);
 const parentSchema = storageIdSchema.nullable();
-export const createFolderSchema = z.object({ name: nameSchema, parentId: parentSchema }).strict();
-export const filePatchSchema = z
+const createFolderSchema = z.object({ name: nameSchema, parentId: parentSchema }).strict();
+const filePatchSchema = z
   .object({
     name: nameSchema.optional(),
     parentId: parentSchema.optional(),
@@ -42,7 +42,7 @@ export const filePatchSchema = z
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0);
-export const folderPatchSchema = z
+const folderPatchSchema = z
   .object({ name: nameSchema.optional(), parentId: parentSchema.optional() })
   .strict()
   .refine((value) => Object.keys(value).length > 0);
@@ -51,7 +51,7 @@ const idsSchema = z
   .min(1)
   .max(STORAGE_BATCH_SIZE_MAX)
   .refine((ids) => new Set(ids).size === ids.length);
-export const fileBatchSchema = z.discriminatedUnion("operation", [
+const fileBatchSchema = z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("move"), ids: idsSchema, parentId: parentSchema }).strict(),
   z
     .object({

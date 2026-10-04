@@ -3,7 +3,7 @@
 export const DESKTOP_USAGE_RANGES = ["1h", "6h", "24h", "7d"] as const;
 export type DesktopUsageRange = (typeof DESKTOP_USAGE_RANGES)[number];
 export const USAGE_PREFIX = "span.beutl.usage.";
-export const USAGE_EVENTS = [
+const USAGE_EVENTS = [
   "session.started",
   "session.heartbeat",
   "session.ended",
@@ -19,7 +19,7 @@ export const USAGE_EVENTS = [
   "editor.history",
   "effect.used",
 ] as const;
-export type UsageEvent = (typeof USAGE_EVENTS)[number];
+type UsageEvent = (typeof USAGE_EVENTS)[number];
 
 export type UsageRow = {
   event: UsageEvent;
@@ -38,7 +38,7 @@ export type UsageReport = {
   since: Date;
   until: Date;
 };
-export type UsageWindow = { start: number; end: number; step: number };
+type UsageWindow = { start: number; end: number; step: number };
 
 export function parseDesktopUsageRange(value: unknown): DesktopUsageRange {
   return DESKTOP_USAGE_RANGES.includes(value as DesktopUsageRange)

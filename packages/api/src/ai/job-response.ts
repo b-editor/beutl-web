@@ -1,7 +1,7 @@
 import { getContentUrl } from "../content-url";
 import { publicAiJobError } from "./job-errors";
 
-export type PublicAiJobRecord = {
+type PublicAiJobRecord = {
   id: string;
   status: string;
   resultFileId: string | null;

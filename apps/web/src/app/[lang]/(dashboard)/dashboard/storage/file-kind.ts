@@ -47,7 +47,7 @@ const THUMBNAIL_TYPES = new Set([
 
 // There is no thumbnail service; the grid shows the original. Past this size
 // a page of cards would pull more than a video's worth of bytes.
-export const THUMBNAIL_MAX_BYTES = 8 * 1024 * 1024;
+const THUMBNAIL_MAX_BYTES = 8 * 1024 * 1024;
 
 const KIND_ICONS: Record<FileKind, LucideIcon> = {
   image: FileImage,

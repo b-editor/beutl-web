@@ -10,7 +10,7 @@
 // `result` after persistence, or `error` after failure handling has completed.
 // An unexpected failure closes without either, leaving the outcome unknown.
 
-export type SseEmitter = (event: string, data: unknown) => void;
+type SseEmitter = (event: string, data: unknown) => void;
 
 // Some proxies close a connection that says nothing for long enough, and the
 // gap between an image's rough versions can be tens of seconds. A comment line

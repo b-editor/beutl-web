@@ -65,7 +65,7 @@ function maximumVideoJobAgeOf(provider: string): number {
   ).maximumVideoJobMilliseconds();
 }
 
-export type AiJobReconciliationResult = {
+type AiJobReconciliationResult = {
   inspected: number;
   succeeded: number;
   failed: number;

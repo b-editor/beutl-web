@@ -1,4 +1,3 @@
-import { getDb } from "./provider";
 import {
   startRetryableTransaction,
   type PrismaTransaction,
@@ -8,42 +7,6 @@ import { Prisma } from "@prisma/client";
 export const REFRESH_TOKEN_RESPONSE_LOSS_GRACE_MS = 10_000;
 export const REFRESH_TOKEN_FAMILY_MAX_LIFETIME_MS =
   90 * 24 * 60 * 60 * 1000;
-
-export async function createSession({
-  token,
-  expiresAt,
-  userId,
-  prisma,
-}: {
-  token: string;
-  expiresAt: Date;
-  userId: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma ?? await getDb();
-  return await db.session.create({
-    data: {
-      token,
-      expiresAt,
-      userId,
-    },
-  });
-}
-
-export async function deleteSessionsByToken({
-  token,
-  prisma,
-}: {
-  token: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma ?? await getDb();
-  return await db.session.deleteMany({
-    where: {
-      token,
-    },
-  });
-}
 
 export async function createNativeRefreshToken({
   token,
@@ -112,7 +75,7 @@ type RefreshTokenFamily = {
   createdAt: Date;
 };
 
-export type RotateNativeRefreshTokenResult = {
+type RotateNativeRefreshTokenResult = {
   userId: string;
   refreshToken: string;
   refreshTokenExpiresAt: Date;
@@ -121,7 +84,7 @@ export type RotateNativeRefreshTokenResult = {
 // This capability must come from a successfully decrypted native refresh
 // request. General session callers must omit it so browser sessions cannot be
 // migrated into the native refresh-token store.
-export type LegacyNativeSessionAdoption = {
+type LegacyNativeSessionAdoption = {
   familyId: string;
 };
 

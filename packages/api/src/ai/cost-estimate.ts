@@ -30,7 +30,7 @@ export type AiCostUnknownReason =
   | "price_not_published"
   | "zero_price_reported";
 
-export type AiCostAssumption =
+type AiCostAssumption =
   | { kind: "imageOutputTokens"; value: number }
   | { kind: "imageInputTokens"; value: number }
   | { kind: "imageMegapixels"; value: number }
@@ -54,7 +54,7 @@ export type AiCostEstimate =
 
 // gpt-image-1 bills its output as tokens; 1024x1024 at medium quality is 1,056
 // of them, which reproduces OpenAI's published $0.042 per image.
-export const ASSUMED_IMAGE_OUTPUT_TOKENS = 1056;
+const ASSUMED_IMAGE_OUTPUT_TOKENS = 1056;
 // Keep the existing medium-quality assumption, but do not reuse the square
 // count for portrait/landscape requests. Source and model-specific caveats:
 // docs/ai-actual-cost-billing.md#image-token-estimates.
@@ -90,16 +90,16 @@ function imageOutputTokens(profile: AiImageOutputTokenProfile, aspectRatio: stri
     : Math.max(...Object.values(tokens));
 }
 
-export const ASSUMED_IMAGE_INPUT_TOKENS = 1056;
+const ASSUMED_IMAGE_INPUT_TOKENS = 1056;
 // 1024 x 1024 expressed in megapixels, for models that bill by area.
-export const ASSUMED_IMAGE_MEGAPIXELS = (1024 * 1024) / 1_000_000;
-export const TRANSCRIPTION_SECONDS_PER_UNIT = 60;
-export const TRANSLATION_CHARACTERS_PER_UNIT = 1000;
+const ASSUMED_IMAGE_MEGAPIXELS = (1024 * 1024) / 1_000_000;
+const TRANSCRIPTION_SECONDS_PER_UNIT = 60;
+const TRANSLATION_CHARACTERS_PER_UNIT = 1000;
 // A CJK character is roughly one token; Latin text runs about four characters
 // per token. The gap is wide enough that averaging would be wrong for both, so
 // it is carried as the range instead.
-export const TRANSLATION_TOKENS_PER_CHARACTER = { min: 0.25, max: 1 } as const;
-export const TRANSLATION_OUTPUT_RATIO = 1;
+const TRANSLATION_TOKENS_PER_CHARACTER = { min: 0.25, max: 1 } as const;
+const TRANSLATION_OUTPUT_RATIO = 1;
 
 // Speech-to-text prices come back as a bare number whose unit is not in the
 // response. The same model is $0.00000333 per second from one provider and
@@ -108,7 +108,7 @@ export const TRANSLATION_OUTPUT_RATIO = 1;
 // Only models whose unit was confirmed against the provider's published price
 // belong here. Anything absent is reported as unknown rather than estimated
 // with a guessed unit — a wrong unit here is off by 60x and would be believed.
-export const TRANSCRIPTION_PRICE_UNITS: Record<string, "second" | "minute"> = {
+const TRANSCRIPTION_PRICE_UNITS: Record<string, "second" | "minute"> = {
   // DeepInfra publishes $0.0002 per minute, matching $0.00000333 per second.
   "openai/whisper-large-v3-turbo": "second",
 };

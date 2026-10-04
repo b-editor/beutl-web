@@ -1,6 +1,6 @@
 import { runAiRequest, type AiRequestOutcome } from "./ai-request";
 
-export type AiImageEditRequestOutcome =
+type AiImageEditRequestOutcome =
   | {
       ok: true;
       jobId: string;

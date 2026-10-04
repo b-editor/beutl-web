@@ -29,31 +29,31 @@ const CONSUMPTION_KINDS = [
 // a positive one. Summing both yields what was actually paid for and kept.
 const PURCHASE_KINDS = ["purchase", "purchase_reversal"] as const;
 
-export type AiJobStatusCount = {
+type AiJobStatusCount = {
   status: string;
   jobCount: number;
 };
 
-export type AiJobKindUsage = {
+type AiJobKindUsage = {
   kind: string;
   jobCount: number;
   reservedUnits: number;
 };
 
-export type AiUsageTotals = {
+type AiUsageTotals = {
   consumedUnits: number;
   purchasedCredits: number;
   adminUsageAdjustment: number;
 };
 
-export type AiBalanceTotals = {
+type AiBalanceTotals = {
   accountCount: number;
   monthlyUsageUsed: number;
   purchasedCredits: number;
   purchasedCreditDebt: number;
 };
 
-export type AiTopUser = {
+type AiTopUser = {
   userId: string;
   jobCount: number;
   reservedUnits: number;
@@ -323,7 +323,7 @@ export async function getTopAiUsers({
 
 // The plan id is a parameter because the catalog that names it lives in
 // @beutl/api, which depends on this package.
-export type ActiveSubscriptionCounts = {
+type ActiveSubscriptionCounts = {
   total: number;
   // ティアごとの内訳。ティアの無いプランでは空。
   byTier: Record<string, number>;
@@ -473,7 +473,7 @@ export async function findCreditAccount({
   return account ? decimalNumbers(account) : null;
 }
 
-export type CreditAccountUsageSnapshot = {
+type CreditAccountUsageSnapshot = {
   monthlyUsageUsed: number;
   purchasedCredits: number;
   purchasedCreditDebt: number;

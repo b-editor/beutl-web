@@ -20,7 +20,7 @@ import {
 
 export const TOP_USER_LIMIT = 10;
 
-export type AiUsageReportUser = {
+type AiUsageReportUser = {
   userId: string;
   name: string | null;
   email: string | null;

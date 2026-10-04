@@ -17,7 +17,7 @@ export class InvalidGeneratedImageError extends Error {
   }
 }
 
-export type ImageMetadata = {
+type ImageMetadata = {
   mimeType: typeof GENERATED_IMAGE_MIME_TYPE;
   width: number;
   height: number;

@@ -8,11 +8,11 @@ import { isApiErrorCode, type ApiErrorCode } from "@beutl/core";
 // ordinary JSON refusal — a request the API will not serve, decided before any
 // work starts — or a stream that ends in the answer.
 
-export type AiStreamOutcome<TResult> =
+type AiStreamOutcome<TResult> =
   | { ok: true; result: TResult }
   | { ok: false; errorCode: string };
 
-export type AiStreamHandlers = {
+type AiStreamHandlers = {
   /** Called for every event before the closing one. */
   onEvent: (event: string, data: unknown) => void;
 };

@@ -22,7 +22,7 @@ type VersionedSubscription = Stripe.Subscription & {
   current_period_end?: number | null;
 };
 
-export type BillingOfferRecord = BillingOfferTerms & {
+type BillingOfferRecord = BillingOfferTerms & {
   id: string;
   checkoutEnabled: boolean;
 };

@@ -171,9 +171,9 @@ export function parseGlossary(text: string): Record<string, string> {
   return entries;
 }
 
-export type SubtitleSourceFormat = "json" | "srt" | "text";
+type SubtitleSourceFormat = "json" | "srt" | "text";
 
-export type SubtitleParseResult =
+type SubtitleParseResult =
   | {
       ok: true;
       format: SubtitleSourceFormat;

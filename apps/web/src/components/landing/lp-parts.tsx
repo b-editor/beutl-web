@@ -5,7 +5,7 @@ export const LP_WRAP = "mx-auto w-full max-w-[1180px] px-[clamp(20px,5vw,56px)]"
 
 export const LP_SECTION = "border-t border-lp-border py-[clamp(40px,6vw,72px)]";
 
-export const LP_MOCK_PANEL =
+const LP_MOCK_PANEL =
   "overflow-hidden rounded-lg border border-lp-border bg-lp-bg2 p-4 sm:p-5";
 
 const LP_BUTTON =
@@ -41,7 +41,7 @@ const PHRASE_SPLIT = new RegExp(`([${PHRASE_BOUNDARY_CHARS}|])`);
  * Body copy gets none of this and is left to the browser's per-character CJK
  * breaking.
  */
-export function splitPhrases(text: string): string[] {
+function splitPhrases(text: string): string[] {
   const phrases: string[] = [];
   let current = "";
   const flush = () => {
@@ -120,7 +120,7 @@ export function Headline({
   );
 }
 
-export function BodyText({
+function BodyText({
   children,
   className,
 }: {

@@ -19,12 +19,12 @@ export type PackagePaymentReference = {
   packageId: string;
 };
 
-export type PackagePaymentBilling = {
+type PackagePaymentBilling = {
   amount: number;
   currency: string;
 };
 
-export type PackagePaymentStateEvent = {
+type PackagePaymentStateEvent = {
   id: string;
   createdAt: Date;
   rank: number;

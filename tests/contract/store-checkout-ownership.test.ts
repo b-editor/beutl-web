@@ -4,7 +4,6 @@ import {
   classifyPackageCheckoutCompletion,
   isOwnedPackageCheckoutSession,
   isOwnedPackagePaymentIntent,
-  isDurablyAssociatedPackageCheckoutSession,
   matchesPersistedPackageCheckoutSession,
   PACKAGE_CHECKOUT_SESSION_EXACT_EXPANDS,
   packageCheckoutFingerprintInput,
@@ -221,10 +220,6 @@ describe("store checkout ownership", () => {
       success_url: "https://example.test/en/store/pkg/checkout/complete",
     };
     expect(isOwnedPackageCheckoutSession(legacy, EXPECTED)).toBe(true);
-    expect(isDurablyAssociatedPackageCheckoutSession(legacy, "attempt-1")).toBe(false);
-    expect(isDurablyAssociatedPackageCheckoutSession({
-      metadata: { ...legacy.metadata, packageCheckoutAttemptId: "attempt-1" },
-    }, "attempt-1")).toBe(true);
   });
 
   it("accepts an exact bound pre-token Session for reuse", () => {
@@ -313,10 +308,5 @@ describe("store checkout ownership", () => {
     expect(classifyPackageCheckoutCompletion({ checkoutSession: { status: "complete" }, paymentIntent: { status: "succeeded" }, paymentRecord: null })).toBe("complete-pending");
     expect(classifyPackageCheckoutCompletion({ checkoutSession: { status: "complete" }, paymentIntent: { status: "succeeded" }, paymentRecord: { revokedAt: new Date() } })).toBe("rotate-terminal");
     expect(classifyPackageCheckoutCompletion({ checkoutSession: { status: "expired" }, paymentIntent: null, paymentRecord: null })).toBe("rotate-terminal");
-  });
-
-  it("does not turn an unbound legacy ambiguity into a durable binding", () => {
-    const legacy = { metadata: packagePaymentIntentMetadata("user-1", "package-1") } as never;
-    expect(isDurablyAssociatedPackageCheckoutSession(legacy, "attempt-1")).toBe(false);
   });
 });

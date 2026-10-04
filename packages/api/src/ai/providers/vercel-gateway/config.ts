@@ -7,9 +7,9 @@
 import { createGateway, type GatewayProvider } from "@ai-sdk/gateway";
 import { AiProviderError } from "../errors";
 
-export const DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS = 120_000;
+const DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS = 120_000;
 
-export function getGatewayApiKey(): string {
+function getGatewayApiKey(): string {
   const key = process.env.VERCEL_AI_GATEWAY_API_KEY;
   if (!key) {
     throw new AiProviderError("VERCEL_AI_GATEWAY_API_KEY is not set");

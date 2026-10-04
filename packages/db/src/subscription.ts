@@ -121,45 +121,6 @@ export async function listSubscriptionsByUserId({
   return await db.subscription.findMany({ where: { userId } });
 }
 
-export async function findSubscriptionByStripeSubscriptionId({
-  stripeSubscriptionId,
-  prisma,
-}: {
-  stripeSubscriptionId: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma ?? (await getDb());
-  return await db.subscription.findUnique({ where: { stripeSubscriptionId } });
-}
-
-export async function updateSubscriptionStatus({
-  userId,
-  planId,
-  status,
-  currentPeriodStart,
-  currentPeriodEnd,
-  prisma,
-}: {
-  userId: string;
-  planId: string;
-  status: string;
-  currentPeriodStart?: Date | null;
-  currentPeriodEnd?: Date | null;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma ?? await getDb();
-  return await db.subscription.update({
-    where: {
-      userId_planId: { userId, planId },
-    },
-    data: {
-      status,
-      currentPeriodStart,
-      currentPeriodEnd,
-    },
-  });
-}
-
 // Persist a Stripe subscription observation monotonically. Event creation time
 // is the primary watermark. Stripe timestamps have one-second precision, so
 // equal-second reversible states use the time at which the canonical Stripe
@@ -293,7 +254,7 @@ export async function reconcileSubscriptionObservation(
   throw new Error("Could not reconcile the Stripe subscription observation");
 }
 
-export type SubscriptionEntitlementHoldKind = "refund" | "dispute";
+type SubscriptionEntitlementHoldKind = "refund" | "dispute";
 
 const TERMINAL_HOLD_STATUSES = {
   refund: new Set(["succeeded", "failed", "canceled"]),

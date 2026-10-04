@@ -178,7 +178,7 @@ type TopUpInterventionIdentity = {
   prisma?: PrismaTransaction;
 };
 
-export type TopUpOperatorEvidence = {
+type TopUpOperatorEvidence = {
   operatorUserId: string;
   operatorReason: string;
   operatorEvidence: string;
@@ -516,7 +516,7 @@ export async function resumeSettledTopUpCheckoutInterventions({
   return resumed;
 }
 
-export type TopUpCheckoutFinalization =
+type TopUpCheckoutFinalization =
   | { outcome: "bind"; sessionId: string; expiresAt: Date }
   | {
       outcome: "fulfill";

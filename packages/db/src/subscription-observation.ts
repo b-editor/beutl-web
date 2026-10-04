@@ -2,7 +2,7 @@
 // subscription.ts にあり、ここには比較と順位付けだけを置く。
 export const MAX_OBSERVATION_CAS_ATTEMPTS = 8;
 
-export const IRREVERSIBLE_SUBSCRIPTION_STATUSES = new Set([
+const IRREVERSIBLE_SUBSCRIPTION_STATUSES = new Set([
   "canceled",
   "incomplete_expired",
 ]);
@@ -32,7 +32,7 @@ export function assertValidDate(value: Date, name: string): void {
   }
 }
 
-export function rankTimestamp(value: Date | null): string {
+function rankTimestamp(value: Date | null): string {
   if (value === null) {
     return "0000000000000000";
   }

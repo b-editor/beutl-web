@@ -32,12 +32,12 @@ export class CreditAdjustmentRejectedError extends Error {
   }
 }
 
-export type UsagePeriod = {
+type UsagePeriod = {
   start: Date | null;
   end: Date | null;
 };
 
-export type StripeCreditReversalKind = "refund" | "dispute";
+type StripeCreditReversalKind = "refund" | "dispute";
 
 export type StripePaymentDetails = {
   amount: number;
@@ -58,9 +58,9 @@ type StripeCreditReversalInput = {
 };
 
 const PURCHASE_REVERSAL_TRANSACTION_KIND = "purchase_reversal";
-export const ADMIN_CREDIT_ADJUSTMENT_KIND = "admin_credit_adjustment";
-export const ADMIN_USAGE_ADJUSTMENT_KIND = "admin_usage_adjustment";
-export const AI_USAGE_SETTLEMENT_KIND = "usage_settlement";
+const ADMIN_CREDIT_ADJUSTMENT_KIND = "admin_credit_adjustment";
+const ADMIN_USAGE_ADJUSTMENT_KIND = "admin_usage_adjustment";
+const AI_USAGE_SETTLEMENT_KIND = "usage_settlement";
 export const AI_USAGE_ESTIMATE_PENDING_KIND = "usage_estimate_pending";
 export const AI_USAGE_ESTIMATE_FINAL_KIND = "usage_estimate_final";
 export const AI_USAGE_ACTUAL_CORRECTION_KIND = "usage_actual_correction";

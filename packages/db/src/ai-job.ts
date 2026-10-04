@@ -578,7 +578,7 @@ export async function markAiJobSucceeded({
   return result.count === 1;
 }
 
-export type AiOutputFileInput = {
+type AiOutputFileInput = {
   objectKey: string;
   name: string;
   size: number;
@@ -1106,7 +1106,7 @@ export async function makeAiStorageCleanupDue({
 // act on the same object; an expired lease remains eligible for retry.
 export const AI_STORAGE_CLEANUP_LEASE_MILLISECONDS = 5 * 60 * 1000;
 
-export type AiStorageCleanupClaim = {
+type AiStorageCleanupClaim = {
   objectKey: string;
   aiJobId: string | null;
   leaseToken: string;

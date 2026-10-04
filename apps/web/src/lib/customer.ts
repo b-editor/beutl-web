@@ -38,13 +38,13 @@ import type Stripe from "stripe";
 
 type StripeClient = ReturnType<typeof createStripe>;
 
-export type CustomerEmailSyncResult =
+type CustomerEmailSyncResult =
   | { status: "not-linked" }
   | { status: "synced"; customerId: string }
   | { status: "customer-deleted"; customerId: string }
   | { status: "owner-mismatch"; customerId: string };
 
-export type CustomerClosureResult =
+type CustomerClosureResult =
   | { status: "not-linked" }
   | { status: "already-closed"; customerId: string }
   | { status: "closed"; customerId: string }

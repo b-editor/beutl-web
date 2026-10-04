@@ -11,8 +11,8 @@ import {
 export const ADMIN_AI_JOB_BILLING_FILTERS = [
   "all", "actual", "estimated", "pending", "legacy", "unknown", "not_settled",
 ] as const;
-export type AdminAiJobBillingFilter = typeof ADMIN_AI_JOB_BILLING_FILTERS[number];
-export type AdminAiJobBillingState = Exclude<AdminAiJobBillingFilter, "all">;
+type AdminAiJobBillingFilter = typeof ADMIN_AI_JOB_BILLING_FILTERS[number];
+type AdminAiJobBillingState = Exclude<AdminAiJobBillingFilter, "all">;
 
 const ESTIMATE_KINDS = [
   AI_USAGE_ESTIMATE_PENDING_KIND,

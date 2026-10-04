@@ -9,12 +9,9 @@ import {
   findFileForApi,
   findFileForContentAccess,
   getCreditAccount,
-  retrieveFilesByIdsAndUserId,
-  retrieveStorageFilesByUserId,
   prepareAiJobDeletionByUserId,
   setDbProvider,
   StorageCleanupBusyError,
-  updateFileVisibility,
   upsertSubscription,
 } from "@beutl/db";
 import {
@@ -552,18 +549,6 @@ describe("v3 AI job history contract", () => {
     expect(await findFileForContentAccess({ id: file.id })).toMatchObject({
       visibility: "PRIVATE",
     });
-    expect(
-      await retrieveStorageFilesByUserId({ userId: USER_ID }),
-    ).toEqual([]);
-    expect(
-      await retrieveFilesByIdsAndUserId({
-        ids: [file.id],
-        userId: USER_ID,
-      }),
-    ).toEqual([]);
-    await expect(
-      updateFileVisibility({ fileId: file.id, visibility: "PUBLIC" }),
-    ).rejects.toThrow("owned by an AI job");
     await expect(deleteFileWithStorageCleanup({ fileId: file.id })).rejects.toThrow();
     expect(state.files.has(file.id)).toBe(true);
 

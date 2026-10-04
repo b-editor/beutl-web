@@ -1,5 +1,4 @@
 import {
-  AI_MAX_VIDEO_INPUT_AUDIO_REFERENCES,
   AI_MAX_VIDEO_INPUT_REFERENCES,
   AI_MAX_VIDEO_INPUT_VIDEO_REFERENCES,
   AI_VIDEO_ASPECT_RATIOS,
@@ -9,7 +8,6 @@ import {
   MAX_AI_SOURCE_VIDEO_UPLOAD_BYTES,
   MAX_AI_VIDEO_DURATION_SECONDS,
   MAX_AI_VIDEO_FRAME_UPLOAD_BYTES,
-  MAX_AI_VIDEO_INPUT_AUDIO_BYTES,
   MAX_AI_VIDEO_INPUT_VIDEOS_TOTAL_BYTES,
   type AiVideoAspectRatio,
   type AiVideoResolution,
@@ -89,7 +87,7 @@ export type AiVideoModelCapabilities = {
   maxTotalReferences: number | null;
 };
 
-export type UnsupportedVideoRequestReason =
+type UnsupportedVideoRequestReason =
   | "resolution"
   | "duration"
   | "aspectRatio"

@@ -7,7 +7,7 @@ import { INTERNAL_REQUEST_HEADERS } from "./internal-request";
 // platform stops a request body at 100 MB. The pieces are put together in the
 // bucket, so what the browser holds at any moment is one part, not the file.
 
-export type UploadOutcome =
+type UploadOutcome =
   | { ok: true; file: { id: string; name: string; size: number } }
   | {
       ok: false;
@@ -24,10 +24,10 @@ export type PendingStorageUploadCompletion = Readonly<{
   ownerId: string;
 }>;
 
-export const PENDING_STORAGE_UPLOADS_KEY =
+const PENDING_STORAGE_UPLOADS_KEY =
   "beutl.storage-upload-completions.v1";
 
-export type StorageUploadLock = { current: boolean };
+type StorageUploadLock = { current: boolean };
 
 export function tryAcquireStorageUploadLock(lock: StorageUploadLock): boolean {
   if (lock.current) return false;
@@ -500,6 +500,3 @@ async function errorCodeOf(response: Response): Promise<string> {
   }
 }
 
-export function isTerminalStorageUploadError(errorCode: string): boolean {
-  return TERMINAL_COMPLETION_ERRORS.has(errorCode);
-}
