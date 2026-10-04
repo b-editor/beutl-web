@@ -2,7 +2,7 @@ import type { GitObjectBucket } from "./git-object-store";
 import type { GitStorageAccounting } from "./accounting";
 import type { Sha256Checkpoint } from "./checkpoint-sha256";
 import { readBodyAtMost } from "./git-http";
-import { gitTokenSecret, issueUploadToken, type GitScope } from "./tokens";
+import type { GitScope } from "./tokens";
 
 export const MAX_LFS_OBJECT_BYTES = 20 * 1024 ** 3;
 export const MIN_TUS_PART_BYTES = 5 * 1024 ** 2;
@@ -53,8 +53,7 @@ export async function cleanupLfs(
 }
 
 export async function handleLfsBatch(
-  request: Request, bucket: GitObjectBucket, storage: GitDurableStorage,
-  env: { BEUTL_GIT_TOKEN_SECRET?: string }, repoId: string, scope: GitScope,
+  request: Request, bucket: GitObjectBucket, storage: GitDurableStorage, repoId: string, scope: GitScope,
   accounting?: GitStorageAccounting,
 ): Promise<Response> {
   let input: any;
@@ -105,9 +104,9 @@ export async function handleLfsBatch(
       await storage.put(`lfs:${oid}`, record);
       await scheduleGitMaintenance(storage, expiresAt + 1000);
     }
-    const token = await issueUploadToken(gitTokenSecret(env), ownerId, repoId, oid, record.expiresAt);
+    // The client's own repository credential authorizes the transfer.
     objects.push({ oid, size, authenticated: true, actions: { upload: {
-      href: `${base}/${oid}/tus`, header: { Authorization: `Bearer ${token}` },
+      href: `${base}/${oid}/tus`, header: { Authorization: request.headers.get("authorization") },
       expires_at: new Date(record.expiresAt).toISOString(),
     } } });
   }

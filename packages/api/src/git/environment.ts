@@ -9,7 +9,6 @@ interface GitRepositoryNamespace {
 /** Worker bindings used by Hosted Git. Storage shares the File/AI BEUTL_S3_* settings. */
 export interface GitEnvironment extends GitS3Environment {
   BEUTL_GIT_ENABLED?: string;
-  BEUTL_GIT_TOKEN_SECRET?: string;
   BEUTL_GIT_REPOSITORIES?: GitRepositoryNamespace;
   PUBLIC_ORIGIN?: string;
 }
@@ -27,7 +26,7 @@ export function gitStorageConfigured(env: GitEnvironment | undefined): boolean {
 
 export function gitAvailability(env: GitEnvironment | undefined): "disabled" | "unconfigured" | "ready" {
   if (env?.BEUTL_GIT_ENABLED !== "true") return "disabled";
-  return gitStorageConfigured(env) && env.BEUTL_GIT_TOKEN_SECRET ? "ready" : "unconfigured";
+  return gitStorageConfigured(env) ? "ready" : "unconfigured";
 }
 
 export function gitPublicOrigin(env: GitEnvironment, fallbackUrl: string): string {

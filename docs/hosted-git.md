@@ -23,6 +23,8 @@ Apply `20261003000000_add_hosted_git` through the existing CockroachDB migration
 procedure before enabling the API. Web (including its APIs) and admin must use that schema
 because their account storage queries include Git usage. The migration adds
 new tables and a storage admission counter; it does not import old repositories.
+Apply `20261004000000_add_git_access_tokens` the same way before deploying the
+access-token release; Git and LFS requests authenticate against its table.
 
 Configure the Web Worker (`apps/web/wrangler.jsonc`) with a private B2 bucket and these values:
 
@@ -36,7 +38,6 @@ Configure the Web Worker (`apps/web/wrangler.jsonc`) with a private B2 bucket an
 | `BEUTL_S3_ACCESS_KEY_ID` | Bucket-scoped application key ID (secret) |
 | `BEUTL_S3_SECRET_ACCESS_KEY` | Application key (secret) |
 | `BEUTL_S3_SESSION_TOKEN` | Session token for temporary credentials, when required (optional secret) |
-| `BEUTL_GIT_TOKEN_SECRET` | Independent random signing secret, at least 32 characters |
 
 The key needs object read, write, list, version deletion and multipart operations
 for `git/` and `git-lfs/`. Keep credentials in Worker secrets and ignored local
@@ -62,15 +63,32 @@ All Hosted Git endpoints are Hono routes in the shared `v3` API, served by the
 Web Worker entry and by the Next.js `/api/v3` route alike:
 
 - `/api/v3/repos` lists and creates repositories; `/api/v3/repos/:id` reads,
-  renames and deletes one; `POST /api/v3/repos/:id/token` issues a one-hour Git
-  token with `read` or `write` scope. These use the desktop API JWT.
+  renames and deletes one; `/api/v3/repos/:id/tokens` lists, creates
+  (`{ name, scope }`) and, with `/:tokenId`, revokes access tokens. These use
+  the desktop API JWT.
 - `/api/v3/git/:id.git/` serves Git smart HTTP (`info/refs`, `git-upload-pack`,
   `git-receive-pack`) and Git LFS (`info/lfs/objects/batch`, object `download`
-  and `tus` uploads). These use the repository-scoped Git token, or the
-  OID-scoped upload token returned by an LFS upload batch.
+  and `tus` uploads). These use a repository access token.
 
 The Web dashboard calls the same repository functions directly with the
 signed-in account, without an API token.
+
+## Access tokens
+
+Each repository can have up to 50 access tokens with `read` or `write` scope.
+Tokens do not expire. Revoking a token, deleting its repository, or the
+repository leaving the account that created the token stops it working. Only a
+SHA-256 of each token is stored; the dashboard shows the secret once.
+
+Git and Git LFS take the token from the remote URL as Basic credentials; the
+user name is ignored:
+
+```sh
+git clone https://git:TOKEN@beutl.beditor.net/api/v3/git/REPOSITORY_ID.git
+```
+
+API clients may send `Authorization: Bearer TOKEN` instead. Last use is
+recorded at most once an hour.
 
 ## Transfers and limits
 
@@ -90,7 +108,8 @@ requests must contain 5–32 MiB; the desktop sends 32 MiB parts. A final part c
 be smaller, including an empty object. This deliberately avoids persisting byte
 tails in Durable Objects. Basic signed PUT and a second multipart protocol are
 not offered. HEAD recovers the accepted offset after interruption or a lost
-response. Upload reservations and OID-scoped tokens expire after 24 hours.
+response. Upload reservations expire after 24 hours; the client authenticates
+each tus request with its repository access token.
 
 An ordinary Worker streams each part into a B2 multipart upload. The repository
 Durable Object serializes metadata, reservations, offsets and receipts. It never

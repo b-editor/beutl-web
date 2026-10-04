@@ -1,7 +1,6 @@
-import { GIT_REPOSITORY_LIMIT, type GitRepositorySummary, type GitRepositoryToken } from "@beutl/core";
+import { GIT_REPOSITORY_LIMIT, type GitRepositorySummary } from "@beutl/core";
 import { createGitRepositoryForOwner, getDb } from "@beutl/db";
 import { gitRepositoryObject, type GitEnvironment } from "./environment";
-import { gitTokenSecret, issueGitToken, type GitScope } from "./tokens";
 
 // Repository management shared by the public v3 API and the Web dashboard.
 // Every query is scoped to the caller's account; another account's repository
@@ -72,9 +71,4 @@ export async function deleteGitRepository(env: GitEnvironment, ownerId: string, 
     console.error("Git repository cleanup deferred", { repoId: id, error });
   }
   return true;
-}
-
-export async function issueGitRepositoryToken(env: GitEnvironment, ownerId: string, id: string, scope: GitScope): Promise<GitRepositoryToken | null> {
-  if (!await ownsActiveGitRepository(ownerId, id)) return null;
-  return issueGitToken(gitTokenSecret(env), ownerId, id, scope);
 }

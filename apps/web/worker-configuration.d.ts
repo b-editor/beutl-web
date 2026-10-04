@@ -11,7 +11,6 @@ declare namespace Cloudflare {
 		BEUTL_DATABASE_HYPERDRIVE: Hyperdrive;
 		BEUTL_GIT_REPOSITORIES: DurableObjectNamespace;
 		BEUTL_GIT_ENABLED?: string;
-		BEUTL_GIT_TOKEN_SECRET?: string;
 		BEUTL_S3_ENDPOINT?: string;
 		BEUTL_S3_REGION?: string;
 		BEUTL_S3_BUCKET?: string;

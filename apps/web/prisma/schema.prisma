@@ -64,10 +64,30 @@ model GitRepository {
   maintenanceAttemptedAt DateTime @default(now())
   maintenanceFailures Int @default(0)
   owner             User?     @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  accessTokens      GitAccessToken[]
 
   @@index([ownerId, deletedAt])
   @@index([deletedAt, cleanupCompleteAt])
   @@index([maintenanceAttemptedAt])
+}
+
+// Long-lived HTTPS credentials for one repository's Git and LFS traffic. Only
+// the SHA-256 of the secret is stored. Revoking keeps the row so the dashboard
+// can show it; a token also stops working once its repository changes owner.
+model GitAccessToken {
+  id         String    @id @default(uuid())
+  repoId     String
+  ownerId    String
+  name       String
+  scope      String
+  tokenHash  String    @unique
+  hint       String
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  repository GitRepository @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@index([repoId, revokedAt])
 }
 
 // One logical LFS OID is charged once per repository. Pending uploads remain

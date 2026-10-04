@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./error": "./src/error.ts",
+    "./git/access-tokens": "./src/git/access-tokens.ts",
     "./git/environment": "./src/git/environment.ts",
     "./git/repositories": "./src/git/repositories.ts",
     "./ai/entitlements": "./src/ai/entitlements.ts",

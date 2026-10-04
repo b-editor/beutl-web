@@ -14,7 +14,7 @@ import type { GitScope } from "./tokens";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const MEDIA = "/internal/git/media/:oid{[0-9a-f]{64}}";
 const DELETION_GRACE_MS = 2 * 60 * 60 * 1000;
-type Environment = GitS3Environment & GitDatabaseEnvironment & { BEUTL_GIT_TOKEN_SECRET?: string };
+type Environment = GitS3Environment & GitDatabaseEnvironment;
 type Record = LfsRecord & { digest?: string; gcComplete?: boolean };
 type Routes = { Variables: { repoId: string } };
 // Only the Worker reaches this object. It verified the token and ownership, and
@@ -136,7 +136,7 @@ export class GitRepositoryDurableObject {
         await next();
       })
       .post("/api/v3/git/:repo/info/lfs/objects/batch", (c) => handleLfsBatch(c.req.raw, this.objectBucket(), storage,
-        this.env, c.get("repoId"), scopeOf(c) as GitScope, this.accounting))
+        c.get("repoId"), scopeOf(c) as GitScope, this.accounting))
       .get("/api/v3/git/:repo/info/refs", advertisedService, initialized, (c) =>
         advertiseGitRefs(this.objectBucket(), c.get("repoId"), c.req.query("service") as GitService))
       .post("/api/v3/git/:repo/git-upload-pack", initialized, (c) =>
