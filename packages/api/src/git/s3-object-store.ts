@@ -124,23 +124,6 @@ export class S3GitObjectBucket implements GitObjectBucket {
       arrayBuffer: () => response.arrayBuffer() };
   }
 
-  async getRange(key: string, versionId: string, start: number, length: number) {
-    if (!versionId || !Number.isSafeInteger(start) || start < 0 ||
-        !Number.isSafeInteger(length) || length < 1) throw new Error("Invalid versioned S3 range");
-    const response = await this.send("GET", this.url(key, { versionId }), undefined,
-      { Range: `bytes=${start}-${start + length - 1}` });
-    const range = response.headers.get("content-range");
-    const match = /^bytes (\d+)-(\d+)\/(\d+)$/u.exec(range ?? "");
-    const returnedVersion = response.headers.get("x-amz-version-id");
-    if (response.status !== 206 || !match || Number(match[1]) !== start ||
-        Number(match[2]) !== start + length - 1 || !validSize(match[3]) ||
-        response.headers.get("content-length") !== String(length) ||
-        returnedVersion !== versionId || !response.body) {
-      throw new Error("S3 range did not return the pinned object version and exact span");
-    }
-    return { size: Number(match[3]), versionId, body: response.body };
-  }
-
   async head(key: string, versionId?: string, { checksum = false }: { checksum?: boolean } = {}) {
     const response = await this.send("HEAD", this.url(key, versionId ? { versionId } : undefined), undefined,
       checksum ? { "x-amz-checksum-mode": "ENABLED" } : undefined);

@@ -108,6 +108,12 @@ class GitLfsQuotaExceededError extends RangeError {
   constructor() { super("Account storage quota exceeded at LFS completion"); }
 }
 
+/** Moves a pending reservation's expiry while its upload is still making progress. */
+export async function extendGitLfsReservation(repoId: string, oid: string, expiresAt: number): Promise<void> {
+  const db = await getDb();
+  await db.gitLfsStorage.updateMany({ where: { repoId, oid, verified: false }, data: { expiresAt: new Date(expiresAt) } });
+}
+
 export async function releaseGitLfs(repoId: string, oid: string): Promise<void> {
   const db = await getDb();
   // The account commit can succeed before the DO's verified flag is saved.

@@ -6,7 +6,7 @@ import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable
 import { gitRepositoryObject } from "../packages/api/src/git/environment";
 import { appendTusUpload, createTusUpload, downloadLfsObject, readTusUpload, verifyLfsUpload, type LfsObject } from "../packages/api/src/git/media-worker";
 import { basicCredential, gitAccessTokenDelegate, gitAccessTokenFixture } from "./stubs/git-access-tokens";
-import { type GitDurableStorage, type LfsRecord, lfsKey } from "../packages/api/src/git/lfs";
+import { type GitDurableStorage, type LfsRecord, lfsKey, MAX_LFS_OBJECT_BYTES } from "../packages/api/src/git/lfs";
 
 const repoId = "12345678-1234-1234-1234-123456789abc";
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -25,8 +25,8 @@ class Storage implements GitDurableStorage {
 const checksum = (hex: string) => Buffer.from(hex, "hex").toString("base64");
 class Bucket {
   versions = new Map<string, { key: string; bytes: Uint8Array; size: number; checksum?: string }>();
-  parts = new Map<number, Uint8Array>(); reads = 0; uploads = 0; deletes = 0;
-  virtualSize?: number;
+  parts = new Map<number, Uint8Array>(); uploads = 0; deletes = 0; completions = 0;
+  failNextCompletion = false;
   pruned: string[][] = [];
   presigned: { key: string; size: number; sha256: string; expiresIn: number }[] = [];
   async presignUpload(key: string, size: number, sha256: string, expiresIn: number) {
@@ -50,11 +50,13 @@ class Bucket {
       expect(bytes.length).toBe(length); this.uploads++; this.parts.set(partNumber, bytes);
       return { partNumber, etag: `etag-${partNumber}` };
     }, complete: async () => {
+      if (this.failNextCompletion) { this.failNextCompletion = false; throw new Error("B2 completion response lost"); }
+      this.completions++;
       const size = [...this.parts.values()].reduce((n, bytes) => n + bytes.length, 0);
       const bytes = new Uint8Array(size); let offset = 0;
       for (const part of this.parts.values()) { bytes.set(part, offset); offset += part.length; }
-      this.versions.set("version-1", { key, bytes, size: this.virtualSize ?? size });
-      return { size: this.virtualSize ?? size, versionId: "version-1" };
+      this.versions.set("version-1", { key, bytes, size });
+      return { size, versionId: "version-1" };
     }, abort: async () => { this.parts.clear(); } };
   }
   async head(key: string, versionId?: string, options?: { checksum?: boolean }) {
@@ -62,12 +64,7 @@ class Bucket {
     const entry = id ? this.versions.get(id) : undefined;
     return entry ? { size: entry.size, versionId: id, ...(options?.checksum ? { checksumSha256: entry.checksum } : {}) } : null;
   }
-  async getRange(key: string, versionId: string, start: number, length: number) {
-    const entry = this.versions.get(versionId)!;
-    expect(entry.key).toBe(key); this.reads += length;
-    const bytes = entry.size === entry.bytes.length ? entry.bytes.slice(start, start + length) : new Uint8Array(length);
-    return { size: entry.size, versionId, body: new Response(bytes).body! };
-  }
+  async put(key: string, bytes: Uint8Array) { this.versions.set(`put-${this.versions.size + 1}`, { key, bytes, size: bytes.length }); }
   async download(key: string, versionId: string, method: string, range?: string) {
     const entry = this.versions.get(versionId)!; expect(entry.key).toBe(key);
     let start = 0, end = entry.bytes.length - 1, status = 200;
@@ -92,7 +89,8 @@ class Bucket {
 function fixture() {
   const storage = new Storage(), bucket = new Bucket();
   const accounting = { reserveLfs: vi.fn(async () => "reserved"), commitLfs: vi.fn(async () => undefined),
-    releaseLfs: vi.fn(async () => undefined), releaseRepository: vi.fn(async () => undefined) };
+    extendLfs: vi.fn(async () => undefined), releaseLfs: vi.fn(async () => undefined),
+    releaseRepository: vi.fn(async () => undefined) };
   const durable = new GitRepositoryDurableObject({ storage }, {}, bucket as never, accounting as never);
   const bodies: number[] = [];
   const repository = gitRepositoryObject({ BEUTL_GIT_REPOSITORIES: { idFromName: (name) => name, get: () => ({ fetch: async (r: Request) => {
@@ -124,7 +122,7 @@ function fixture() {
       "Tus-Resumable": "1.0.0", ...(bytes ? { "Upload-Offset": String(offset), "Content-Length": String(bytes.length),
         "Content-Type": "application/offset+octet-stream" } : {}),
     }, ...(bytes ? { body: bytes } : {}) });
-    return bytes ? appendTusUpload(request, object(oid), resource) : readTusUpload(request, object(oid), resource);
+    return bytes ? appendTusUpload(request, object(oid), resource) : readTusUpload(object(oid), resource);
   }
   async function batch(body: unknown) {
     const r = await repository.forward(new Request(`https://beutl.test/api/v3/git/${repoId}.git/info/lfs/objects/batch`, {
@@ -170,6 +168,9 @@ describe("Worker media transfers and durable metadata", () => {
     expect((await f.transfer(url, oid, record.resourceId, 1, bytes)).status).toBe(409);
     expect(f.bucket.uploads).toBe(0);
     expect((await f.transfer(url, oid, record.resourceId, 0, new Uint8Array([3, 2, 1]))).status).toBe(422);
+    // The digest is checked before B2 assembles the parts, so nothing was published.
+    expect(f.bucket.completions).toBe(0);
+    expect(f.bucket.parts.size).toBe(0);
     expect(f.accounting.commitLfs).not.toHaveBeenCalled();
     expect(f.accounting.releaseLfs).toHaveBeenCalledOnce();
     expect(await f.storage.get(`lfs:${oid}`)).toBeUndefined();
@@ -183,26 +184,74 @@ describe("Worker media transfers and durable metadata", () => {
     expect((await f.transfer(url, oid, record.resourceId, 0, bytes.slice(0, -1))).status).toBe(409);
     expect((await f.transfer(url, oid, record.resourceId, bytes.length - 1, bytes.slice(-1))).headers.get("upload-verified")).toBe("true");
   });
-  it("resumes a virtual 5 GiB + 1 upload and checkpoints verification without reading its entire prefix", async () => {
-    const f = fixture(), size = 5 * 1024 ** 3 + 1, oid = "a".repeat(64);
-    f.bucket.virtualSize = size;
-    const { url, record } = await f.reserve(oid, size);
-    await f.storage.put(`lfs:${oid}`, { ...record, offset: size - 1, partCount: 160 });
-    const patched = await f.transfer(url, oid, record.resourceId, size - 1, new Uint8Array([0]));
-    expect(patched.headers.get("upload-offset")).toBe(String(size));
-    expect(patched.headers.get("upload-verified")).toBe("false");
-    expect((await f.storage.get<LfsRecord>(`lfs:${oid}`))!.checkpoint!.offset).toBe(32 * 1024 ** 2);
-    await f.transfer(url, oid, record.resourceId, size);
-    expect((await f.storage.get<LfsRecord>(`lfs:${oid}`))!.checkpoint!.offset).toBe(64 * 1024 ** 2);
-    expect(f.bucket.reads).toBe(64 * 1024 ** 2);
-    expect(f.accounting.commitLfs).not.toHaveBeenCalled();
+  it("continues the SHA-256 across PATCH requests and never reads stored bytes back", async () => {
+    const f = fixture(), bytes = Uint8Array.from({ length: 10 * 1024 ** 2 + 77 }, (_, i) => i * 31 % 251), oid = hash(bytes);
+    const { url, record } = await f.reserve(oid, bytes.length);
+    // Part sizes that are not multiples of the SHA-256 block keep a tail in the stored state.
+    const cut = 5 * 1024 ** 2 + 13;
+    const first = await f.transfer(url, oid, record.resourceId, 0, bytes.slice(0, cut));
+    expect(first.headers.get("upload-verified")).toBe("false");
+    const stored = (await f.storage.get<LfsRecord>(`lfs:${oid}`))!;
+    expect(stored.offset).toBe(cut);
+    expect(atob(stored.hash!.tail)).toHaveLength(cut % 64);
+    const last = await f.transfer(url, oid, record.resourceId, cut, bytes.slice(cut));
+    expect(last.status).toBe(204);
+    expect(last.headers.get("upload-verified")).toBe("true");
+    expect(await f.storage.get(`lfs:${oid}`)).toMatchObject({ verified: true, versionId: "version-1", digest: oid });
+    expect(f.bucket.completions).toBe(1);
+    expect(f.accounting.commitLfs).toHaveBeenCalledOnce();
   });
-  it("handles empty files and preserves earlier alarms", async () => {
+  it("publishes after a lost completion response when the client asks for the offset", async () => {
+    const f = fixture(), bytes = new TextEncoder().encode("lost completion"), oid = hash(bytes);
+    const { url, record } = await f.reserve(oid, bytes.length);
+    f.bucket.failNextCompletion = true;
+    await expect(f.transfer(url, oid, record.resourceId, 0, bytes)).rejects.toThrow();
+    expect(await f.storage.get(`lfs:${oid}`)).toMatchObject({ offset: bytes.length, verified: false, digest: oid });
+    const head = await f.transfer(url, oid, record.resourceId, 0);
+    expect(head.headers.get("upload-verified")).toBe("true");
+    expect(f.accounting.commitLfs).toHaveBeenCalledOnce();
+  });
+  it("keeps the reservation of an upload that is still making progress", async () => {
+    const f = fixture(), bytes = Uint8Array.from({ length: 10 * 1024 ** 2 }, (_, i) => i % 199), oid = hash(bytes);
+    const { url, record } = await f.reserve(oid, bytes.length);
+    await f.transfer(url, oid, record.resourceId, 0, bytes.slice(0, 5 * 1024 ** 2));
+    expect(f.accounting.extendLfs).not.toHaveBeenCalled();
+    // Most of the lifetime has passed, as it does for a very large upload.
+    const nearlyExpired = Date.now() + 60 * 60_000;
+    await f.storage.put(`lfs:${oid}`, { ...(await f.storage.get<LfsRecord>(`lfs:${oid}`))!, expiresAt: nearlyExpired });
+    f.accounting.extendLfs.mockRejectedValueOnce(new Error("database unavailable"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const last = await f.transfer(url, oid, record.resourceId, 5 * 1024 ** 2, bytes.slice(5 * 1024 ** 2));
+    error.mockRestore();
+    expect(last.headers.get("upload-verified")).toBe("true");
+    const stored = (await f.storage.get<LfsRecord>(`lfs:${oid}`))!;
+    expect(stored.expiresAt).toBeGreaterThan(nearlyExpired + 22 * 60 * 60_000);
+    expect(f.accounting.extendLfs).toHaveBeenCalledWith(repoId, oid, stored.expiresAt);
+  });
+  it("needs the 10,000th part to finish the upload", async () => {
+    const f = fixture(), size = 10_000 * 5 * 1024 ** 2 + 1, oid = "e".repeat(64);
+    const { url, record } = await f.reserve(oid, size);
+    const offset = size - 5 * 1024 ** 2 - 1;
+    await f.storage.put(`lfs:${oid}`, { ...record, offset, partCount: 9_999 });
+    const short = await f.transfer(url, oid, record.resourceId, offset, new Uint8Array(5 * 1024 ** 2));
+    expect(short.status).toBe(400);
+    expect(await short.text()).toBe("The upload needs larger parts to fit in 10,000");
+    expect(f.bucket.uploads).toBe(0);
+  });
+  it("finishes empty files when they are created and preserves earlier alarms", async () => {
     const f = fixture(), oid = hash(new Uint8Array());
     f.storage.alarm = Date.now() + 1000; const earlier = f.storage.alarm;
     const { url, record } = await f.reserve(oid, 0);
+    expect(record).toMatchObject({ verified: true, versionId: "put-1" });
+    expect(f.accounting.commitLfs).toHaveBeenCalledOnce();
     expect(f.storage.alarm).toBe(earlier);
     expect((await f.transfer(url, oid, record.resourceId, 0)).headers.get("upload-verified")).toBe("true");
+    const other = fixture(), wrong = "f".repeat(64);
+    await other.batch({ operation: "upload", transfers: ["beutl-tus"], objects: [{ oid: wrong, size: 0 }] });
+    const created = await createTusUpload(new Request(`https://beutl.test/api/v3/git/${repoId}.git/info/lfs/objects/${wrong}/tus`, {
+      method: "POST", headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "0" } }), other.object(wrong));
+    expect(created.status).toBe(422);
+    expect(await other.storage.get(`lfs:${wrong}`)).toBeUndefined();
   });
   it("requires a write access token for tus uploads", async () => {
     const oid = "b".repeat(64);
@@ -279,20 +328,25 @@ describe("Stock Git LFS basic transfers", () => {
     await f.storage.put(`lfs:${oid}`, { ...(await f.storage.get<LfsRecord>(`lfs:${oid}`))!, expiresAt: Date.now() - 1 });
     expect((await f.verify(oid, { oid, size: 3 })).status).toBe(410);
   });
-  it("leaves objects over 5 GB to the desktop agent and limits every object to 20 GiB", async () => {
+  it("leaves objects over 5 GB to the desktop agent and limits every object to 10,000 parts of 32 MiB", async () => {
     const f = fixture();
     const objects = [{ oid: "a".repeat(64), size: 5_000_000_000 }, { oid: "b".repeat(64), size: 5_000_000_001 },
-      { oid: "c".repeat(64), size: 20 * 1024 ** 3 + 1 }];
+      { oid: "c".repeat(64), size: MAX_LFS_OBJECT_BYTES + 1 }];
     const basic = await f.batch({ operation: "upload", objects });
     expect(basic.body.objects[0].actions.upload.href).toMatch(/^https:\/\/b2\.test\//u);
     expect(basic.body.objects.slice(1)).toEqual([
       { ...objects[1], error: { code: 422, message: "LFS objects over 5 GB need the Beutl desktop app" } },
-      { ...objects[2], error: { code: 422, message: "LFS objects are limited to 20 GiB" } },
+      { ...objects[2], error: { code: 422, message: "LFS objects are limited to 312.5 GiB" } },
     ]);
     expect(f.accounting.reserveLfs).toHaveBeenCalledOnce();
-    const agent = await fixture().batch({ operation: "upload", transfers: ["basic", "beutl-tus"], objects: [objects[1]] });
+    // Only the account quota bounds a repository's total; two objects may exceed the old 20 GiB cap.
+    const largest = [{ oid: "1".repeat(64), size: MAX_LFS_OBJECT_BYTES }, { oid: "2".repeat(64), size: MAX_LFS_OBJECT_BYTES }];
+    const agent = await fixture().batch({ operation: "upload", transfers: ["basic", "beutl-tus"], objects: largest });
     expect(agent.body.transfer).toBe("beutl-tus");
-    expect(agent.body.objects[0].actions.upload.href).toMatch(/\/tus$/u);
+    for (const [i, entry] of agent.body.objects.entries()) {
+      expect(entry.actions.upload.href).toMatch(/\/tus$/u);
+      expect(entry.actions.verify.href).toMatch(new RegExp(`${largest[i].oid}/verify$`, "u"));
+    }
     // Pushing a commit that references media the desktop already stored needs no transfer.
     await f.storage.put(`lfs:${objects[1].oid}`, { size: objects[1].size, expiresAt: 0, verified: true,
       resourceId: crypto.randomUUID(), versionId: "version-1", offset: objects[1].size, partCount: 1 });

@@ -1,17 +1,15 @@
 import { MAX_GIT_LFS_PART_BYTES } from "@beutl/core";
 import type { GitObjectBucket } from "./git-object-store";
 import type { GitAccess, GitMediaAction, GitRepositoryObject } from "./environment";
-import { CheckpointSha256 } from "./checkpoint-sha256";
 import { lfsKey, MAX_LFS_OBJECT_BYTES, MIN_TUS_PART_BYTES, readJson, type LfsRecord } from "./lfs";
+import { ResumableSha256, type Sha256State } from "./resumable-sha256";
 
 // LFS bodies stream between the client and B2 in the ordinary Worker. The
-// repository object only records reservations, offsets and receipts.
+// repository object only records reservations, offsets, receipts and hash state.
 
 /** One LFS object of a repository whose access the route has already verified. */
 export type LfsObject = { bucket: GitObjectBucket; repository: GitRepositoryObject; access: GitAccess; oid: string };
 
-type Record = LfsRecord & { digest?: string };
-const HASH_STEP_BYTES = 32 * 1024 ** 2;
 const integer = (s: string | null) => s !== null && /^\d+$/u.test(s) && Number.isSafeInteger(Number(s)) ? Number(s) : -1;
 // The route adds Tus-Resumable to every response on tus paths.
 const tus = (status: number, headers: HeadersInit = {}, body?: string) => new Response(body ?? null, {
@@ -21,57 +19,28 @@ const tus = (status: number, headers: HeadersInit = {}, body?: string) => new Re
 function metadata(object: LfsObject, action: "status" | GitMediaAction, body?: unknown): Promise<Response> {
   return object.repository.media(object.access, object.oid, action, body);
 }
-async function recordFrom(response: Response): Promise<Record> {
+async function recordFrom(response: Response): Promise<LfsRecord> {
   if (!response.ok) throw new Error(`Git metadata request returned HTTP ${response.status}`);
-  return response.json() as Promise<Record>;
+  return response.json() as Promise<LfsRecord>;
 }
 
-async function advanceVerification(object: LfsObject, record: Record, signal?: AbortSignal): Promise<Response> {
-  const { bucket, access: { repoId }, oid } = object;
-  const expectedOffset = record.checkpoint?.offset ?? 0;
-  if (record.digest) return metadata(object, "checkpoint", {
-    resourceId: record.resourceId, versionId: record.versionId, expectedOffset, digest: record.digest,
-  });
-  if (!record.versionId) throw new Error("LFS verification requires a pinned version");
-  const hash = new CheckpointSha256(record.checkpoint?.words, expectedOffset);
-  const length = Math.min(HASH_STEP_BYTES, record.size - expectedOffset);
-  if (length) {
-    if (!bucket.getRange) throw new Error("B2 does not support verification ranges");
-    const part = await bucket.getRange(lfsKey(repoId, oid), record.versionId, expectedOffset, length);
-    if (part.size !== record.size || part.versionId !== record.versionId) throw new Error("LFS verification version changed");
-    const reader = part.body.getReader(); let received = 0;
-    try {
-      while (true) {
-        signal?.throwIfAborted();
-        const chunk = await reader.read(); if (chunk.done) break;
-        received += chunk.value.byteLength;
-        if (received > length) throw new Error("B2 verification range is too long");
-        hash.update(chunk.value);
-      }
-      if (received !== length) throw new Error("B2 verification range is incomplete");
-    } catch (error) { await reader.cancel().catch(() => undefined); throw error; }
-    finally { reader.releaseLock(); }
-  }
-  const complete = expectedOffset + length === record.size;
-  return metadata(object, "checkpoint", {
-    resourceId: record.resourceId, versionId: record.versionId, expectedOffset,
-    ...(complete ? { digest: hash.digestHex() } : { checkpoint: {
-      version: 1, oid, size: record.size, versionId: record.versionId, ...hash.snapshot(),
-    } }),
-  });
-}
-
+/**
+ * Streams one PATCH into its B2 part while continuing the object's SHA-256, so
+ * the last part yields the digest without reading the stored bytes back.
+ */
 async function uploadPart(
-  object: LfsObject, record: Record, offset: number, length: number, body: ReadableStream<Uint8Array>,
+  object: LfsObject, record: LfsRecord, offset: number, length: number, body: ReadableStream<Uint8Array>,
 ): Promise<Response> {
   const prepare = await metadata(object, "part", { resourceId: record.resourceId, offset, length });
   if (!prepare.ok) return prepare;
-  const lease = await prepare.json() as { uploadId: string; partNumber: number; leaseId: string };
+  const lease = await prepare.json() as { uploadId: string; partNumber: number; leaseId: string; hash?: Sha256State };
+  const hash = new ResumableSha256(lease.hash, offset);
   let received = 0;
   const bounded = body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
       received += chunk.byteLength;
       if (received > length) throw new Error("tus body exceeds Content-Length");
+      hash.update(chunk);
       controller.enqueue(chunk);
     },
     flush() { if (received !== length) throw new Error("tus body is incomplete"); },
@@ -79,7 +48,8 @@ async function uploadPart(
   try {
     const part = await object.bucket.resumeMultipartUpload(lfsKey(object.access.repoId, object.oid), lease.uploadId)
       .uploadPart(lease.partNumber, bounded, length);
-    return await metadata(object, "accept", { resourceId: record.resourceId, leaseId: lease.leaseId, ...part });
+    return await metadata(object, "accept", { resourceId: record.resourceId, leaseId: lease.leaseId, ...part,
+      ...(offset + length === record.size ? { digest: hash.digestHex() } : { hash: hash.snapshot() }) });
   } catch (error) {
     // The part failure below is what the client must see. A lost cancel only
     // leaves the lease to expire, after which the client can retry the part.
@@ -103,10 +73,10 @@ export async function createTusUpload(request: Request, object: LfsObject): Prom
   const record = await recordFrom(response);
   const url = new URL(request.url);
   return tus(201, { Location: `${url.origin}${url.pathname}/${record.resourceId}`,
-    "Upload-Expires": new Date(record.expiresAt).toUTCString() });
+    ...(record.verified ? {} : { "Upload-Expires": new Date(record.expiresAt).toUTCString() }) });
 }
 
-async function currentUpload(object: LfsObject, resourceId: string): Promise<Record | Response> {
+async function currentUpload(object: LfsObject, resourceId: string): Promise<LfsRecord | Response> {
   const status = await metadata(object, "status");
   if (!status.ok) return tus(status.status);
   const record = await recordFrom(status);
@@ -114,9 +84,9 @@ async function currentUpload(object: LfsObject, resourceId: string): Promise<Rec
 }
 
 /** HEAD reports the accepted offset and also recovers completion after a lost PATCH response. */
-export async function readTusUpload(request: Request, object: LfsObject, resourceId: string): Promise<Response> {
+export async function readTusUpload(object: LfsObject, resourceId: string): Promise<Response> {
   const record = await currentUpload(object, resourceId);
-  return record instanceof Response ? record : finishTusUpload(request, object, record, 200);
+  return record instanceof Response ? record : finishTusUpload(object, record, 200);
 }
 
 export async function appendTusUpload(request: Request, object: LfsObject, resourceId: string): Promise<Response> {
@@ -129,24 +99,15 @@ export async function appendTusUpload(request: Request, object: LfsObject, resou
   if (!request.body || length < 0 || length > MAX_GIT_LFS_PART_BYTES) return tus(400);
   const receipt = await uploadPart(object, record, offset, length, request.body);
   if (!receipt.ok) return tus(receipt.status, {}, await receipt.text());
-  return finishTusUpload(request, object, await recordFrom(receipt), 204);
+  return finishTusUpload(object, await recordFrom(receipt), 204);
 }
 
-async function finishTusUpload(request: Request, object: LfsObject, record: Record, status: number): Promise<Response> {
-  // Empty files need an empty S3 part; HEAD can recover its lost response too.
-  if (record.size === 0 && record.partCount === 0 && !record.verified) {
-    const empty = new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
-    const receipt = await uploadPart(object, record, 0, 0, empty);
-    if (!receipt.ok) return tus(receipt.status);
-    record = await recordFrom(receipt);
-  }
+/** The PATCH that stores the last byte also publishes the object, as tus clients expect. */
+async function finishTusUpload(object: LfsObject, record: LfsRecord, status: number): Promise<Response> {
   if (record.offset === record.size && !record.verified) {
     const completed = await metadata(object, "complete", { resourceId: record.resourceId });
-    if (!completed.ok) return tus(completed.status);
+    if (!completed.ok) return tus(completed.status, {}, await completed.text());
     record = await recordFrom(completed);
-    const verified = await advanceVerification(object, record, request.signal);
-    if (!verified.ok) return tus(verified.status, {}, await verified.text());
-    record = await recordFrom(verified);
   }
   return tus(status, {
     "Upload-Offset": String(record.offset), "Upload-Length": String(record.size),
