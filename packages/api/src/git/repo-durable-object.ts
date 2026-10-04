@@ -8,6 +8,7 @@ import { databaseGitStorageAccounting, withGitDatabase, type GitDatabaseEnvironm
 import { cleanupLfs, handleLfsBatch, json, lfsKey, LFS_TOUCH_PRECISION_MS, MAX_LFS_PARTS, MIN_TUS_PART_BYTES,
   partKey, partPrefix, readJson, scheduleGitMaintenance, UPLOAD_LIFETIME_MS,
   type GitDurableStorage, type LfsPart, type LfsRecord } from "./lfs";
+import { collectUnreachableHistory } from "./history-collection";
 import { referencedLfsOids } from "./lfs-references";
 import { ResumableSha256 } from "./resumable-sha256";
 import type { GitScope } from "./tokens";
@@ -366,6 +367,33 @@ export class GitRepositoryDurableObject {
     return false;
   }
 
+  /**
+   * Removes Git objects that became unreachable, such as a deleted branch's
+   * commits. Reachability changes only with a push. A failed attempt leaves
+   * every reachable object readable, and the next one waits an hour.
+   */
+  private async collectHistory(repoId: string): Promise<void> {
+    const storage = this.state.storage;
+    const pushed = await storage.get<number>("lastPushFinishedAt") ?? 0;
+    if (pushed <= (await storage.get<number>("historyCollectedAt") ?? 0) ||
+        Date.now() < (await storage.get<number>("historyCollectionAt") ?? 0)) return;
+    try {
+      const collected = await collectUnreachableHistory(this.objectBucket(), repoId);
+      if (collected) {
+        console.info("Git history collected", { repoId, ...collected });
+        // Deleted keys keep old B2 versions until the version sweep removes them.
+        await storage.put("gitGcPending", true);
+        await this.accounting?.settleHistory(repoId, await this.gitBytes(repoId));
+      }
+      await storage.put("historyCollectedAt", pushed);
+    } catch (error) {
+      const retryAt = Date.now() + 60 * 60_000;
+      await storage.put("historyCollectionAt", retryAt);
+      await scheduleGitMaintenance(storage, retryAt);
+      console.error("Git history collection failed", { repoId, error });
+    }
+  }
+
   alarm(): Promise<void> {
     return this.enqueue(async () => {
       const storage = this.state.storage;
@@ -403,6 +431,7 @@ export class GitRepositoryDurableObject {
           await storage.put("nextFullSweep", Date.now() + UPLOAD_LIFETIME_MS);
         }
       }
+      await this.collectHistory(repoId);
       try {
         if (await storage.get<boolean>("gitGcPending")) {
           await this.objectBucket().pruneGitVersions?.(`git/repos/${repoId}/`);
