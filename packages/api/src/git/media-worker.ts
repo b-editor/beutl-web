@@ -2,7 +2,7 @@ import { MAX_GIT_LFS_PART_BYTES } from "@beutl/core";
 import type { GitObjectBucket } from "./git-object-store";
 import type { GitAccess, GitMediaAction, GitRepositoryObject } from "./environment";
 import { CheckpointSha256 } from "./checkpoint-sha256";
-import { lfsKey, MAX_LFS_OBJECT_BYTES, MIN_TUS_PART_BYTES, type LfsRecord } from "./lfs";
+import { lfsKey, MAX_LFS_OBJECT_BYTES, MIN_TUS_PART_BYTES, readJson, type LfsRecord } from "./lfs";
 
 // LFS bodies stream between the client and B2 in the ordinary Worker. The
 // repository object only records reservations, offsets and receipts.
@@ -153,6 +153,22 @@ async function finishTusUpload(request: Request, object: LfsObject, record: Reco
     "Upload-Verified": String(record.verified),
     ...(record.verified ? {} : { "Upload-Expires": new Date(record.expiresAt).toUTCString() }),
   });
+}
+
+const lfs = (status: number, message?: string) => new Response(message === undefined ? null : JSON.stringify({ message }), {
+  status, headers: { "Content-Type": "application/vnd.git-lfs+json", "Cache-Control": "no-store" },
+});
+
+/** The basic transfer's verify action, sent after the client PUT the object to B2. */
+export async function verifyLfsUpload(request: Request, object: LfsObject): Promise<Response> {
+  let input: any;
+  try { input = await readJson(request); } catch {
+    // Malformed JSON is the client's protocol error.
+    return lfs(400, "Invalid LFS verify request");
+  }
+  if (input?.oid !== object.oid || !Number.isSafeInteger(input.size)) return lfs(422, "Invalid LFS verify request");
+  const verified = await metadata(object, "verify", { size: input.size });
+  return verified.ok ? lfs(200) : lfs(verified.status, await verified.text());
 }
 
 /** Streams the recorded B2 version for GET and HEAD, with single ranges and If-Range. */

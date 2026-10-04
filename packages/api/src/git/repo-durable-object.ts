@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { createMiddleware } from "hono/factory";
 import { MAX_GIT_LFS_PART_BYTES } from "@beutl/core";
 import { advertiseGitRefs, initializeGitRepository, isGitService, receiveGitPack, uploadGitPack, type GitService } from "./git-http";
-import { S3GitObjectBucket, type GitS3Environment } from "./s3-object-store";
+import { S3GitObjectBucket, sha256Base64, type GitS3Environment } from "./s3-object-store";
 import type { GitObjectBucket } from "./git-object-store";
 import { databaseGitStorageAccounting, withGitDatabase, type GitDatabaseEnvironment, type GitStorageAccounting } from "./accounting";
 import { cleanupLfs, handleLfsBatch, json, lfsKey, MIN_TUS_PART_BYTES,
@@ -130,6 +130,8 @@ export class GitRepositoryDurableObject {
       .post(`${MEDIA}/complete`, scope("write"), media((repoId, oid, record) => this.completeUpload(repoId, oid, record)))
       .post(`${MEDIA}/checkpoint`, scope("write"), media((repoId, oid, record, input) =>
         this.checkpoint(repoId, oid, record, input)))
+      .post(`${MEDIA}/verify`, scope("write"), media((repoId, oid, record, input) =>
+        this.verifyUpload(repoId, oid, record, input), { resource: false }))
       // Git and LFS batch requests keep their public URL so LFS actions link back to it.
       .use("/api/v3/git/:repo/*", active, scope("read", "write"), async (c, next) => {
         if (c.req.param("repo") !== `${c.get("repoId")}.git`) return c.text("Not found", 404);
@@ -278,6 +280,28 @@ export class GitRepositoryDurableObject {
       if (parts.size) await storage.delete([...parts.keys()]);
       await scheduleGitMaintenance(storage, Date.now() + 60_000);
     }
+    return json(record);
+  }
+
+  /**
+   * Publishes an object a basic-transfer client PUT to its presigned URL. B2
+   * stores such a PUT only when its length and SHA-256 match the LFS object, and
+   * keeps that checksum; tus objects have none and are verified by hashing.
+   */
+  private async verifyUpload(repoId: string, oid: string, record: Record, input: any): Promise<Response> {
+    const storage = this.state.storage;
+    if (input.size !== record.size) return new Response("LFS size differs from its reservation", { status: 422 });
+    if (record.verified) return json(record);
+    const object = await this.objectBucket().head(lfsKey(repoId, oid), undefined, { checksum: true });
+    if (!object?.versionId || object.size !== record.size || object.checksumSha256 !== sha256Base64(oid))
+      return new Response("LFS object has not been uploaded", { status: 404 });
+    await this.accounting?.commitLfs(repoId, oid);
+    record.versionId = object.versionId; record.verified = true;
+    delete record.checkpoint; delete record.lease;
+    await storage.put(`lfs:${oid}`, record);
+    const parts = await storage.list({ prefix: partPrefix(oid) });
+    if (parts.size) await storage.delete([...parts.keys()]);
+    await scheduleGitMaintenance(storage, Date.now() + 60_000);
     return json(record);
   }
 

@@ -41,7 +41,8 @@ Configure the Web Worker (`apps/web/wrangler.jsonc`) with a private B2 bucket an
 
 The key needs object read, write, list, version deletion and multipart operations
 for `git/` and `git-lfs/`. Keep credentials in Worker secrets and ignored local
-configuration. The checked-in Web Wrangler configuration includes the SQLite Durable
+configuration. Presigned LFS upload URLs reveal the key ID and bucket name, not
+the application key. The checked-in Web Wrangler configuration includes the SQLite Durable
 Object binding/migration and leaves the feature disabled. Use Workers Paid for
 the bundle size and bounded Git pack processing.
 
@@ -67,8 +68,9 @@ Web Worker entry and by the Next.js `/api/v3` route alike:
   (`{ name, scope }`) and, with `/:tokenId`, revokes access tokens. These use
   the desktop API JWT.
 - `/api/v3/git/:id.git/` serves Git smart HTTP (`info/refs`, `git-upload-pack`,
-  `git-receive-pack`) and Git LFS (`info/lfs/objects/batch`, object `download`
-  and `tus` uploads). These use a repository access token.
+  `git-receive-pack`) and Git LFS (`info/lfs/objects/batch`, object `download`,
+  `verify` and `tus` uploads, and `info/lfs/locks/verify`). These use a
+  repository access token.
 
 The Web dashboard calls the same repository functions directly with the
 signed-in account, without an API token.
@@ -103,17 +105,28 @@ repository objects, 128 refs and 9,000 history objects. Track videos and other
 large media with Git LFS. Each LFS object and a repository's aggregate LFS data
 are limited to 20 GiB, subject to the account's existing plan quota.
 
-LFS uploads negotiate the single `beutl-tus` custom transfer. Non-final PATCH
+Stock Git LFS uses the `basic` transfer, so pushing media needs no desktop app.
+The batch response gives each object a presigned B2 PUT URL that signs its
+`Content-Length` and `x-amz-checksum-sha256`; B2 stores the body only when both
+match the LFS object. The URL is valid for up to an hour and never past the
+upload reservation, after which Git LFS asks for a new batch. Its `verify`
+action then checks the stored size and checksum, pins the B2 version and commits
+the account reservation. B2 limits a single PUT to 5 GB, so larger objects need
+the desktop's `beutl-tus` transfer. B2 has no conditional PUT, so repeating a PUT
+before its URL expires can leave identical extra versions until the next version
+sweep. File locking is not offered: `info/lfs/locks/verify` answers 501, which
+makes Git LFS stop checking locks on later pushes.
+
+The desktop negotiates the `beutl-tus` custom transfer. Non-final PATCH
 requests must contain 5–32 MiB; the desktop sends 32 MiB parts. A final part can
 be smaller, including an empty object. This deliberately avoids persisting byte
-tails in Durable Objects. Basic signed PUT and a second multipart protocol are
-not offered. HEAD recovers the accepted offset after interruption or a lost
-response. Upload reservations expire after 24 hours; the client authenticates
-each tus request with its repository access token.
+tails in Durable Objects. HEAD recovers the accepted offset after interruption or
+a lost response. Upload reservations expire after 24 hours; the client
+authenticates each tus request with its repository access token.
 
-An ordinary Worker streams each part into a B2 multipart upload. The repository
-Durable Object serializes metadata, reservations, offsets and receipts. It never
-relays LFS upload or download bodies. After completion, Worker HEAD requests
+For tus, an ordinary Worker streams each part into a B2 multipart upload. The
+repository Durable Object serializes metadata, reservations, offsets and
+receipts. It never relays LFS upload or download bodies. After completion, Worker HEAD requests
 verify one 32 MiB range at a time against the pinned B2 version. SHA-256 chaining
 words and offsets are checkpointed so verification resumes after a restart.
 `Upload-Verified: true` is returned only after the complete SHA-256 matches the

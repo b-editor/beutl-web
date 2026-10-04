@@ -18,6 +18,9 @@ const parser = new XMLParser({ ignoreAttributes: true, parseTagValue: false });
 const asArray = <T>(value: T | T[] | undefined): T[] => value === undefined ? [] : Array.isArray(value) ? value : [value];
 const escapeXml = (value: string) => value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;")
   .replace(/>/gu, "&gt;").replace(/"/gu, "&quot;").replace(/'/gu, "&apos;");
+/** S3 checksum headers carry the raw digest in base64; LFS OIDs are its hex form. */
+export const sha256Base64 = (hex: string) =>
+  btoa(String.fromCharCode(...(hex.match(/../gu) ?? []).map((byte) => parseInt(byte, 16))));
 const validSize = (value: string | null) => value !== null && Number.isSafeInteger(Number(value)) && Number(value) >= 0;
 
 async function xml(response: Response): Promise<Record<string, any>> {
@@ -138,12 +141,25 @@ export class S3GitObjectBucket implements GitObjectBucket {
     return { size: Number(match[3]), versionId, body: response.body };
   }
 
-  async head(key: string, versionId?: string) {
-    const response = await this.send("HEAD", this.url(key, versionId ? { versionId } : undefined));
+  async head(key: string, versionId?: string, { checksum = false }: { checksum?: boolean } = {}) {
+    const response = await this.send("HEAD", this.url(key, versionId ? { versionId } : undefined), undefined,
+      checksum ? { "x-amz-checksum-mode": "ENABLED" } : undefined);
     if (response.status === 404) return null;
     const length = response.headers.get("content-length");
     if (!validSize(length)) throw new Error("S3 HEAD has no valid length");
-    return { size: Number(length), versionId: response.headers.get("x-amz-version-id") ?? undefined };
+    return { size: Number(length), versionId: response.headers.get("x-amz-version-id") ?? undefined,
+      ...(checksum ? { checksumSha256: response.headers.get("x-amz-checksum-sha256") ?? undefined } : {}) };
+  }
+  async presignUpload(key: string, size: number, sha256Hex: string, expiresInSeconds: number) {
+    if (!Number.isSafeInteger(size) || size < 0 || !/^[0-9a-f]{64}$/u.test(sha256Hex) ||
+        !Number.isSafeInteger(expiresInSeconds) || expiresInSeconds < 1 || expiresInSeconds > 7 * 24 * 3600)
+      throw new Error("Invalid presigned upload");
+    // Both headers are signed, so B2 rejects any other length (403) or content (400 BadDigest).
+    const signed = await this.client.sign(this.url(key, { "X-Amz-Expires": String(expiresInSeconds) }), {
+      method: "PUT", headers: { "Content-Length": String(size), "x-amz-checksum-sha256": sha256Base64(sha256Hex) },
+      aws: { signQuery: true, allHeaders: true },
+    });
+    return signed.url;
   }
 
   async put(key: string, value: Uint8Array) {

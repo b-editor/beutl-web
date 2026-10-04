@@ -10,6 +10,7 @@ import {
   downloadLfsObject,
   readTusUpload,
   tusOptions,
+  verifyLfsUpload,
   type LfsObject,
 } from "../git/media-worker";
 
@@ -82,6 +83,12 @@ const git = new Hono<Routes>()
   // A batch may only download; the object rejects an upload batch without write scope.
   .post(`${REPOSITORY}/info/lfs/objects/batch`, authorize("read"), forward)
   .get(`${LFS_OBJECT}/download`, authorize("read"), (c) => downloadLfsObject(c.req.raw, lfsObject(c)))
+  // File locking is not offered. 501, unlike 404, makes Git LFS stop checking on every push.
+  .post(`${REPOSITORY}/info/lfs/locks/verify`, authorize("read"), (c) =>
+    c.json({ message: "Git LFS file locking is not supported" }, 501,
+      { "Content-Type": "application/vnd.git-lfs+json", "Cache-Control": "no-store" }))
+  // Stock Git LFS PUTs to a presigned B2 URL from the batch, then confirms here.
+  .post(`${LFS_OBJECT}/verify`, authorize("write"), (c) => verifyLfsUpload(c.req.raw, lfsObject(c)))
   .options(`${LFS_OBJECT}/tus/:resource{${UUID}}?`, authorize("write"), () => tusOptions())
   .post(`${LFS_OBJECT}/tus`, authorize("write"), tusVersion, (c) => createTusUpload(c.req.raw, lfsObject(c)))
   // Hono serves HEAD through GET routes; a tus resource has no GET representation.

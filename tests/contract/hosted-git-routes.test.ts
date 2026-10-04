@@ -186,6 +186,10 @@ describe("Hosted Git routes in the Worker and the Next.js v3 route", () => {
     ["OPTIONS", `/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/tus`, "write", 204],
     ["POST", `/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/tus`, "write", 412],
     ["GET", `/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/tus/${repoId}`, "write", 412],
+    ["POST", `/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/verify`, undefined, 401],
+    ["POST", `/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/verify`, "read", 403],
+    ["POST", `/api/v3/git/${repoId}.git/info/lfs/locks/verify`, undefined, 401],
+    ["POST", `/api/v3/git/${repoId}.git/info/lfs/locks/verify`, "read", 501],
   ] as const)("enforces %s %s with %s identically (%i)", async (method, path, scope, status) => {
     const authorization = scope ? await gitToken(scope) : undefined;
     const { worker, route } = await both(method, path, { authorization });
@@ -194,6 +198,18 @@ describe("Hosted Git routes in the Worker and the Next.js v3 route", () => {
     expect(result.status).toBe(status);
     if (path.includes("/tus")) expect(result.tus).toBe("1.0.0");
     if (status === 401) expect(result.auth).toBe("Basic realm=\"Beutl Git\", charset=\"UTF-8\"");
+  });
+
+  it("forwards a basic-transfer LFS verify with write scope identically", async () => {
+    objectFetch.mockClear();
+    const path = `/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/verify`;
+    const { worker, route } = await both("POST", path, { authorization: await gitToken("write"), body: { oid, size: 3 } });
+    expect(await snapshot(worker)).toEqual(await snapshot(route));
+    expect(worker.status).toBe(200);
+    const forwarded = objectFetch.mock.calls.map(([request]) => request);
+    expect(forwarded.map((request) => new URL(request.url).pathname)).toEqual(Array(2).fill(`/internal/git/media/${oid}/verify`));
+    expect(forwarded.map((request) => request.headers.get("x-beutl-git-scope"))).toEqual(["write", "write"]);
+    expect(await forwarded[0].json()).toEqual({ size: 3 });
   });
 
   it("keeps Hosted Git hidden on both paths when the environment disables it", async () => {
