@@ -35,6 +35,7 @@ Configure the Web Worker (`apps/web/wrangler.jsonc`) with a private B2 bucket an
 | `BEUTL_S3_FORCE_PATH_STYLE` | `true` for path-style requests |
 | `BEUTL_S3_ACCESS_KEY_ID` | Bucket-scoped application key ID (secret) |
 | `BEUTL_S3_SECRET_ACCESS_KEY` | Application key (secret) |
+| `BEUTL_S3_SESSION_TOKEN` | Session token for temporary credentials, when required (optional secret) |
 | `BEUTL_GIT_TOKEN_SECRET` | Independent random signing secret, at least 32 characters |
 
 The key needs object read, write, list, version deletion and multipart operations

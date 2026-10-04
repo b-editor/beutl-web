@@ -17,6 +17,7 @@ declare namespace Cloudflare {
 		BEUTL_S3_BUCKET?: string;
 		BEUTL_S3_ACCESS_KEY_ID?: string;
 		BEUTL_S3_SECRET_ACCESS_KEY?: string;
+		BEUTL_S3_SESSION_TOKEN?: string;
 		BEUTL_S3_FORCE_PATH_STYLE?: string;
 		ASSETS: Fetcher;
 	}
