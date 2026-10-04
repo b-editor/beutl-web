@@ -51,7 +51,7 @@ import { usePathname } from "next/navigation";
 import { useEffect } from "react";
 import { navHref } from "@/components/site-links";
 
-export type SidebarUser = {
+type SidebarUser = {
   name?: string | null;
   email?: string | null;
   image?: string | null;

@@ -42,7 +42,7 @@ export const AI_SOURCE_VIDEO_OPERATIONS: ReadonlySet<string> = new Set([
   "video.motion",
 ]);
 
-export const AI_PROVIDER_IDS: readonly AiProviderId[] = [
+const AI_PROVIDER_IDS: readonly AiProviderId[] = [
   "openrouter",
   "vercel-gateway",
 ];
@@ -116,7 +116,7 @@ export type AiVideoContent = {
  * already holds, handed to the provider as a URL rather than uploaded by the
  * caller.
  */
-export type AiVideoMode = "edit" | "extend" | "motion";
+type AiVideoMode = "edit" | "extend" | "motion";
 
 export type AiVideoStartRequest = {
   prompt: string;

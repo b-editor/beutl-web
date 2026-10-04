@@ -21,7 +21,7 @@ const PRODUCT_LABEL_KEYS: Record<
   },
 };
 
-export function storageTierLabelKey(tier: StorageTierId): string {
+function storageTierLabelKey(tier: StorageTierId): string {
   return `account:billing.storageTier.${tier}`;
 }
 

@@ -22,10 +22,10 @@ export type PackagePurchaseExpectation = {
   currency?: string;
 };
 
-export const PACKAGE_CHECKOUT_FINGERPRINT_VERSION = "package-checkout-v2";
+const PACKAGE_CHECKOUT_FINGERPRINT_VERSION = "package-checkout-v2";
 export const PACKAGE_CHECKOUT_SESSION_EXACT_EXPANDS = ["line_items.data.price.product", "payment_intent"] as const;
 
-export type PackageCheckoutCompletionDecision =
+type PackageCheckoutCompletionDecision =
   | "open"
   | "complete-pending"
   | "rotate-terminal";

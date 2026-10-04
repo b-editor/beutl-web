@@ -39,7 +39,7 @@ export type AiVideoOperationPath =
   | "videos/extend"
   | "videos/motion";
 
-export type AiVideoSubmission = {
+type AiVideoSubmission = {
   operation: AiVideoOperationPath;
   body: string | FormData;
 };

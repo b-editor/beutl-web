@@ -805,7 +805,7 @@ export async function renewStorageUploadCompletion({
   return result.count === 1;
 }
 
-export const STORAGE_UPLOAD_COMPLETION_MAX_ATTEMPTS = 3;
+const STORAGE_UPLOAD_COMPLETION_MAX_ATTEMPTS = 3;
 
 /** Persist an ambiguous provider outcome; after a bounded number of attempts stop automatic retries. */
 export async function recordStorageUploadCompletionFailure({
@@ -1490,7 +1490,7 @@ export async function markStorageUploadCompleted({
   return result.count > 0;
 }
 
-export type StorageUploadGenerationExpectation = {
+type StorageUploadGenerationExpectation = {
   createdAt: Date;
   objectKey: string;
   uploadId: string | null;
@@ -1514,7 +1514,7 @@ export type StorageUploadGenerationExpectation = {
 // 「この行のパートは自分が捨てる」と宣言する。完了済みでも、既に誰かが宣言して
 // いても取れない。取れた行にはもう控えを書けないので、そのあとで中止しても
 // オブジェクトを消しても、File がそれを指すことはない。
-export type StorageUploadAbandonExpectation =
+type StorageUploadAbandonExpectation =
   StorageUploadGenerationExpectation & {
     abandonedAt: Date | null;
     cleanupLeaseUntil: Date | null;

@@ -31,7 +31,7 @@ export class InvalidTranscriptionResultError extends Error {
   }
 }
 
-export const TRANSCRIPTION_TIMESTAMP_TOLERANCE_SECONDS = 0.05;
+const TRANSCRIPTION_TIMESTAMP_TOLERANCE_SECONDS = 0.05;
 
 const transcriptionResponseSchema = z
   .object({

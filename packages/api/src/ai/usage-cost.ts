@@ -11,7 +11,7 @@ import type { ProviderCostUsd } from "./provider-cost";
 // requests include small fixed prompt costs the catalog estimate omits. The
 // excess is only held temporarily; settlement releases it after actual cost is
 // known.
-export const AI_COST_RESERVATION_BUFFER_PERCENT = 120;
+const AI_COST_RESERVATION_BUFFER_PERCENT = 120;
 
 export function providerCostUsdToMicros(costUsd: ProviderCostUsd): number | null {
   const cost = parseNonNegativeDecimalFraction(costUsd);

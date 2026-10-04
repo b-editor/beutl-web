@@ -58,7 +58,7 @@ const LEASE_MS = 10 * 60_000;
 export const PACKAGE_CHECKOUT_CREATE_TIMEOUT_MS = 60_000;
 const STRIPE_IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60_000;
 
-export type LegacyPackageResolutionChoice =
+type LegacyPackageResolutionChoice =
   | { kind: "choose"; sessionId: string }
   | { kind: "all-refund" };
 

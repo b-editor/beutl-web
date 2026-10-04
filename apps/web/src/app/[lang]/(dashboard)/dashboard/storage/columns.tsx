@@ -29,7 +29,7 @@ export const COLUMN_CLASS: Record<string, string> = {
 
 // Checkboxes stay out of the way until a row is hovered, focused or selected.
 // Coarse pointers have no hover, so they always get them.
-export function checkboxVisibility(visible: boolean): string {
+function checkboxVisibility(visible: boolean): string {
   return visible
     ? "opacity-100"
     : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100";

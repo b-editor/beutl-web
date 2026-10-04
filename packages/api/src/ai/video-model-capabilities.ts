@@ -87,7 +87,7 @@ export type AiVideoModelCapabilities = {
   maxTotalReferences: number | null;
 };
 
-export type UnsupportedVideoRequestReason =
+type UnsupportedVideoRequestReason =
   | "resolution"
   | "duration"
   | "aspectRatio"

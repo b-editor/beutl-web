@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 
 type DecimalAsNumber<T> = T extends Prisma.Decimal ? number : T;
 
-export type DecimalNumbers<T> = {
+type DecimalNumbers<T> = {
   [K in keyof T]: DecimalAsNumber<T[K]>;
 };
 

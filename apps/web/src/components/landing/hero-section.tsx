@@ -9,7 +9,7 @@ import {
   LP_WRAP,
 } from "./lp-parts";
 
-export interface HeroTexts {
+interface HeroTexts {
   eyebrow: string;
   titleLine1: string;
   titleLine2: string;

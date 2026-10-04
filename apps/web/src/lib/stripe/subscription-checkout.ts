@@ -68,7 +68,7 @@ export type PersistedBillingOffer = Pick<
   | "tier"
 >;
 
-export function checkoutSessionMatchesOffer(
+function checkoutSessionMatchesOffer(
   plan: SubscriptionPlanConfig,
   checkoutSession: Stripe.Checkout.Session,
   billingOffer: PersistedBillingOffer,
@@ -82,7 +82,7 @@ export function checkoutSessionMatchesOffer(
   );
 }
 
-export function subscriptionMatchesOffer(
+function subscriptionMatchesOffer(
   plan: SubscriptionPlanConfig,
   subscription: Stripe.Subscription,
   billingOffer: PersistedBillingOffer,
@@ -108,7 +108,7 @@ export function subscriptionMatchesOffer(
   );
 }
 
-export function canonicalizeCheckoutParams(value: unknown): unknown {
+function canonicalizeCheckoutParams(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(canonicalizeCheckoutParams);
   }
@@ -179,7 +179,7 @@ export function persistedCheckoutParams(
   return persisted as Stripe.Checkout.SessionCreateParams;
 }
 
-export async function compensateSupersededSubscriptionCheckout({
+async function compensateSupersededSubscriptionCheckout({
   plan,
   stripe,
   checkoutSession,
@@ -318,7 +318,7 @@ export async function compensateSupersededSubscriptionCheckout({
   }
 }
 
-export function subscriptionCheckoutSessionMatchesBinding({
+function subscriptionCheckoutSessionMatchesBinding({
   plan,
   checkoutSession,
   stripeCheckoutSessionId,
@@ -344,7 +344,7 @@ export function subscriptionCheckoutSessionMatchesBinding({
   );
 }
 
-export async function resolveRejectedSubscriptionCheckoutSession({
+async function resolveRejectedSubscriptionCheckoutSession({
   plan,
   stripe,
   stripeCheckoutSessionId,
@@ -484,7 +484,7 @@ export async function getSafeBillingPortalConfigurationId(
   return configuration.id;
 }
 
-export async function hasBlockingStripeSubscription(
+async function hasBlockingStripeSubscription(
   stripe: ReturnType<typeof createStripe>,
   customerId: string,
   recognizedPriceIds: ReadonlySet<string>,
@@ -521,7 +521,7 @@ export async function hasBlockingStripeSubscription(
 // The two-attempt Checkout loop. Reuses an open bound Session, expires or
 // compensates a stale one, and creates a new Session under a durable
 // idempotency key. Always ends in a redirect.
-export async function runSubscriptionCheckout({
+async function runSubscriptionCheckout({
   stripe,
   userId,
   customerId,
@@ -1075,7 +1075,7 @@ export async function reconcileSubscriptionCheckoutSuccess({
   return true;
 }
 
-export type SubscriptionTierChangeOutcome =
+type SubscriptionTierChangeOutcome =
   | "changed"
   | "unchanged"
   | "no-subscription"

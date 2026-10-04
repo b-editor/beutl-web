@@ -15,7 +15,7 @@ const MAX_SUPPORTED_CHANNELS = Math.max(...SUPPORTED_CHANNEL_COUNTS);
 // This is a post-decode rejection threshold, not a promise about browser peak
 // memory. decodeAudioData accepts a complete compressed file and exposes its
 // channel count only after allocating the AudioBuffer.
-export const MAX_AUDIO_DECODED_PCM_BYTES = 96 * 1024 * 1024;
+const MAX_AUDIO_DECODED_PCM_BYTES = 96 * 1024 * 1024;
 const BYTES_PER_DECODED_SAMPLE = 4;
 let decodeQueue = Promise.resolve();
 
@@ -30,7 +30,7 @@ export type AudioExtractionFailure =
 // 元のファイル、復号した PCM、詰め直した波形、WAV を同時に抱えることになり、
 // This prevents the tab from failing before extraction. Compressed size cannot
 // guarantee decoded size, but the source and temporary copies remain bounded.
-export const MAX_AUDIO_SOURCE_BYTES = 32 * 1024 * 1024;
+const MAX_AUDIO_SOURCE_BYTES = 32 * 1024 * 1024;
 
 export class AudioExtractionError extends Error {
   constructor(readonly reason: AudioExtractionFailure) {
@@ -53,13 +53,13 @@ async function withDecodeSlot<T>(action: () => Promise<T>): Promise<T> {
   }
 }
 
-export type AudioExtractionGate = {
+type AudioExtractionGate = {
   tryStart(): boolean;
   finish(): void;
   isBusy(): boolean;
 };
 
-export type AudioExtractionSelectionController<T> = {
+type AudioExtractionSelectionController<T> = {
   begin(value: T): { generation: number; accepted: boolean };
   takeLatest(): { generation: number; value: T } | null;
   isCurrent(generation: number): boolean;

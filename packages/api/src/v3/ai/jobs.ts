@@ -152,7 +152,7 @@ type AiJobRecord = NonNullable<
   Awaited<ReturnType<typeof getAiJobByUserId>>
 >;
 
-export type AiJobSummary = {
+type AiJobSummary = {
   id: string;
   kind: string;
   status: PublicAiJobStatus;

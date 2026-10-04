@@ -9,7 +9,7 @@ import {
   type SubscriptionPlanId,
 } from "@beutl/core";
 
-export type HistoricalOffer = { productId: string; tier: string | null };
+type HistoricalOffer = { productId: string; tier: string | null };
 
 export type SubscriptionPlanConfig = SubscriptionPlanDefinition & {
   // 現行の販売用 Price。ティアの無いプランは null で引く。
@@ -110,7 +110,7 @@ export function configuredPriceIds(plan: SubscriptionPlanConfig): ReadonlySet<st
   return result;
 }
 
-export type ConfiguredPrice = {
+type ConfiguredPrice = {
   tier: string | null;
   // 現行の販売用 Price か (履歴なら false)。
   isCurrent: boolean;

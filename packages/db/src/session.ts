@@ -75,7 +75,7 @@ type RefreshTokenFamily = {
   createdAt: Date;
 };
 
-export type RotateNativeRefreshTokenResult = {
+type RotateNativeRefreshTokenResult = {
   userId: string;
   refreshToken: string;
   refreshTokenExpiresAt: Date;
@@ -84,7 +84,7 @@ export type RotateNativeRefreshTokenResult = {
 // This capability must come from a successfully decrypted native refresh
 // request. General session callers must omit it so browser sessions cannot be
 // migrated into the native refresh-token store.
-export type LegacyNativeSessionAdoption = {
+type LegacyNativeSessionAdoption = {
   familyId: string;
 };
 

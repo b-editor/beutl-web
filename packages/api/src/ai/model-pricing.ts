@@ -458,19 +458,19 @@ export type AiCostRequestShape = {
 };
 
 /** A model to price, and who serves it. */
-export type AiPricingModelRef = {
+type AiPricingModelRef = {
   modelId: string;
   provider: string;
   imageOutputTokenProfile?: AiImageOutputTokenProfile;
 };
 
-export type AiCostEstimateEntry = {
+type AiCostEstimateEntry = {
   operation: string;
   model: string;
   estimate: AiCostEstimate;
 };
 
-export type AiCostEstimates = {
+type AiCostEstimates = {
   fetchedAt: Date;
   entries: AiCostEstimateEntry[];
 };

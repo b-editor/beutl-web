@@ -254,7 +254,7 @@ export async function reconcileSubscriptionObservation(
   throw new Error("Could not reconcile the Stripe subscription observation");
 }
 
-export type SubscriptionEntitlementHoldKind = "refund" | "dispute";
+type SubscriptionEntitlementHoldKind = "refund" | "dispute";
 
 const TERMINAL_HOLD_STATUSES = {
   refund: new Set(["succeeded", "failed", "canceled"]),

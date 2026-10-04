@@ -1,6 +1,6 @@
 import Stripe from "stripe";
 
-export type PackageCheckoutDiscoveryExpectation = {
+type PackageCheckoutDiscoveryExpectation = {
   customerId: string;
   userId: string;
   packageId: string;
@@ -8,7 +8,7 @@ export type PackageCheckoutDiscoveryExpectation = {
   createdAt?: Date;
 };
 
-export type PackageCheckoutDiscovery =
+type PackageCheckoutDiscovery =
   | { status: "none" }
   | { status: "single"; session: Stripe.Checkout.Session }
   | { status: "multiple"; sessions: Stripe.Checkout.Session[] };

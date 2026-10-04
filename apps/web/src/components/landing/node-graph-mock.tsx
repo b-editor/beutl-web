@@ -12,7 +12,7 @@ const NODE_WIRE = "#3FB950";
 /** The effect's output runs off towards the next stage, which is not drawn. */
 const OUTPUT_STUB = 34;
 
-export type GraphNodeKey = "shape" | "random" | "effect";
+type GraphNodeKey = "shape" | "random" | "effect";
 
 type NodeSpec = {
   x: number;

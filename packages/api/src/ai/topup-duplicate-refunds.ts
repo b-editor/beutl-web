@@ -7,7 +7,7 @@ import {
 } from "@beutl/db";
 import Stripe from "stripe";
 
-export const TOP_UP_DUPLICATE_REFUND_MAX_ATTEMPTS = 12;
+const TOP_UP_DUPLICATE_REFUND_MAX_ATTEMPTS = 12;
 const RETRY_DELAY_MS = 5 * 60_000;
 const INTERVENTION_RECHECK_MS = 6 * 60 * 60_000;
 const LEASE_MS = 10 * 60_000;

@@ -1,4 +1,4 @@
-export type SocialLink = {
+type SocialLink = {
   href: string;
   iconSrc: string;
   label: string;

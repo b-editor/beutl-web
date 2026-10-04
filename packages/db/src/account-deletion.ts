@@ -20,7 +20,7 @@ const intentSelect = {
 export const ACCOUNT_DELETION_INTENT_LIFETIME_MS =
   7 * 24 * 60 * 60 * 1000;
 
-export type AuthorizeAccountDeletionIntentResult =
+type AuthorizeAccountDeletionIntentResult =
   | {
       status: "authorized";
       resumed: boolean;
@@ -279,7 +279,7 @@ export async function findAccountDeletionIntentByUserId({
   });
 }
 
-export type AccountDeletionBillingBlockerCategory =
+type AccountDeletionBillingBlockerCategory =
   | "subscriptionCheckout"
   | "buyerPackageCheckout"
   | "sellerPackageCheckout"
@@ -287,7 +287,7 @@ export type AccountDeletionBillingBlockerCategory =
   | "topUpRefund"
   | "topUpResolution";
 
-export type AccountDeletionBillingBlockers = Readonly<Record<AccountDeletionBillingBlockerCategory, number>>;
+type AccountDeletionBillingBlockers = Readonly<Record<AccountDeletionBillingBlockerCategory, number>>;
 
 export async function inspectAccountDeletionBillingBlockers({ userId, prisma }: { userId: string; prisma?: PrismaTransaction }): Promise<AccountDeletionBillingBlockers> {
   const db = prisma ?? await getDb();
@@ -320,7 +320,7 @@ export async function countActiveStripeCustomerProvisioning({ userId, prisma }: 
 
 const ADMIN_ACCOUNT_DELETION_IDENTIFIER = "__admin_account_deletion__";
 
-export type AdminAccountDeletionReservation =
+type AdminAccountDeletionReservation =
   | { status: "reserved" }
   | {
       status: "blocked";

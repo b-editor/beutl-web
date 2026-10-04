@@ -47,10 +47,10 @@ const FINALIZATION_LEASE_MILLISECONDS = 10 * 60 * 1000;
 export { PROVIDER_POLL_LEASE_MARGIN_MILLISECONDS } from "./providers/openrouter";
 
 // The local job lost its link to a submission the provider accepted.
-export class DetachedRemoteVideoJobError extends AiProviderError {}
+class DetachedRemoteVideoJobError extends AiProviderError {}
 
 // The provider returned a job ID another local job already owns.
-export class ProviderVideoJobOwnershipConflictError extends AiProviderError {}
+class ProviderVideoJobOwnershipConflictError extends AiProviderError {}
 
 function attachmentVerificationError(...causes: unknown[]): AiProviderError {
   return new AiProviderError("AI video job attachment could not be verified", {
@@ -374,7 +374,7 @@ export async function createAndAttachVideoJob({
 //
 // "keepQueued" means the outcome is genuinely unknown and the provider may yet
 // call back, so the job stays queued and paid for.
-export type VideoSubmissionFailureHandling =
+type VideoSubmissionFailureHandling =
   | { action: "refund"; detachProviderJob: boolean }
   | { action: "keepQueued" }
   | { action: "rethrow" };

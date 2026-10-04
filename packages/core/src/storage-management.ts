@@ -12,7 +12,7 @@ export function isValidStorageName(name: string): boolean {
   );
 }
 
-export type StorageFileAction =
+type StorageFileAction =
   | "open"
   | "download"
   | "copyLink"

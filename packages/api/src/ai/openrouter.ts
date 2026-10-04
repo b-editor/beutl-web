@@ -95,7 +95,7 @@ export type VideoGenerationStatus = AiVideoJobStatus;
 export type VideoJobInfo = AiVideoJobInfo & { unsignedUrls?: string[] };
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-export const DEFAULT_OPENROUTER_REQUEST_TIMEOUT_MS = 120_000;
+const DEFAULT_OPENROUTER_REQUEST_TIMEOUT_MS = 120_000;
 export const MAX_OPENROUTER_JSON_RESPONSE_BYTES = 32 * 1024 * 1024;
 const MAX_OPENROUTER_ERROR_RESPONSE_BYTES = 16 * 1024;
 
@@ -202,7 +202,7 @@ export async function verifyOpenRouterWebhookSignature({
 
 // Exported for the SDK-backed client, which needs the same key and the same
 // "not configured" failure as the hand-rolled requests.
-export function getOpenRouterApiKey(): string {
+function getOpenRouterApiKey(): string {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) {
     throw new AiProviderError("OPENROUTER_API_KEY is not set");
@@ -412,7 +412,7 @@ export function openRouterExecutionOf(
 // The provider's own words about a failure. Users are shown a generic message,
 // so without this the reason — an unsupported parameter, a model that is gone —
 // is lost entirely.
-export function openRouterFailureMessage(
+function openRouterFailureMessage(
   cause: unknown,
   fallback: string,
 ): string {

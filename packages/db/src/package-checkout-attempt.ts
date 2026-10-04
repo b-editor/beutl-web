@@ -2,7 +2,7 @@ import { getDb } from "./provider";
 import { startRetryableTransaction, type PrismaTransaction } from "./transaction";
 import { scheduleStripeCheckoutCleanup } from "./stripe-checkout-cleanup";
 
-export const PACKAGE_CHECKOUT_ATTEMPT_METADATA_KEY = "packageCheckoutAttemptId";
+const PACKAGE_CHECKOUT_ATTEMPT_METADATA_KEY = "packageCheckoutAttemptId";
 
 export function withPackageCheckoutAttemptToken(paramsJson: string, attemptToken: string): string {
   const params = JSON.parse(paramsJson) as Record<string, unknown>;

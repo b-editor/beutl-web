@@ -67,7 +67,7 @@ const modelsResponseSchema = z.object({
 });
 
 /** Operation names seen in `supported_operations`, as of 2026-09. */
-export const GATEWAY_VIDEO_OPERATIONS = {
+const GATEWAY_VIDEO_OPERATIONS = {
   textToVideo: "text-to-video",
   imageToVideo: "image-to-video",
   firstLastFrame: "first-last-frame",

@@ -192,7 +192,7 @@ export async function findPublishedPackageForLibrary({
   });
 }
 
-export type BillingHistoryPackage = {
+type BillingHistoryPackage = {
   id: string;
   name: string;
   displayName: string | null;

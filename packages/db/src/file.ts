@@ -501,7 +501,7 @@ function storageFileKindWhere(kind: FileKind): Prisma.FileWhereInput {
   return named[kind];
 }
 
-export type StorageFileListingPage = {
+type StorageFileListingPage = {
   files: Prisma.FileGetPayload<{ select: typeof STORAGE_FILE_SELECT }>[];
   total: number;
   // 要求より後ろのページが無ければ最後のページに寄せる。

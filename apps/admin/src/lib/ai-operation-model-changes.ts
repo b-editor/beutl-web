@@ -41,7 +41,7 @@ export const DEFAULT_MODEL_PROVIDER = "openrouter";
 
 export const MAX_MODEL_DISPLAY_NAME_LENGTH = 80;
 
-export type AiOperationModelValidation =
+type AiOperationModelValidation =
   | { ok: true; value: AiOperationModelInput }
   | { ok: false; message: string };
 
