@@ -6,7 +6,7 @@ import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable
 import { gitRepositoryObject } from "../packages/api/src/git/environment";
 import { appendTusUpload, createTusUpload, downloadLfsObject, readTusUpload, verifyLfsUpload, type LfsObject } from "../packages/api/src/git/media-worker";
 import { basicCredential, gitAccessTokenDelegate, gitAccessTokenFixture } from "./stubs/git-access-tokens";
-import { type GitDurableStorage, type LfsRecord, lfsKey, MAX_LFS_OBJECT_BYTES } from "../packages/api/src/git/lfs";
+import { type GitDurableStorage, type LfsPart, type LfsRecord, lfsKey, MAX_LFS_OBJECT_BYTES, partKey } from "../packages/api/src/git/lfs";
 import { ResumableSha256 } from "../packages/api/src/git/resumable-sha256";
 
 const repoId = "12345678-1234-1234-1234-123456789abc";
@@ -291,6 +291,8 @@ function stateAfter(bytes: Uint8Array, length: number) {
   sha.update(bytes.subarray(0, length));
   return sha.snapshot().words.map((word) => word.toString(16).padStart(8, "0")).join("");
 }
+/** The state a client names, as the repository object stores it. */
+const words = (state: string) => ({ words: [...state.matchAll(/.{8}/gu)].map(([word]) => Number.parseInt(word, 16)), tail: "" });
 function media(size: number) {
   const bytes = new Uint8Array(size);
   for (let i = 0; i < size; i++) bytes[i] = (i * 7 + (i >>> 13)) % 251;
@@ -360,11 +362,48 @@ describe("Parallel tus parts", () => {
     expect((await other.transfer(started.url, otherOid, started.record.resourceId, PART, otherBytes.subarray(PART),
       stateAfter(otherBytes, PART))).status).toBe(409);
   });
+  it("passes a part that is being sent again only once that upload settles", async () => {
+    const f = fixture(), bytes = media(PART + 1000), oid = hash(bytes);
+    const { url, record } = await f.reserve(oid, bytes.length);
+    const repository = f.object(oid).repository, access = { repoId, ownerId: "owner", scope: "write" as const };
+    await f.transfer(url, oid, record.resourceId, PART, bytes.subarray(PART), stateAfter(bytes, PART));
+    // The same part is sent again; its new bytes could replace the stored part at any moment.
+    const again = await (await repository.media(access, oid, "part",
+      { resourceId: record.resourceId, offset: PART, length: 1000, start: words(stateAfter(bytes, PART)) })).json();
+    const first = await f.transfer(url, oid, record.resourceId, 0, bytes.subarray(0, PART), stateAfter(bytes, 0));
+    expect(first.headers.get("upload-offset")).toBe(String(PART));
+    expect(first.headers.get("upload-verified")).toBe("false");
+    // The resend fails, so the earlier receipt stands and completes the object.
+    expect((await repository.media(access, oid, "cancel",
+      { resourceId: record.resourceId, leaseId: again.leaseId, partNumber: again.partNumber })).status).toBe(200);
+    expect((await f.transfer(url, oid, record.resourceId, 0)).headers.get("upload-verified")).toBe("true");
+    expect(hash(f.bucket.versions.get("version-1")!.bytes)).toBe(oid);
+  });
+  it("refuses a late receipt for a part the accepted offset already passed", async () => {
+    const f = fixture(), bytes = media(2 * PART + 1000), oid = hash(bytes);
+    const { url, record } = await f.reserve(oid, bytes.length);
+    const repository = f.object(oid).repository, access = { repoId, ownerId: "owner", scope: "write" as const };
+    const part = (n: number) => f.transfer(url, oid, record.resourceId, n * PART,
+      bytes.subarray(n * PART, Math.min(bytes.length, (n + 1) * PART)), stateAfter(bytes, n * PART));
+    await part(1);
+    const again = await (await repository.media(access, oid, "part",
+      { resourceId: record.resourceId, offset: PART, length: PART, start: words(stateAfter(bytes, PART)) })).json();
+    // The resend outlives its lease, so the accepted offset passes the earlier receipt.
+    const key = partKey(oid, 2), stored = (await f.storage.get<LfsPart>(key))!;
+    await f.storage.put(key, { ...stored, lease: { ...stored.lease!, until: Date.now() - 1 } });
+    expect((await part(0)).headers.get("upload-offset")).toBe(String(2 * PART));
+    const late = await repository.media(access, oid, "accept", { resourceId: record.resourceId, leaseId: again.leaseId,
+      partNumber: 2, etag: "etag-replaced", hash: { words: Array(8).fill(0), tail: "" } });
+    expect(late.status).toBe(409);
+    expect((await f.storage.get<LfsPart>(key))!.etag).toBe("etag-2");
+    expect((await part(2)).headers.get("upload-verified")).toBe("true");
+    expect(hash(f.bucket.versions.get("version-1")!.bytes)).toBe(oid);
+  });
   it("holds each part for one request at a time", async () => {
     const f = fixture(), bytes = media(2 * PART), oid = hash(bytes);
     const { record } = await f.reserve(oid, bytes.length);
     const repository = f.object(oid).repository, access = { repoId, ownerId: "owner", scope: "write" as const };
-    const start = { words: [...stateAfter(bytes, PART).matchAll(/.{8}/gu)].map(([word]) => Number.parseInt(word, 16)), tail: "" };
+    const start = words(stateAfter(bytes, PART));
     const lease = () => repository.media(access, oid, "part", { resourceId: record.resourceId, offset: PART, length: PART, start });
     const held = await lease();
     expect(held.status).toBe(200);

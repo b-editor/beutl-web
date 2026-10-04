@@ -140,7 +140,10 @@ already accepted must then be a full 32 MiB part. The part is hashed from that
 state as it streams to B2. The accepted offset passes a stored part only when
 the state it named equals the state the bytes before it reached, so a claimed
 state can never stand in for different earlier bytes; a mismatch discards the
-upload. HEAD returns the state at the accepted offset, so a resumed upload
+upload. A part being sent again is passed only once that upload settles, and a
+receipt that arrives after the offset passed its part is refused, so the stored
+digest always belongs to the part B2 assembles. HEAD returns the state at the
+accepted offset, so a resumed upload
 continues hashing there. Clients that send parts in order need none of this.
 
 For tus, an ordinary Worker streams each part into a B2 multipart upload and

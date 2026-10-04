@@ -327,20 +327,28 @@ export class GitRepositoryDurableObject {
     const key = Number.isSafeInteger(input.partNumber) ? partKey(oid, input.partNumber) : "";
     const part = key ? await storage.get<LfsPart>(key) : undefined;
     if (!part?.lease || input.leaseId !== part.lease.id) return new Response("Upload receipt changed", { status: 409 });
-    if (!accepted) {
-      delete part.lease;
-      if (part.etag) await storage.put(key, part); else await storage.delete(key);
-      return json(record);
-    }
-    const length = Math.min(MAX_GIT_LFS_PART_BYTES, record.size - (part.partNumber - 1) * MAX_GIT_LFS_PART_BYTES);
-    const end = (part.partNumber - 1) * MAX_GIT_LFS_PART_BYTES + length;
-    if (typeof input.etag !== "string" || input.etag.length > 256 ||
-        (end === record.size ? !/^[0-9a-f]{64}$/u.test(input.digest) : !validHashState(input.hash, end)))
-      return new Response("Invalid upload receipt", { status: 400 });
     const { start } = part.lease;
-    await storage.put<LfsPart>(key, { partNumber: part.partNumber, etag: input.etag, length,
-      ...(start ? { start } : {}), ...(end === record.size ? { digest: input.digest } : { end: input.hash }) });
-    for (let next = await storage.get<LfsPart>(partKey(oid, record.partCount + 1)); next?.etag && next.length;
+    delete part.lease;
+    if (!accepted) {
+      if (part.etag) await storage.put(key, part); else await storage.delete(key);
+    } else if (part.partNumber <= record.partCount) {
+      // The lease expired and the accepted offset passed the earlier receipt,
+      // whose digest the record now holds; B2 completion checks its ETag.
+      await storage.put(key, part);
+      return new Response("Upload receipt changed", { status: 409 });
+    } else {
+      const length = Math.min(MAX_GIT_LFS_PART_BYTES, record.size - (part.partNumber - 1) * MAX_GIT_LFS_PART_BYTES);
+      const end = (part.partNumber - 1) * MAX_GIT_LFS_PART_BYTES + length;
+      if (typeof input.etag !== "string" || input.etag.length > 256 ||
+          (end === record.size ? !/^[0-9a-f]{64}$/u.test(input.digest) : !validHashState(input.hash, end)))
+        return new Response("Invalid upload receipt", { status: 400 });
+      await storage.put<LfsPart>(key, { partNumber: part.partNumber, etag: input.etag, length,
+        ...(start ? { start } : {}), ...(end === record.size ? { digest: input.digest } : { end: input.hash }) });
+    }
+    // A part being sent again is passed only once that upload settles: its
+    // bytes may replace the stored part, and the receipt must match them.
+    for (let next = await storage.get<LfsPart>(partKey(oid, record.partCount + 1));
+      next?.etag && next.length && !(next.lease && next.lease.until > Date.now());
       next = await storage.get<LfsPart>(partKey(oid, record.partCount + 1))) {
       if (!sameHashState(next.start, record.hash)) {
         await cleanupLfs(storage, this.objectBucket(), this.accounting, repoId, oid, record);
@@ -349,7 +357,7 @@ export class GitRepositoryDurableObject {
       record.offset += next.length; record.partCount++;
       if (record.offset === record.size) { record.digest = next.digest; delete record.hash; } else record.hash = next.end;
     }
-    await this.extendReservation(repoId, oid, record);
+    if (accepted) await this.extendReservation(repoId, oid, record);
     await storage.put(`lfs:${oid}`, record); return json(record);
   }
 
