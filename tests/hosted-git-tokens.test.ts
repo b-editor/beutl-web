@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { runWithDbProvider } from "@beutl/db";
+import { findGitAccess } from "../packages/api/src/git/access-tokens";
 import { generateGitAccessToken, gitAccessTokenFrom, hashGitAccessToken } from "../packages/api/src/git/tokens";
+import { basicCredential, gitAccessTokenDelegate, gitAccessTokenFixture } from "./stubs/git-access-tokens";
 
 const basic = (value: string) => `Basic ${Buffer.from(value).toString("base64")}`;
 
@@ -36,5 +39,16 @@ describe("Git access token credentials", () => {
     ["a truncated token", `Bearer ${generateGitAccessToken().slice(0, -1)}`],
   ])("treats %s as no credential", (_case, header) => {
     expect(gitAccessTokenFrom(header)).toBeNull();
+  });
+
+  it("grants only the read and write scopes it issues", async () => {
+    const repoId = "12345678-1234-1234-1234-123456789abc";
+    const read = await gitAccessTokenFixture({ repoId, scope: "read" });
+    const unknown = await gitAccessTokenFixture({ repoId });
+    const db = { gitAccessToken: gitAccessTokenDelegate([read.row, { ...unknown.row, scope: "admin" as never }]) };
+    await runWithDbProvider(async () => db as never, async () => {
+      expect(await findGitAccess(basicCredential(read.token), repoId)).toEqual({ ownerId: "owner", scope: "read", active: true });
+      expect(await findGitAccess(basicCredential(unknown.token), repoId)).toBeNull();
+    });
   });
 });
