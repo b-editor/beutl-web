@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
-import { S3GitObjectBucket } from "../packages/api/src/git/s3-object-store";
+import { S3GitObjectBucket, sha256Base64 } from "../packages/api/src/git/s3-object-store";
 import { createStorageBucket } from "../packages/api/src/storage/bucket-from-env";
 
 const env = {
@@ -58,6 +58,42 @@ describe("Backblaze B2 S3 storage adapter", () => {
       } finally { vi.unstubAllGlobals(); }
     },
   );
+
+  it("presigns an LFS PUT that B2 binds to its length and SHA-256 checksum", async () => {
+    const fetcher = vi.fn();
+    const bucket = new S3GitObjectBucket({ ...env, BEUTL_S3_SESSION_TOKEN: "session" }, fetcher as never);
+    const oid = createHash("sha256").update("x").digest("hex");
+    const key = `git-lfs/repos/r/${oid.slice(0, 2)}/${oid}`;
+    const url = new URL(await bucket.presignUpload(key, 1, oid, 3600));
+    expect(`${url.origin}${url.pathname}`).toBe(`${env.BEUTL_S3_ENDPOINT}beutl-test/${key}`);
+    expect(url.searchParams.get("X-Amz-Expires")).toBe("3600");
+    expect(url.searchParams.get("X-Amz-SignedHeaders")).toBe("content-length;host;x-amz-checksum-sha256");
+    expect(url.searchParams.get("X-Amz-Credential")).toMatch(/^test-key\/\d{8}\/us-east-005\/s3\/aws4_request$/u);
+    expect(url.searchParams.get("X-Amz-Security-Token")).toBe("session");
+    expect(url.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/u);
+    expect(url.toString()).not.toContain("test-secret");
+    expect(new URL(await bucket.presignUpload(key, 2, oid, 3600)).searchParams.get("X-Amz-Signature"))
+      .not.toBe(url.searchParams.get("X-Amz-Signature"));
+    expect(sha256Base64(oid)).toBe(Buffer.from(oid, "hex").toString("base64"));
+    for (const [size, sha256, expires] of [[-1, oid, 60], [1, "x", 60], [1, oid, 0], [1, oid, 8 * 24 * 3600]] as const)
+      await expect(bucket.presignUpload(key, size, sha256, expires)).rejects.toThrow("Invalid presigned upload");
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("asks B2 for the stored SHA-256 checksum only when verifying an upload", async () => {
+    const requests: Request[] = [];
+    const fetcher = vi.fn(async (request: Request) => {
+      requests.push(request);
+      return new Response(null, { status: 200, headers: {
+        "Content-Length": "3", "x-amz-version-id": "v1", "x-amz-checksum-sha256": "c3VtPQ==" } });
+    });
+    const bucket = new S3GitObjectBucket(env, fetcher as typeof fetch);
+    expect(await bucket.head("git-lfs/item")).toEqual({ size: 3, versionId: "v1" });
+    expect(await bucket.head("git-lfs/item", undefined, { checksum: true }))
+      .toEqual({ size: 3, versionId: "v1", checksumSha256: "c3VtPQ==" });
+    expect(requests.map((request) => request.headers.get("x-amz-checksum-mode"))).toEqual([null, "ENABLED"]);
+    expect(requests[1].headers.get("authorization")).toContain("x-amz-checksum-mode");
+  });
 
   it("rejects missing-bucket writes while preserving missing reads and idempotent aborts", async () => {
     const bucket = new S3GitObjectBucket(env, (async () =>

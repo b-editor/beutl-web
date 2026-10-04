@@ -16,7 +16,7 @@ export interface GitEnvironment extends GitS3Environment {
 /** The identity a Worker route verified before it reaches the repository object. */
 export type GitAccess = { repoId: string; ownerId: string; scope: GitScope };
 
-export type GitMediaAction = "create" | "part" | "accept" | "cancel" | "complete" | "checkpoint";
+export type GitMediaAction = "create" | "part" | "accept" | "cancel" | "complete" | "checkpoint" | "verify";
 
 /** Cron cleanup needs only storage, so it keeps running while the API is disabled. */
 export function gitStorageConfigured(env: GitEnvironment | undefined): boolean {

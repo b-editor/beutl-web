@@ -2,11 +2,16 @@ import type { GitObjectBucket } from "./git-object-store";
 import type { GitStorageAccounting } from "./accounting";
 import type { Sha256Checkpoint } from "./checkpoint-sha256";
 import { readBodyAtMost } from "./git-http";
+import { sha256Base64 } from "./s3-object-store";
 import type { GitScope } from "./tokens";
 
 export const MAX_LFS_OBJECT_BYTES = 20 * 1024 ** 3;
+/** B2 accepts one PUT of at most 5 GB; larger objects need the desktop's beutl-tus agent. */
+export const MAX_BASIC_LFS_OBJECT_BYTES = 5_000_000_000;
 export const MIN_TUS_PART_BYTES = 5 * 1024 ** 2;
 export const UPLOAD_LIFETIME_MS = 24 * 60 * 60 * 1000;
+// Git LFS asks for a new batch when an action expires before its transfer starts.
+const UPLOAD_URL_LIFETIME_MS = 60 * 60_000;
 export interface GitDurableStorage {
   get<T>(key: string): Promise<T | undefined>;
   put<T>(key: string, value: T): Promise<void>;
@@ -65,12 +70,15 @@ export async function handleLfsBatch(
       (input.transfers !== undefined && !Array.isArray(input.transfers)) ||
       !Array.isArray(input.objects) || input.objects.length > 100 ||
       input.objects.some((o: any) => !o || !/^[0-9a-f]{64}$/u.test(o.oid) ||
-        !Number.isSafeInteger(o.size) || o.size < 0 || o.size > MAX_LFS_OBJECT_BYTES))
+        !Number.isSafeInteger(o.size) || o.size < 0))
     return json({ message: "Invalid LFS batch" }, 400);
   if (input.operation === "upload" && scope !== "write") return json({ message: "Forbidden" }, 403);
-  if (input.operation === "upload" && !input.transfers?.includes("beutl-tus"))
-    return json({ message: "Uploads require the beutl-tus transfer agent" }, 422);
+  // The desktop's agent resumes uploads of any size; stock Git LFS PUTs each object to B2.
+  const transfer = input.transfers?.includes("beutl-tus") ? "beutl-tus" : "basic";
+  if (input.transfers && !input.transfers.includes(transfer))
+    return json({ message: "LFS needs the basic or beutl-tus transfer" }, 422);
   const ownerId = request.headers.get("x-beutl-git-owner-id") ?? "";
+  const authorization = request.headers.get("authorization");
   const base = `${new URL(request.url).origin}/api/v3/git/${repoId}.git/info/lfs/objects`;
   const objects = [];
   for (const object of input.objects) {
@@ -86,12 +94,19 @@ export async function handleLfsBatch(
     if (input.operation === "download") {
       objects.push(record?.verified && record.versionId
         ? { oid, size, authenticated: true, actions: { download: {
-          href: `${base}/${oid}/download`, header: { Authorization: request.headers.get("authorization") },
+          href: `${base}/${oid}/download`, header: { Authorization: authorization },
         } } }
         : { oid, size, error: { code: 404, message: "LFS object is not verified" } });
       continue;
     }
     if (record?.verified) { objects.push({ oid, size }); continue; }
+    // Objects already stored need no transfer, whatever their size.
+    if (size > (transfer === "basic" ? MAX_BASIC_LFS_OBJECT_BYTES : MAX_LFS_OBJECT_BYTES)) {
+      objects.push({ oid, size, error: { code: 422, message: size > MAX_LFS_OBJECT_BYTES
+        ? "LFS objects are limited to 20 GiB"
+        : "LFS objects over 5 GB need the Beutl desktop app" } });
+      continue;
+    }
     if (!record) {
       const records = await storage.list<LfsRecord>({ prefix: "lfs:" });
       const used = [...records.values()].reduce((n, r) => n + r.size, 0);
@@ -104,13 +119,28 @@ export async function handleLfsBatch(
       await storage.put(`lfs:${oid}`, record);
       await scheduleGitMaintenance(storage, expiresAt + 1000);
     }
-    // The client's own repository credential authorizes the transfer.
-    objects.push({ oid, size, authenticated: true, actions: { upload: {
-      href: `${base}/${oid}/tus`, header: { Authorization: request.headers.get("authorization") },
-      expires_at: new Date(record.expiresAt).toISOString(),
-    } } });
+    // The client's own repository credential authorizes tus and verification requests.
+    const credential = { Authorization: authorization };
+    const reservedUntil = new Date(record.expiresAt).toISOString();
+    if (transfer === "beutl-tus") {
+      objects.push({ oid, size, authenticated: true, actions: {
+        upload: { href: `${base}/${oid}/tus`, header: credential, expires_at: reservedUntil },
+      } });
+      continue;
+    }
+    if (!bucket.presignUpload) throw new Error("Object storage cannot presign LFS uploads");
+    const lifetime = Math.max(1000, Math.min(UPLOAD_URL_LIFETIME_MS, record.expiresAt - Date.now()));
+    objects.push({ oid, size, authenticated: true, actions: {
+      // B2 stores the PUT body only if its length and SHA-256 match this object.
+      upload: {
+        href: await bucket.presignUpload(lfsKey(repoId, oid), size, oid, Math.floor(lifetime / 1000)),
+        header: { "x-amz-checksum-sha256": sha256Base64(oid) },
+        expires_at: new Date(Date.now() + lifetime).toISOString(),
+      },
+      verify: { href: `${base}/${oid}/verify`, header: credential, expires_at: reservedUntil },
+    } });
   }
-  return new Response(JSON.stringify({ transfer: input.transfers?.includes("beutl-tus") ? "beutl-tus" : "basic", objects }), {
+  return new Response(JSON.stringify({ transfer, objects }), {
     headers: { "Content-Type": "application/vnd.git-lfs+json", "Cache-Control": "no-store" },
   });
 }

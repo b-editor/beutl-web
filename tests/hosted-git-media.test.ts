@@ -4,7 +4,7 @@ import { runWithDbProvider } from "@beutl/db";
 import { api } from "@beutl/api";
 import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable-object";
 import { gitRepositoryObject } from "../packages/api/src/git/environment";
-import { appendTusUpload, createTusUpload, downloadLfsObject, readTusUpload, type LfsObject } from "../packages/api/src/git/media-worker";
+import { appendTusUpload, createTusUpload, downloadLfsObject, readTusUpload, verifyLfsUpload, type LfsObject } from "../packages/api/src/git/media-worker";
 import { basicCredential, gitAccessTokenDelegate, gitAccessTokenFixture } from "./stubs/git-access-tokens";
 import { type GitDurableStorage, type LfsRecord, lfsKey } from "../packages/api/src/git/lfs";
 
@@ -22,11 +22,27 @@ class Storage implements GitDurableStorage {
   async getAlarm() { return this.alarm; }
   async setAlarm(time: number) { this.alarm = time; }
 }
+const checksum = (hex: string) => Buffer.from(hex, "hex").toString("base64");
 class Bucket {
-  versions = new Map<string, { key: string; bytes: Uint8Array; size: number }>();
+  versions = new Map<string, { key: string; bytes: Uint8Array; size: number; checksum?: string }>();
   parts = new Map<number, Uint8Array>(); reads = 0; uploads = 0; deletes = 0;
   virtualSize?: number;
   pruned: string[][] = [];
+  presigned: { key: string; size: number; sha256: string; expiresIn: number }[] = [];
+  async presignUpload(key: string, size: number, sha256: string, expiresIn: number) {
+    this.presigned.push({ key, size, sha256, expiresIn });
+    return `https://b2.test/${key}?size=${size}&sha256=${sha256}`;
+  }
+  /** Emulates B2 enforcing the presigned length and the client's x-amz-checksum-sha256 header. */
+  presignedPut(url: string, header: Record<string, string>, bytes: Uint8Array) {
+    const target = new URL(url);
+    const sha256 = target.searchParams.get("sha256")!;
+    if (bytes.length !== Number(target.searchParams.get("size"))) return 403;
+    if (header["x-amz-checksum-sha256"] !== checksum(sha256)) return 403;
+    if (hash(bytes) !== sha256) return 400;
+    this.versions.set(`put-${this.versions.size + 1}`, { key: target.pathname.slice(1), bytes, size: bytes.length, checksum: checksum(sha256) });
+    return 200;
+  }
   async createMultipartUpload(key: string) { return this.resumeMultipartUpload(key, "upload-1"); }
   resumeMultipartUpload(key: string, uploadId: string) {
     return { uploadId, uploadPart: async (partNumber: number, stream: ReadableStream, length: number) => {
@@ -41,9 +57,10 @@ class Bucket {
       return { size: this.virtualSize ?? size, versionId: "version-1" };
     }, abort: async () => { this.parts.clear(); } };
   }
-  async head(key: string, versionId?: string) {
-    const entry = versionId ? this.versions.get(versionId) : [...this.versions.values()].find(v => v.key === key);
-    return entry ? { size: entry.size, versionId: versionId ?? "version-1" } : null;
+  async head(key: string, versionId?: string, options?: { checksum?: boolean }) {
+    const id = versionId ?? [...this.versions].filter(([, v]) => v.key === key).at(-1)?.[0];
+    const entry = id ? this.versions.get(id) : undefined;
+    return entry ? { size: entry.size, versionId: id, ...(options?.checksum ? { checksumSha256: entry.checksum } : {}) } : null;
   }
   async getRange(key: string, versionId: string, start: number, length: number) {
     const entry = this.versions.get(versionId)!;
@@ -109,7 +126,18 @@ function fixture() {
     }, ...(bytes ? { body: bytes } : {}) });
     return bytes ? appendTusUpload(request, object(oid), resource) : readTusUpload(request, object(oid), resource);
   }
-  return { storage, bucket, accounting, durable, object, reserve, transfer, bodies };
+  async function batch(body: unknown) {
+    const r = await repository.forward(new Request(`https://beutl.test/api/v3/git/${repoId}.git/info/lfs/objects/batch`, {
+      method: "POST", headers: { Authorization: "Basic client-credential" }, body: JSON.stringify(body),
+    }), access);
+    return { status: r.status, body: await r.json() };
+  }
+  const verify = (oid: string, body: unknown) => verifyLfsUpload(new Request(
+    `https://beutl.test/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/verify`, {
+      method: "POST", headers: { "Content-Type": "application/vnd.git-lfs+json" },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    }), object(oid));
+  return { storage, bucket, accounting, durable, object, reserve, transfer, bodies, batch, verify };
 }
 describe("Worker media transfers and durable metadata", () => {
   it("uploads, verifies and streams a pinned version with Range and If-Range", async () => {
@@ -199,5 +227,87 @@ describe("Worker media transfers and durable metadata", () => {
       expect((await send(moved.token)).status).toBe(404);
       expect(env.BEUTL_GIT_REPOSITORIES.get).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("Stock Git LFS basic transfers", () => {
+  it("presigns a length- and checksum-bound B2 PUT and publishes it once verified", async () => {
+    const f = fixture(), bytes = new TextEncoder().encode("a stock git-lfs upload"), oid = hash(bytes);
+    const reserved = await f.batch({ operation: "upload", transfers: ["lfs-standalone-file", "basic", "ssh"],
+      objects: [{ oid, size: bytes.length }] });
+    expect(reserved.status).toBe(200);
+    expect(reserved.body.transfer).toBe("basic");
+    const [entry] = reserved.body.objects;
+    expect(entry.authenticated).toBe(true);
+    expect(entry.actions.upload.header).toEqual({ "x-amz-checksum-sha256": checksum(oid) });
+    expect(entry.actions.verify).toMatchObject({ header: { Authorization: "Basic client-credential" },
+      href: `https://beutl.test/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/verify` });
+    expect(f.bucket.presigned).toEqual([{ key: lfsKey(repoId, oid), size: bytes.length, sha256: oid, expiresIn: 3600 }]);
+    expect(Date.parse(entry.actions.upload.expires_at) - Date.now()).toBeLessThanOrEqual(3600_000);
+    expect(f.accounting.reserveLfs).toHaveBeenCalledOnce();
+
+    // Verification before the PUT finds nothing to publish.
+    expect((await f.verify(oid, { oid, size: bytes.length })).status).toBe(404);
+    expect(f.bucket.presignedPut(entry.actions.upload.href, entry.actions.upload.header, bytes)).toBe(200);
+    expect((await f.verify(oid, { oid, size: bytes.length })).status).toBe(200);
+    expect(await f.storage.get(`lfs:${oid}`)).toMatchObject({ verified: true, versionId: "put-1" });
+    expect((await f.verify(oid, { oid, size: bytes.length })).status).toBe(200);
+    expect(f.accounting.commitLfs).toHaveBeenCalledOnce();
+
+    const again = await f.batch({ operation: "upload", objects: [{ oid, size: bytes.length }] });
+    expect(again.body.objects).toEqual([{ oid, size: bytes.length }]);
+    const download = (await f.batch({ operation: "download", objects: [{ oid, size: bytes.length }] })).body.objects[0];
+    expect(await (await downloadLfsObject(new Request(download.actions.download.href), f.object(oid))).text())
+      .toBe("a stock git-lfs upload");
+  });
+  it("publishes only an object B2 stored with the reserved length and SHA-256", async () => {
+    const f = fixture(), bytes = new Uint8Array([1, 2, 3]), oid = hash(bytes);
+    const [entry] = (await f.batch({ operation: "upload", objects: [{ oid, size: 3 }] })).body.objects;
+    expect(f.bucket.presignedPut(entry.actions.upload.href, entry.actions.upload.header, new Uint8Array([1, 2, 3, 4]))).toBe(403);
+    expect(f.bucket.presignedPut(entry.actions.upload.href, entry.actions.upload.header, new Uint8Array([3, 2, 1]))).toBe(400);
+    // A tus multipart completion at the same key has no stored checksum.
+    f.bucket.versions.set("version-1", { key: lfsKey(repoId, oid), bytes, size: 3 });
+    const unverified = await f.verify(oid, { oid, size: 3 });
+    expect(unverified.status).toBe(404);
+    expect(unverified.headers.get("content-type")).toBe("application/vnd.git-lfs+json");
+    expect(await unverified.json()).toEqual({ message: "LFS object has not been uploaded" });
+    expect((await f.verify(oid, { oid, size: 4 })).status).toBe(422);
+    expect((await f.verify(oid, { oid: "f".repeat(64), size: 3 })).status).toBe(422);
+    expect((await f.verify(oid, "{")).status).toBe(400);
+    expect(f.accounting.commitLfs).not.toHaveBeenCalled();
+    expect(await f.storage.get(`lfs:${oid}`)).toMatchObject({ verified: false });
+    await f.storage.put(`lfs:${oid}`, { ...(await f.storage.get<LfsRecord>(`lfs:${oid}`))!, expiresAt: Date.now() - 1 });
+    expect((await f.verify(oid, { oid, size: 3 })).status).toBe(410);
+  });
+  it("leaves objects over 5 GB to the desktop agent and limits every object to 20 GiB", async () => {
+    const f = fixture();
+    const objects = [{ oid: "a".repeat(64), size: 5_000_000_000 }, { oid: "b".repeat(64), size: 5_000_000_001 },
+      { oid: "c".repeat(64), size: 20 * 1024 ** 3 + 1 }];
+    const basic = await f.batch({ operation: "upload", objects });
+    expect(basic.body.objects[0].actions.upload.href).toMatch(/^https:\/\/b2\.test\//u);
+    expect(basic.body.objects.slice(1)).toEqual([
+      { ...objects[1], error: { code: 422, message: "LFS objects over 5 GB need the Beutl desktop app" } },
+      { ...objects[2], error: { code: 422, message: "LFS objects are limited to 20 GiB" } },
+    ]);
+    expect(f.accounting.reserveLfs).toHaveBeenCalledOnce();
+    const agent = await fixture().batch({ operation: "upload", transfers: ["basic", "beutl-tus"], objects: [objects[1]] });
+    expect(agent.body.transfer).toBe("beutl-tus");
+    expect(agent.body.objects[0].actions.upload.href).toMatch(/\/tus$/u);
+    // Pushing a commit that references media the desktop already stored needs no transfer.
+    await f.storage.put(`lfs:${objects[1].oid}`, { size: objects[1].size, expiresAt: 0, verified: true,
+      resourceId: crypto.randomUUID(), versionId: "version-1", offset: objects[1].size, partCount: 1 });
+    expect((await f.batch({ operation: "upload", objects: [objects[1]] })).body.objects).toEqual([objects[1]]);
+  });
+  it("refuses transfers it cannot serve and never presigns past the reservation", async () => {
+    const f = fixture(), oid = "d".repeat(64);
+    expect((await f.batch({ operation: "upload", transfers: ["tus"], objects: [{ oid, size: 1 }] })).status).toBe(422);
+    expect(f.accounting.reserveLfs).not.toHaveBeenCalled();
+    await f.batch({ operation: "upload", objects: [{ oid, size: 1 }] });
+    const record = (await f.storage.get<LfsRecord>(`lfs:${oid}`))!;
+    await f.storage.put(`lfs:${oid}`, { ...record, expiresAt: Date.now() + 120_000 });
+    const [entry] = (await f.batch({ operation: "upload", objects: [{ oid, size: 1 }] })).body.objects;
+    expect(f.bucket.presigned.at(-1)!.expiresIn).toBeGreaterThanOrEqual(119);
+    expect(f.bucket.presigned.at(-1)!.expiresIn).toBeLessThanOrEqual(120);
+    expect(Date.parse(entry.actions.upload.expires_at)).toBeLessThanOrEqual(Date.now() + 120_000);
   });
 });

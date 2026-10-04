@@ -22,7 +22,11 @@ export interface GitObjectBucket {
   pruneVersions?(key: string, keepVersionIds: readonly string[]): Promise<void>;
   pruneGitVersions?(prefix: string): Promise<void>;
   cleanupMultipartUploads?(prefix: string, activeUploadIds: readonly string[], initiatedBefore: number): Promise<void>;
-  head(key: string, versionId?: string): Promise<{ size: number; versionId?: string } | null>;
+  /** With `checksum`, also returns the SHA-256 checksum the object was stored with, base64-encoded. */
+  head(key: string, versionId?: string, options?: { checksum?: boolean }):
+    Promise<{ size: number; versionId?: string; checksumSha256?: string } | null>;
+  /** A presigned PUT URL that only accepts a body of exactly `size` bytes with this SHA-256. */
+  presignUpload?(key: string, size: number, sha256Hex: string, expiresInSeconds: number): Promise<string>;
   list(options: {
     prefix: string;
     delimiter?: string;
