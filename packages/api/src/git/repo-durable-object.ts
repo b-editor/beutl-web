@@ -375,8 +375,10 @@ export class GitRepositoryDurableObject {
   private async collectHistory(repoId: string): Promise<void> {
     const storage = this.state.storage;
     const pushed = await storage.get<number>("lastPushFinishedAt") ?? 0;
-    if (pushed <= (await storage.get<number>("historyCollectedAt") ?? 0) ||
-        Date.now() < (await storage.get<number>("historyCollectionAt") ?? 0)) return;
+    if (pushed <= (await storage.get<number>("historyCollectedAt") ?? 0)) return;
+    const retryAt = await storage.get<number>("historyCollectionAt") ?? 0;
+    // An earlier alarm may have taken the place of the retry's.
+    if (Date.now() < retryAt) { await scheduleGitMaintenance(storage, retryAt); return; }
     try {
       const collected = await collectUnreachableHistory(this.objectBucket(), repoId);
       if (collected) {

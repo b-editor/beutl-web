@@ -85,8 +85,8 @@ function entryHeader(type: number, size: number): Uint8Array {
  * objects of older packs, so the bases of kept deltas stay too. Old packs and
  * loose objects are deleted only after the new pack indexes to exactly the
  * kept objects. The caller must hold the repository's queue, so no push runs
- * meanwhile. Returns the bytes before and after, or null when nothing is
- * unreachable or the rewrite would not shrink the stored history.
+ * meanwhile. Packs a push left unindexed are deleted in any case. Returns the
+ * bytes before and after, or null when nothing was deleted.
  */
 export async function collectUnreachableHistory(bucket: GitObjectBucket, repoId: string):
   Promise<{ objects: number; bytes: number; remainingBytes: number } | null> {
@@ -99,6 +99,8 @@ export async function collectUnreachableHistory(bucket: GitObjectBucket, repoId:
   const packs: { name: string; time: number; entries: Map<string, Entry> }[] = [];
   const loose = new Map<string, string>();
   const removable: string[] = [];
+  // Packs whose push stopped before indexing hold nothing Git can read.
+  const unindexed: { key: string; size: number }[] = [];
   let bytes = 0;
   for (const { key, size } of listing) {
     const name = key.slice(`${objectsPrefix}pack/`.length);
@@ -114,9 +116,10 @@ export async function collectUnreachableHistory(bucket: GitObjectBucket, repoId:
     const time = PACK.exec(name)?.[1];
     if (time === undefined) throw new Error(`Unexpected Git pack name ${name}`);
     bytes += size;
-    const index = await store.get(key.replace(/\.pack$/u, ".idx"));
-    // A pack whose push stopped before indexing holds nothing Git can read.
-    if (!index) { removable.push(key); continue; }
+    const indexKey = key.replace(/\.pack$/u, ".idx");
+    if (!listing.some((object) => object.key === indexKey)) { unindexed.push({ key, size }); continue; }
+    const index = await store.get(indexKey);
+    if (!index) throw new Error(`Git pack index ${name.replace(/\.pack$/u, ".idx")} disappeared while it was read`);
     bytes += index.byteLength;
     const pack = await fs.promises.readFile(`${packDir}/${name}`) as Uint8Array;
     packs.push({ name, time: Number(time), entries: readEntries(pack, readIndex(index)) });
@@ -143,8 +146,14 @@ export async function collectUnreachableHistory(bucket: GitObjectBucket, repoId:
     else if (!entry && !loose.has(oid)) throw new Error(`Git object ${oid} is not stored`);
   }
   const unreachable = [...chosen.keys(), ...loose.keys()].filter((oid) => !kept.has(oid));
+  // Without a rewrite, only the unindexed packs go.
+  const dropUnindexed = async () => {
+    if (!unindexed.length) return null;
+    for (const { key } of unindexed) await store.delete(key);
+    return { objects: 0, bytes, remainingBytes: bytes - unindexed.reduce((sum, { size }) => sum + size, 0) };
+  };
   // Duplicates across packs count too: the rewrite stores each object once.
-  if (!unreachable.length && stored === kept.size) return null;
+  if (!unreachable.length && stored === kept.size) return dropUnindexed();
 
   // Each delta follows its base, so indexing the new pack never looks outside it.
   const order: string[] = [];
@@ -178,7 +187,7 @@ export async function collectUnreachableHistory(bucket: GitObjectBucket, repoId:
   const pack = concat(body, fromHex(await sha1(body)));
   // A rewritten delta names its base in 20 bytes, so freeing almost nothing
   // could grow the history toward its limit; such garbage waits for more.
-  if (pack.byteLength + indexBytes(order.length) >= bytes) return null;
+  if (pack.byteLength + indexBytes(order.length) >= bytes) return dropUnindexed();
   const name = `pack-${Date.now()}.pack`;
   if (packs.some((existing) => existing.name === name)) throw new Error("Git pack name is taken");
   await fs.promises.writeFile(`${packDir}/${name}`, pack);
@@ -189,7 +198,7 @@ export async function collectUnreachableHistory(bucket: GitObjectBucket, repoId:
     throw new Error("Collected Git pack does not hold exactly the kept objects");
   }
   // Each index goes before its pack, so a partial run leaves only readable packs.
-  for (const key of removable) await store.delete(key);
+  for (const key of [...removable, ...unindexed.map(({ key }) => key)]) await store.delete(key);
   return { objects: unreachable.length, bytes, remainingBytes: pack.byteLength + indexBytes(order.length) };
 }
 

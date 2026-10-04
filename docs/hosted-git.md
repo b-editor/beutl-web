@@ -187,8 +187,10 @@ base even when nothing reaches that base any more. Old packs and loose objects
 are deleted only after the new pack indexes to exactly the kept objects; the
 version sweep then removes their B2 versions and the account's Git bytes are
 settled. Collection is skipped when it would not shrink the stored history,
-since a rewritten delta names its base in 20 bytes. If any ref or object cannot
-be read, nothing is deleted and the walk is retried an hour later.
+since a rewritten delta names its base in 20 bytes; a pack that an interrupted
+push left without an index holds nothing Git can read and is deleted either
+way. If any ref or object cannot be read, nothing is deleted and the walk is
+retried an hour later.
 
 Validation uses mocked B2/CockroachDB interfaces, resumable SHA-256 vectors,
 streaming/range tests and native Git push/clone/pull. Stock Git LFS (basic) and

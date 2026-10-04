@@ -203,6 +203,20 @@ describe("unreachable Git history collection", () => {
     } finally { await f.close(); }
   }, 60_000);
 
+  it("deletes a pack a push left unindexed even when every indexed object is reachable", async () => {
+    const f = await fixture();
+    try {
+      await f.commit({ "project.txt": "first\n" }, "first");
+      await f.git("push", "-q", "origin", "main");
+      const packs = f.bucket.packKeys();
+      await f.bucket.put(`${objectsPrefix}pack/recv-1.pack`, randomBytes(4096));
+      await f.collect();
+      expect(f.bucket.packKeys()).toEqual(packs);
+      expect(f.accounting.settleHistory).toHaveBeenLastCalledWith(repoId, expect.any(Number));
+      await f.clone();
+    } finally { await f.close(); }
+  }, 60_000);
+
   it("deletes nothing when part of the history cannot be read, and retries an hour later", async () => {
     const f = await fixture();
     try {
@@ -222,7 +236,12 @@ describe("unreachable Git history collection", () => {
       error.mockRestore();
       expect([...f.bucket.objects.keys()].filter((key) => key.startsWith(objectsPrefix)))
         .toEqual([...objects.keys()].filter((key) => key.startsWith(objectsPrefix)));
-      expect(await f.storage.get<number>("historyCollectionAt")).toBeGreaterThan(Date.now() + 59 * 60_000);
+      const retryAt = (await f.storage.get<number>("historyCollectionAt"))!;
+      expect(retryAt).toBeGreaterThan(Date.now() + 59 * 60_000);
+      // An earlier alarm that takes the retry's place leaves the retry scheduled.
+      f.storage.alarm = null;
+      await f.collect();
+      expect(f.storage.alarm).toBe(retryAt);
 
       // An hour later the readable history is collected.
       f.bucket.failReads = undefined;
