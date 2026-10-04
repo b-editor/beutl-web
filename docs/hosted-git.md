@@ -108,7 +108,8 @@ requests must contain 5–32 MiB; the desktop sends 32 MiB parts. A final part c
 be smaller, including an empty object. This deliberately avoids persisting byte
 tails in Durable Objects. Basic signed PUT and a second multipart protocol are
 not offered. HEAD recovers the accepted offset after interruption or a lost
-response. Upload reservations and OID-scoped tokens expire after 24 hours.
+response. Upload reservations expire after 24 hours; the client authenticates
+each tus request with its repository access token.
 
 An ordinary Worker streams each part into a B2 multipart upload. The repository
 Durable Object serializes metadata, reservations, offsets and receipts. It never
