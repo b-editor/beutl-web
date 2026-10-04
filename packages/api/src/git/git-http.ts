@@ -1,10 +1,14 @@
-import { createGitFs } from "git-fs-s3";
+import git from "isomorphic-git";
+import { concat, createGitFs } from "git-fs-s3";
 import {
   applyReceivePack,
   ensureRepoInitialized,
+  FLUSH,
   handleInfoRefs,
   handleUploadPack,
+  parsePktLines,
   parseReceivePackBody,
+  pktLine,
   receivePackResponse,
 } from "git-fs-s3/http";
 import { MAX_GIT_NEGOTIATION_BYTES, MAX_GIT_PUSH_BYTES } from "@beutl/core";
@@ -95,23 +99,82 @@ export function isGitService(value: string | undefined): value is GitService {
 
 export async function advertiseGitRefs(bucket: GitObjectBucket, repoId: string, service: GitService): Promise<Response> {
   const { repo } = await openRepository(bucket, repoId);
-  return response(await handleInfoRefs(repo, { service }));
+  const result = await handleInfoRefs(repo, { service });
+  return response(service === "git-upload-pack" ? { ...result, body: advertiseMultiAck(result.body) } : result);
+}
+
+/**
+ * git-fs-s3 advertises no multi_ack mode. Without one, a stateless HTTP client
+ * replays only acknowledged haves in its final request, so the server never
+ * learned what it already had and every fetch received the whole history.
+ */
+function advertiseMultiAck(body: Uint8Array): Uint8Array {
+  let added = false;
+  return concat(...parsePktLines(body).map((line) => {
+    if (line === null) return FLUSH;
+    if (!added && line.includes("\0")) { added = true; return pktLine(line.replace("\0", "\0multi_ack_detailed ")); }
+    return pktLine(line);
+  }));
+}
+
+const encodePktLines = (lines: (string | null)[]) => concat(...lines.map((line) => line === null ? FLUSH : pktLine(line)));
+const haveOf = (line: string | null) => line?.startsWith("have ") ? line.slice(5, 45) : undefined;
+
+/** The haves this repository also holds, in request order; their ancestry is common too. */
+async function commonObjects(repo: ReturnType<typeof readGitRepository>["repo"], haves: string[]): Promise<string[]> {
+  const common: string[] = [];
+  for (const oid of new Set(haves)) {
+    try {
+      await git.readObject({ ...repo, oid, format: "deflated" });
+      common.push(oid);
+    } catch (error) {
+      if ((error as { code?: string }).code !== "NotFoundError") throw error;
+    }
+  }
+  return common;
 }
 
 export async function uploadGitPack(request: Request, bucket: GitObjectBucket, repoId: string): Promise<Response> {
   // Reject an oversized body before any repository storage I/O.
-  const body = await readBodyAtMost(request, MAX_GIT_NEGOTIATION_BYTES);
+  let body = await readBodyAtMost(request, MAX_GIT_NEGOTIATION_BYTES);
   const { store, prefix, fs, repo } = await openRepository(bucket, repoId);
   const objects = await store.list(`${prefix}/repo.git/objects/`);
   if (objects.objects.reduce((size, object) => size + object.size, 0) > MAX_GIT_REPOSITORY_BYTES) {
     return new Response("Git history exceeds the serving limit", { status: 413 });
   }
-  const result = await handleUploadPack(repo, body, {
-    beforeWalk: async () => {
-      await fs.detectLooseObjects(GITDIR);
-      await fs.prefetchPacks(GITDIR);
-    },
-  });
+  let prepared = false;
+  const prepare = async () => {
+    if (prepared) return;
+    prepared = true;
+    await fs.detectLooseObjects(GITDIR);
+    await fs.prefetchPacks(GITDIR);
+  };
+  // multi_ack_detailed negotiation (see advertiseMultiAck). Each round ACKs the
+  // haves this repository holds; the client replays them with "done".
+  const lines = parsePktLines(body);
+  const haves = lines.map(haveOf).filter((oid): oid is string => oid !== undefined);
+  const done = lines.some((line) => line?.startsWith("done"));
+  let common: string[] = [];
+  // Only the client's first want line names the capabilities it uses.
+  const multiAck = lines.find((line) => line?.startsWith("want "))?.split(" ").includes("multi_ack_detailed") ?? false;
+  if (haves.length && multiAck) {
+    await prepare();
+    common = await commonObjects(repo, haves);
+    if (!done) {
+      return new Response(encodePktLines([...common.map((oid) => `ACK ${oid} common\n`), "NAK\n"]) as Uint8Array<ArrayBuffer>, {
+        status: 200, headers: { "Content-Type": "application/x-git-upload-pack-result", "Cache-Control": "no-cache" },
+      });
+    }
+    // Only common haves bound the pack; git-fs-s3 would wait to retry each unknown one.
+    const known = new Set(common);
+    body = encodePktLines(lines.filter((line) => haveOf(line) === undefined || known.has(haveOf(line)!)));
+  }
+  const result = await handleUploadPack(repo, body, { beforeWalk: prepare });
+  // After "done", multi_ack_detailed answers with the last common object instead of NAK.
+  const nak = pktLine("NAK\n");
+  if (common.length && nak.every((byte, i) => result.body[i] === byte)) {
+    result.body = concat(pktLine(`ACK ${common.at(-1)}\n`), result.body.subarray(nak.length));
+  }
   if (result.body.byteLength > MAX_GIT_REPOSITORY_BYTES * 2) {
     return new Response("Git pack exceeds the serving limit", { status: 413 });
   }
