@@ -2,7 +2,7 @@ import { getDb } from "./provider";
 import type { PrismaTransaction } from "./transaction";
 import type { AiImageOutputTokenProfile, AiImageSizeMode } from "@beutl/core";
 
-export type AiOperationModelRecord = {
+type AiOperationModelRecord = {
   operation: string;
   modelId: string;
   /** Which provider runs this model. Rows predating the column say "openrouter". */

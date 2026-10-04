@@ -4,9 +4,6 @@ import {
   type PrismaTransaction,
 } from "./transaction";
 
-export const LEGACY_STRIPE_CUSTOMER_MIGRATION_COHORT =
-  "pre-owner-metadata-2026-08-09";
-
 const ownershipSelect = {
   stripeId: true,
   userId: true,
@@ -83,21 +80,6 @@ export async function findStripeCustomerOwnershipByStripeId({
   return await db.stripeCustomerOwnership.findUnique({
     where: { stripeId },
     select: ownershipSelect,
-  });
-}
-
-export async function deleteCustomerByUserId({
-  userId,
-  prisma,
-}: {
-  userId: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma ?? await getDb();
-  return await db.customer.deleteMany({
-    where: {
-      userId: userId,
-    },
   });
 }
 
@@ -251,36 +233,3 @@ export async function markStripeCustomerOwnershipVerified({
   });
 }
 
-export async function upsertCustomerMapping({
-  userId,
-  stripeId,
-  verifiedAt = new Date(),
-  prisma,
-}: {
-  userId: string;
-  stripeId: string;
-  verifiedAt?: Date;
-  prisma?: PrismaTransaction;
-}) {
-  const upsert = async (tx: PrismaTransaction) => {
-    const deletionIntent = await tx.accountDeletionIntent.findFirst({
-      where: { userId, expiresAt: { gt: new Date() } },
-      select: { userId: true },
-    });
-    if (deletionIntent) {
-      throw new Error("Account deletion is already authorized");
-    }
-    await ensureVerifiedStripeCustomerOwnership({
-      userId,
-      stripeId,
-      verifiedAt,
-      prisma: tx,
-    });
-    return await tx.customer.upsert({
-      where: { userId },
-      create: { userId, stripeId },
-      update: { stripeId },
-    });
-  };
-  return prisma ? await upsert(prisma) : await startRetryableTransaction(upsert);
-}

@@ -12,7 +12,7 @@
 // has all arrived, so a reader that misses a segment or reads one wrongly costs
 // a progress line rather than a wrong translation.
 
-export type StreamedTranslationSegment = {
+type StreamedTranslationSegment = {
   id: string;
   text: string;
 };
@@ -21,7 +21,7 @@ export type StreamedTranslationSegment = {
 // tracked: depth 1 is the reply object, depth 2 is one subtitle.
 const SEGMENT_DEPTH = 2;
 
-export type TranslationSegmentReader = {
+type TranslationSegmentReader = {
   /** The subtitles that became complete within this piece of the reply. */
   push(chunk: string): StreamedTranslationSegment[];
 };

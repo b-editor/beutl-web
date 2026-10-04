@@ -36,7 +36,6 @@ vi.mock("@beutl/db", () => ({
   markDetachedSubscriptionCheckoutRecoveryTerminal: mocks.terminalDetachedStorage,
   rescheduleDetachedSubscriptionCheckoutRecovery: mocks.rescheduleDetachedStorage,
   completeDetachedTopUpCheckoutRecovery: vi.fn(),
-  bindDetachedPackageCheckoutRecovery: vi.fn(),
   markDetachedPackageCheckoutRecoveryTerminal: vi.fn(),
   bindDetachedPackageCheckoutRecoveryAndScheduleCleanup: vi.fn(),
   rescheduleDetachedPackageCheckoutRecovery: vi.fn(),

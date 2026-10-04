@@ -256,7 +256,7 @@ describe("legacy storage cleanup contracts", () => {
 
   it("keeps icon replacement and screenshot deletion pointer-first and durable", async () => {
     const source = await readFile(new URL("../../packages/db/src/package.ts", import.meta.url), "utf8");
-    const icon = source.slice(source.indexOf("export async function replaceDevPackageIconFile"), source.indexOf("export async function retrieveDevPackageDependsFile"));
+    const icon = source.slice(source.indexOf("export async function replaceDevPackageIconFile"), source.indexOf("export async function retrieveDevPackageScreenshots"));
     expect(icon.indexOf("tx.package.update")).toBeLessThan(icon.indexOf("deleteUnreferencedFileWithStorageCleanup"));
     expect(icon).toContain("deleteUnreferencedFileWithStorageCleanup");
     const screenshot = source.slice(source.indexOf("export async function deleteDevPackageScreenshotAndFile"), source.indexOf("export async function deleteDevPackage({"));

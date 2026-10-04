@@ -15,7 +15,7 @@ function handoffKey(userId: string): string {
   return accountScopedAiStorageKey(HANDOFF_NAMESPACE, userId);
 }
 
-export type SubtitleHandoff = {
+type SubtitleHandoff = {
   cues: SubtitleCue[];
   // Shown so the translate page can say what it picked up.
   sourceName: string | null;

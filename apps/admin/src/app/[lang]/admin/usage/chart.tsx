@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { UsagePoint } from "@/lib/desktop-usage";
 
 export function UsageActivityChart({

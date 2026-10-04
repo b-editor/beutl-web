@@ -16,13 +16,7 @@ vi.mock("@beutl/db", () => ({
   createStorageFolder: vi.fn(),
   deleteStorageFolderTree: vi.fn(),
   deleteUserFilesWithStorageCleanup: vi.fn(),
-  moveStorageFiles: vi.fn(),
-  moveStorageFolder: vi.fn(),
-  renameStorageFolder: vi.fn(),
-  retrieveFilesByIdsAndUserId: vi.fn(),
-  retrieveStorageFilesByUserId: vi.fn(),
   retrieveStorageFoldersByUserId: vi.fn(),
-  updateFileVisibility: vi.fn(),
 }));
 
 import { renameFile } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/storage/actions";

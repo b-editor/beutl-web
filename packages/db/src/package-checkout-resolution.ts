@@ -62,7 +62,7 @@ export async function schedulePackageCheckoutResolutionRefunds({ attemptId, disc
   return prisma ? await run(prisma) : await startRetryableTransaction(run);
 }
 
-export type PackageCheckoutFinalization =
+type PackageCheckoutFinalization =
   | { outcome: "bind"; sessionId: string; expiresAt: Date }
   | { outcome: "terminal" };
 

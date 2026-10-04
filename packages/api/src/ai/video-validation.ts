@@ -1,12 +1,12 @@
 export const MAX_AI_GENERATED_VIDEO_BYTES = 32 * 1024 * 1024;
 export const MAX_AI_VIDEO_PARSE_ITEMS = 16_384;
-export const MAX_AI_GENERATED_VIDEO_DURATION_SECONDS = 60;
+const MAX_AI_GENERATED_VIDEO_DURATION_SECONDS = 60;
 const VIDEO_DURATION_TOLERANCE_SECONDS = 0.05;
 
 export type GeneratedVideoMimeType = "video/mp4" | "video/webm";
 export type GeneratedVideoExtension = "mp4" | "webm";
 
-export type VideoMetadata = {
+type VideoMetadata = {
   mimeType: GeneratedVideoMimeType;
   extension: GeneratedVideoExtension;
   /**

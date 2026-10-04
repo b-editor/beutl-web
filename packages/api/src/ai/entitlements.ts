@@ -19,7 +19,7 @@ import { loadAiModelCatalog, type AiModelCatalog } from "./model-catalog";
 import { quoteAiOperationReservation } from "./usage-cost";
 import { providerRequiresPreparedOutpaintCanvas } from "./providers/registry";
 
-export type AiBalanceSnapshot = {
+type AiBalanceSnapshot = {
   monthlyUsage: {
     used: number;
     limit: number;
@@ -30,7 +30,7 @@ export type AiBalanceSnapshot = {
 
 // What the account surface is allowed to show. Monthly raw units stay server-side,
 // while the exact purchased-credit balance remains visible by product requirement.
-export type AiBalancePresentation = {
+type AiBalancePresentation = {
   monthlyUsage: {
     usedPercent: number;
     remainingPercent: number;
@@ -48,13 +48,13 @@ export type AiBalancePresentation = {
 // An operation is available when at least one of its models is: with several
 // models at several prices, "cannot afford this operation" is no longer a
 // single fact. Which ones in particular is modelAvailability.
-export type AiOperationAvailability = Record<string, boolean>;
+type AiOperationAvailability = Record<string, boolean>;
 
 // operation -> model id -> whether that model can be started right now.
-export type AiModelAvailability = Record<string, Record<string, boolean>>;
+type AiModelAvailability = Record<string, Record<string, boolean>>;
 
 // Wire contract for GET /api/v3/user/entitlements.
-export type EntitlementsResponse = {
+type EntitlementsResponse = {
   plan: "pro" | null;
   subscriptionStatus: string | null;
   currentPeriodStart: string | null;
@@ -70,7 +70,7 @@ export type EntitlementsResponse = {
   modelAvailability: AiModelAvailability;
 };
 
-export type EntitlementSummaryResponse = Omit<
+type EntitlementSummaryResponse = Omit<
   EntitlementsResponse,
   "availability" | "modelAvailability"
 >;
@@ -109,7 +109,7 @@ export function toUsedPercent(used: number, limit: number): number {
   return Math.min(100, Math.max(0, Math.round((used / limit) * 100)));
 }
 
-export function toAiBalancePresentation(
+function toAiBalancePresentation(
   balance: AiBalanceSnapshot,
 ): AiBalancePresentation {
   const usedPercent = toUsedPercent(
@@ -134,7 +134,7 @@ export function toAiBalancePresentation(
   };
 }
 
-export function toAiOperationAvailability(
+function toAiOperationAvailability(
   balance: AiBalanceSnapshot,
   canUseAi: boolean,
   catalog: AiModelCatalog,
@@ -166,7 +166,7 @@ type SubscriptionState = {
   entitlementHeld?: boolean;
 };
 
-export function getEffectiveSubscriptionEnd(
+function getEffectiveSubscriptionEnd(
   subscription: Pick<SubscriptionState, "currentPeriodEnd" | "cancelAt">,
 ): Date | null {
   if (subscription.currentPeriodEnd === null) return null;
@@ -417,6 +417,3 @@ export async function canStartAiOperation(
   });
 }
 
-export function isAiPlanActive(entitlements: EntitlementsResponse): boolean {
-  return entitlements.canUseAi;
-}

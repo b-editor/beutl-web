@@ -1,8 +1,8 @@
 import type Stripe from "stripe";
 
-export const STRIPE_APPLICATION_METADATA_VALUE = "beutl-web";
+const STRIPE_APPLICATION_METADATA_VALUE = "beutl-web";
 
-export type StripeOwnershipMetadata = Record<string, string | undefined>;
+type StripeOwnershipMetadata = Record<string, string | undefined>;
 
 export function stripeOwnerMetadata(userId: string): Record<string, string> {
   return {
@@ -41,7 +41,7 @@ export type StripeCustomerOwnershipRecord = {
   createdAt?: Date;
 };
 
-export type StripeCustomerOwnershipProof =
+type StripeCustomerOwnershipProof =
   | "stripe-metadata"
   | "mismatch";
 

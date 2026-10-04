@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   activateBillingOffer,
-  listBillingOfferPriceIds,
   registerHistoricalBillingOffer,
   setDbProvider,
   type BillingOfferTerms,
@@ -94,10 +93,6 @@ describe("versioned billing offers", () => {
       stripePriceId: "price_v2",
       checkoutEnabled: true,
     });
-    await expect(listBillingOfferPriceIds({ kind: "pro" })).resolves.toEqual([
-      "price_v1",
-      "price_v2",
-    ]);
   });
 
   it("rejects mutation of immutable terms for an existing Stripe Price", async () => {

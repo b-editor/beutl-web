@@ -2,7 +2,7 @@
 // 元は apps/web/public/img の SVG (logo_dark.svg / github-color.svg / x.svg / discord.svg) で、
 // SNS アイコンは Web の `invert` と同じく白塗りにしてある。表示サイズ (ロゴ 28px、
 // アイコン 20px) の 2 倍で sharp によりラスタライズしたもの。
-export type EmailAsset = {
+type EmailAsset = {
   filename: string;
   contentType: "image/png";
   /** 表示サイズ (CSS px)。原寸はこの 2 倍。 */

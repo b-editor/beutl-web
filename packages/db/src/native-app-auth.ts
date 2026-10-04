@@ -102,21 +102,6 @@ export async function findNativeAppAuthBySessionId({
   });
 }
 
-export async function deleteNativeAppAuthBySessionId({
-  sessionId,
-  prisma,
-}: {
-  sessionId: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma ?? await getDb();
-  return await db.nativeAppAuth.deleteMany({
-    where: {
-      sessionId,
-    },
-  });
-}
-
 /** Consume only the exact, still-valid authorization observed by the exchange. */
 export async function consumeNativeAppAuthCode({
   id,

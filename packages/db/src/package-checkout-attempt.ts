@@ -2,7 +2,7 @@ import { getDb } from "./provider";
 import { startRetryableTransaction, type PrismaTransaction } from "./transaction";
 import { scheduleStripeCheckoutCleanup } from "./stripe-checkout-cleanup";
 
-export const PACKAGE_CHECKOUT_ATTEMPT_METADATA_KEY = "packageCheckoutAttemptId";
+const PACKAGE_CHECKOUT_ATTEMPT_METADATA_KEY = "packageCheckoutAttemptId";
 
 export function withPackageCheckoutAttemptToken(paramsJson: string, attemptToken: string): string {
   const params = JSON.parse(paramsJson) as Record<string, unknown>;
@@ -235,12 +235,6 @@ export async function resolvePackageCheckoutAttemptIntervention({
   });
 }
 
-export async function ensurePackageCheckoutAttemptToken({ id, checkoutKey, discoveryToken, paramsJson, prisma }: { id: string; checkoutKey: string; discoveryToken: string; paramsJson: string; prisma?: PrismaTransaction }) {
-  const db = prisma ?? await getDb();
-  const persisted = withPackageCheckoutAttemptToken(paramsJson, discoveryToken);
-  return await db.packageCheckoutAttempt.updateMany({ where: { id, checkoutKey, stripeCheckoutSessionId: null, status: { in: ["open", "intervention"] } }, data: { paramsJson: persisted } });
-}
-
 export async function bindPackageCheckoutSession({
   id,
   checkoutKey,
@@ -371,11 +365,6 @@ export async function claimDetachedPackageCheckoutAttempt({ now, leaseToken, lea
     if (updated.count === 1) claimed.push({ ...candidate, status: "recovering", recoveryLeaseToken: leaseToken, recoveryLeaseExpiresAt: leaseExpiresAt });
   }
   return claimed;
-}
-
-export async function bindDetachedPackageCheckoutRecovery({ id, leaseToken, stripeCheckoutSessionId, prisma }: { id: string; leaseToken: string; stripeCheckoutSessionId: string; prisma?: PrismaTransaction }) {
-  const db = prisma ?? await getDb();
-  return await db.packageCheckoutAttempt.updateMany({ where: { id, status: "recovering", recoveryLeaseToken: leaseToken, stripeCheckoutSessionId: null }, data: { stripeCheckoutSessionId, status: "open", recoveryLeaseToken: null, recoveryLeaseExpiresAt: null } });
 }
 
 export async function bindDetachedPackageCheckoutRecoveryAndScheduleCleanup({

@@ -231,21 +231,6 @@ export async function getReleasePackageAndFileId({
   });
 }
 
-export async function deleteReleaseById({
-  id,
-  prisma,
-}: {
-  id: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma ?? await getDb();
-  return db.release.delete({
-    where: {
-      id,
-    },
-  });
-}
-
 /** Remove a release pointer and retire its artifact in one transaction. */
 export async function deleteReleaseWithStorageCleanup({
   id,

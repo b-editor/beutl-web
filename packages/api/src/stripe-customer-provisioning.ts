@@ -1,6 +1,5 @@
 import Stripe from "stripe";
 import {
-  beginStripeCustomerProvisioning,
   claimStripeCustomerProvisioning,
   createVerifiedCustomerMappingIfAbsent,
   deleteStripeCustomerProvisioning,

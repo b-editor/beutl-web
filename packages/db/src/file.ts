@@ -465,112 +465,6 @@ export async function deleteUserFilesWithStorageCleanup({
   return prisma ? run(prisma) : startRetryableTransaction(run);
 }
 
-export async function retrieveFilesByIdsAndUserId({
-  ids,
-  userId,
-  prisma,
-}: {
-  ids: string[];
-  userId: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma ?? await getDb();
-  return await db.file.findMany({
-    where: {
-      id: {
-        in: ids,
-      },
-      userId,
-      aiJobResult: null,
-    },
-    select: {
-      objectKey: true,
-      id: true,
-      visibility: true,
-    },
-  });
-}
-
-export async function updateFileVisibility({
-  fileId,
-  visibility,
-  prisma,
-}: {
-  fileId: string;
-  visibility: "PRIVATE" | "PUBLIC";
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma ?? await getDb();
-  const result = await db.file.updateMany({
-    where: {
-      id: fileId,
-      aiJobResult: null,
-    },
-    data: {
-      visibility: visibility,
-    },
-  });
-  if (result.count !== 1) {
-    throw new Error(`Storage file ${fileId} is owned by an AI job`);
-  }
-  return result;
-}
-
-// 表示名の変更。専用ファイル (パッケージやプロフィールが握るもの) は他画面が名前を
-// 前提にしているため対象外。1 件も更新されなければ false を返し、呼び出し側が
-// 「無い」か「触れない」かを判断する。
-export async function updateFileName({
-  fileId,
-  userId,
-  name,
-  prisma,
-}: {
-  fileId: string;
-  userId: string;
-  name: string;
-  prisma?: PrismaTransaction;
-}): Promise<boolean> {
-  const db = prisma ?? await getDb();
-  const result = await db.file.updateMany({
-    where: {
-      id: fileId,
-      userId,
-      aiJobResult: null,
-      visibility: { not: "DEDICATED" },
-    },
-    data: { name },
-  });
-  return result.count === 1;
-}
-
-export async function retrieveStorageFilesByUserId({
-  userId,
-  prisma,
-}: {
-  userId?: string;
-  prisma?: PrismaTransaction;
-}) {
-  if (!userId) return [];
-  const db = prisma ?? await getDb();
-  return await db.file.findMany({
-    where: {
-      userId,
-      aiJobResult: null,
-    },
-    select: {
-      id: true,
-      objectKey: true,
-      name: true,
-      size: true,
-      mimeType: true,
-      visibility: true,
-      createdAt: true,
-      folderId: true,
-    },
-    orderBy: { createdAt: "desc" },
-  });
-}
-
 const STORAGE_FILE_SELECT = {
   id: true,
   name: true,
@@ -607,7 +501,7 @@ function storageFileKindWhere(kind: FileKind): Prisma.FileWhereInput {
   return named[kind];
 }
 
-export type StorageFileListingPage = {
+type StorageFileListingPage = {
   files: Prisma.FileGetPayload<{ select: typeof STORAGE_FILE_SELECT }>[];
   total: number;
   // 要求より後ろのページが無ければ最後のページに寄せる。

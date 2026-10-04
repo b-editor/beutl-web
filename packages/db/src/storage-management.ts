@@ -12,7 +12,7 @@ export const STORAGE_ENTRY_FILE_SELECT = {
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.FileSelect;
-export const STORAGE_ENTRY_FOLDER_SELECT = {
+const STORAGE_ENTRY_FOLDER_SELECT = {
   id: true,
   name: true,
   parentId: true,
@@ -20,13 +20,13 @@ export const STORAGE_ENTRY_FOLDER_SELECT = {
   updatedAt: true,
 } satisfies Prisma.StorageFolderSelect;
 
-export type StorageFilePatch = {
+type StorageFilePatch = {
   name?: string;
   parentId?: string | null;
   visibility?: "PRIVATE" | "PUBLIC";
 };
-export type StorageFolderPatch = { name?: string; parentId?: string | null };
-export type StorageEntryCursor = { kind: "folder" | "file"; name: string; id: string };
+type StorageFolderPatch = { name?: string; parentId?: string | null };
+type StorageEntryCursor = { kind: "folder" | "file"; name: string; id: string };
 
 export async function storageFolderPath(
   userId: string,

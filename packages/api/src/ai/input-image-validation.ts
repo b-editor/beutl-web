@@ -12,7 +12,7 @@ export type AiInputImageMimeType =
   | "image/webp"
   | "image/gif";
 
-export type ValidatedAiInputImage = {
+type ValidatedAiInputImage = {
   bytes: ArrayBuffer;
   mimeType: AiInputImageMimeType;
 };

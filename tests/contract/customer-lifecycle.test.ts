@@ -38,8 +38,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@beutl/db", () => ({
-  LEGACY_STRIPE_CUSTOMER_MIGRATION_COHORT:
-    "pre-owner-metadata-2026-08-09",
   createVerifiedCustomerMappingIfAbsent:
     mocks.createVerifiedCustomerMappingIfAbsent,
   beginStripeCustomerProvisioning: mocks.beginStripeCustomerProvisioning,

@@ -95,7 +95,7 @@ export async function findReplayableAiJob({
 //  - settled: 失敗・取り消しで決着済み。回収できるものは無いので、契約切れを
 //    理由に断ってよい——大きな本文を何度も読ませる口実にはさせない。
 //  - none: そんな名前の job は無い。
-export type AiIdempotencyKeyState =
+type AiIdempotencyKeyState =
   | "none"
   | "collectable"
   | "settled"

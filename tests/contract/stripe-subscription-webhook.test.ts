@@ -27,17 +27,11 @@ vi.mock("@/lib/stripe/config", () => ({
   }),
 }));
 vi.mock("@beutl/db", () => ({
-  LEGACY_STRIPE_CUSTOMER_MIGRATION_COHORT:
-    "pre-owner-metadata-2026-08-09",
   addPurchasedCredits: vi.fn(),
   createUserPackage: vi.fn(),
-  createUserPaymentHistory: vi.fn(),
   deleteSubscriptionCheckoutAttempt: mocks.deleteSubscriptionCheckoutAttempt,
-  existsCreditTransactionByStripePaymentId: vi.fn(),
-  existsUserPaymentHistoryByPaymentId: vi.fn(),
   findCustomerByStripeId: mocks.findCustomerByStripeId,
   findBillingOfferByStripePriceId: mocks.findBillingOfferByStripePriceId,
-  findPackageIdById: vi.fn(),
   getSubscription: mocks.getSubscription,
   reconcilePurchasedCreditReversal: vi.fn(),
   reconcileSubscriptionObservation:

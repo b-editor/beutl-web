@@ -21,14 +21,14 @@ export function aiApiMultipartBodyLimit(pathname: string): number | null {
 
 export const MAX_AI_JSON_REQUEST_BYTES = 32 * 1024;
 
-export class UploadLimitExceededError extends RequestBodyLimitExceededError {
+class UploadLimitExceededError extends RequestBodyLimitExceededError {
   constructor() {
     super("Upload body exceeds the configured limit");
     this.name = "UploadLimitExceededError";
   }
 }
 
-export function requestUploadLimit(maxFileBytes: number): number {
+function requestUploadLimit(maxFileBytes: number): number {
   return maxFileBytes + MULTIPART_OVERHEAD_BYTES;
 }
 
