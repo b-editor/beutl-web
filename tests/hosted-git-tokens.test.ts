@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runWithDbProvider } from "@beutl/db";
 import { findGitAccess } from "../packages/api/src/git/access-tokens";
 import { generateGitAccessToken, gitAccessTokenFrom, hashGitAccessToken } from "../packages/api/src/git/tokens";
@@ -50,5 +50,18 @@ describe("Git access token credentials", () => {
       expect(await findGitAccess(basicCredential(read.token), repoId)).toEqual({ ownerId: "owner", scope: "read", active: true });
       expect(await findGitAccess(basicCredential(unknown.token), repoId)).toBeNull();
     });
+  });
+
+  it("authorizes even when recording the last use fails", async () => {
+    const repoId = "12345678-1234-1234-1234-123456789abc";
+    const write = await gitAccessTokenFixture({ repoId });
+    const delegate = gitAccessTokenDelegate([write.row]);
+    delegate.updateMany.mockRejectedValueOnce(new Error("restart transaction"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await runWithDbProvider(async () => ({ gitAccessToken: delegate }) as never, async () => {
+      expect(await findGitAccess(basicCredential(write.token), repoId)).toEqual({ ownerId: "owner", scope: "write", active: true });
+    });
+    expect(error).toHaveBeenCalledWith("Git access token last-use update failed", expect.objectContaining({ tokenId: write.row.id }));
+    error.mockRestore();
   });
 });
