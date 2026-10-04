@@ -71,10 +71,11 @@ export async function findGitAccess(authorization: string | null, repoId: string
   if (!row || row.revokedAt || row.repoId !== repoId || (row.scope !== "read" && row.scope !== "write")) return null;
   const now = new Date();
   if (!row.lastUsedAt || now.getTime() - row.lastUsedAt.getTime() > LAST_USED_PRECISION_MS) {
+    // Concurrent Git requests race on this row; last use is advisory and never refuses a credential.
     await db.gitAccessToken.updateMany({
       where: { id: row.id, OR: [{ lastUsedAt: null }, { lastUsedAt: { lt: new Date(now.getTime() - LAST_USED_PRECISION_MS) } }] },
       data: { lastUsedAt: now },
-    });
+    }).catch((error) => console.error("Git access token last-use update failed", { tokenId: row.id, error }));
   }
   return {
     ownerId: row.ownerId, scope: row.scope,
