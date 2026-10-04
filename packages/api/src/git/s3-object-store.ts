@@ -49,7 +49,10 @@ export class S3GitObjectBucket implements GitObjectBucket {
   private readonly client: AwsClient;
   private readonly pathStyle: boolean;
 
-  constructor(env: GitS3Environment, private readonly fetcher: typeof fetch = fetch) {
+  // Workers reject the platform fetch when it is called as this object's
+  // method ("Illegal invocation"), so the default calls it without a receiver.
+  constructor(env: GitS3Environment,
+    private readonly fetcher: typeof fetch = (input, init) => fetch(input, init)) {
     const options = s3BucketOptionsFromEnv(env);
     let endpoint: URL;
     try { endpoint = new URL(options.endpoint); }
