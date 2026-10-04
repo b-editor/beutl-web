@@ -16,6 +16,20 @@ const response = (body: string, headers: Record<string, string> = {}) => new Res
 });
 
 describe("Backblaze B2 S3 storage adapter", () => {
+  it("calls the platform fetch without a receiver, as Workers require", async () => {
+    // workerd rejects fetch called as another object's method ("Illegal
+    // invocation"); Node does not, so emulate the runtime's receiver check.
+    const fetch = vi.fn(function (this: unknown, _request: Request) {
+      if (this !== undefined && this !== globalThis) throw new TypeError("Illegal invocation");
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    vi.stubGlobal("fetch", fetch);
+    try {
+      await expect(new S3GitObjectBucket(env).head("git/repos/item")).resolves.toBeNull();
+      expect(fetch).toHaveBeenCalledOnce();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it.each([[undefined, true], [" yes ", true], ["false", false]] as const)(
     "uses the same S3 configuration for File/AI and Git/LFS (path style: %s)", async (setting, pathStyle) => {
       const requests: Request[] = [];
