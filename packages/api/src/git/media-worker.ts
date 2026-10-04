@@ -11,6 +11,20 @@ import { ResumableSha256, type Sha256State } from "./resumable-sha256";
 export type LfsObject = { bucket: GitObjectBucket; repository: GitRepositoryObject; access: GitAccess; oid: string };
 
 const integer = (s: string | null) => s !== null && /^\d+$/u.test(s) && Number.isSafeInteger(Number(s)) ? Number(s) : -1;
+/**
+ * Parallel tus parts: a PATCH may store any 32 MiB part at or after the
+ * accepted offset when it names the SHA-256 state of the bytes before it in
+ * Beutl-Sha256-State, as 64 hex digits of the eight chaining words. Responses
+ * carry the part size, and HEAD the state at the accepted offset to resume from.
+ */
+const PARALLEL_HEADERS = { "Beutl-Part-Size": String(MAX_GIT_LFS_PART_BYTES) };
+function readHashState(value: string | null): Sha256State | undefined | null {
+  if (value === null) return undefined;
+  if (!/^[0-9a-f]{64}$/u.test(value)) return null;
+  return { words: Array.from({ length: 8 }, (_, i) => Number.parseInt(value.slice(i * 8, i * 8 + 8), 16)), tail: "" };
+}
+const hashStateHeader = (state: Sha256State | undefined): Record<string, string> => state && state.tail === ""
+  ? { "Beutl-Sha256-State": state.words.map((word) => word.toString(16).padStart(8, "0")).join("") } : {};
 // The route adds Tus-Resumable to every response on tus paths.
 const tus = (status: number, headers: HeadersInit = {}, body?: string) => new Response(body ?? null, {
   status, headers: { "Cache-Control": "no-store", ...headers },
@@ -30,8 +44,9 @@ async function recordFrom(response: Response): Promise<LfsRecord> {
  */
 async function uploadPart(
   object: LfsObject, record: LfsRecord, offset: number, length: number, body: ReadableStream<Uint8Array>,
+  start?: Sha256State,
 ): Promise<Response> {
-  const prepare = await metadata(object, "part", { resourceId: record.resourceId, offset, length });
+  const prepare = await metadata(object, "part", { resourceId: record.resourceId, offset, length, start });
   if (!prepare.ok) return prepare;
   const lease = await prepare.json() as { uploadId: string; partNumber: number; leaseId: string; hash?: Sha256State };
   const hash = new ResumableSha256(lease.hash, offset);
@@ -53,7 +68,7 @@ async function uploadPart(
   } catch (error) {
     // The part failure below is what the client must see. A lost cancel only
     // leaves the lease to expire, after which the client can retry the part.
-    await metadata(object, "cancel", { resourceId: record.resourceId, leaseId: lease.leaseId })
+    await metadata(object, "cancel", { resourceId: record.resourceId, leaseId: lease.leaseId, partNumber: lease.partNumber })
       .catch(() => undefined);
     throw error;
   }
@@ -63,6 +78,7 @@ export function tusOptions(): Response {
   return tus(204, {
     "Tus-Version": "1.0.0", "Tus-Extension": "creation,expiration", "Tus-Max-Size": String(MAX_LFS_OBJECT_BYTES),
     "Upload-Min-Part-Size": String(MIN_TUS_PART_BYTES), "Upload-Max-Part-Size": String(MAX_GIT_LFS_PART_BYTES),
+    ...PARALLEL_HEADERS,
   });
 }
 
@@ -72,7 +88,7 @@ export async function createTusUpload(request: Request, object: LfsObject): Prom
   if (!response.ok) return tus(response.status, {}, await response.text());
   const record = await recordFrom(response);
   const url = new URL(request.url);
-  return tus(201, { Location: `${url.origin}${url.pathname}/${record.resourceId}`,
+  return tus(201, { Location: `${url.origin}${url.pathname}/${record.resourceId}`, ...PARALLEL_HEADERS,
     ...(record.verified ? {} : { "Upload-Expires": new Date(record.expiresAt).toUTCString() }) });
 }
 
@@ -95,9 +111,11 @@ export async function appendTusUpload(request: Request, object: LfsObject, resou
   if (request.headers.get("content-type")?.toLowerCase() !== "application/offset+octet-stream") return tus(415);
   const offset = integer(request.headers.get("upload-offset"));
   const length = integer(request.headers.get("content-length"));
-  if (offset !== record.offset) return tus(409, { "Upload-Offset": String(record.offset) });
+  const start = readHashState(request.headers.get("beutl-sha256-state"));
+  if (start === null) return tus(400, {}, "Invalid Beutl-Sha256-State");
+  if (offset !== record.offset && !start) return tus(409, { "Upload-Offset": String(record.offset) });
   if (!request.body || length < 0 || length > MAX_GIT_LFS_PART_BYTES) return tus(400);
-  const receipt = await uploadPart(object, record, offset, length, request.body);
+  const receipt = await uploadPart(object, record, offset, length, request.body, start);
   if (!receipt.ok) return tus(receipt.status, {}, await receipt.text());
   return finishTusUpload(object, await recordFrom(receipt), 204);
 }
@@ -111,7 +129,7 @@ async function finishTusUpload(object: LfsObject, record: LfsRecord, status: num
   }
   return tus(status, {
     "Upload-Offset": String(record.offset), "Upload-Length": String(record.size),
-    "Upload-Verified": String(record.verified),
+    "Upload-Verified": String(record.verified), ...PARALLEL_HEADERS, ...hashStateHeader(record.hash),
     ...(record.verified ? {} : { "Upload-Expires": new Date(record.expiresAt).toUTCString() }),
   });
 }

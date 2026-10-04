@@ -129,6 +129,20 @@ An empty object is complete once it is created. HEAD recovers the accepted
 offset after interruption or a lost response. An upload reservation lasts 24
 hours; accepted parts extend it, so a large upload on a slow link keeps going.
 
+One tus stream is limited by its single connection; measured from Japan through
+the production Worker it moved 5 MiB/s, and four concurrent streams 20 MiB/s.
+The endpoint therefore also takes parts out of order, which the desktop sends
+four at a time. Responses carry `Beutl-Part-Size: 33554432`. A PATCH may store
+any 32 MiB part at or after the accepted offset (the last part may be shorter)
+when its `Beutl-Sha256-State` header names the SHA-256 state of the object's
+bytes before it, as 64 hex digits of the eight chaining words; every part
+already accepted must then be a full 32 MiB part. The part is hashed from that
+state as it streams to B2. The accepted offset passes a stored part only when
+the state it named equals the state the bytes before it reached, so a claimed
+state can never stand in for different earlier bytes; a mismatch discards the
+upload. HEAD returns the state at the accepted offset, so a resumed upload
+continues hashing there. Clients that send parts in order need none of this.
+
 For tus, an ordinary Worker streams each part into a B2 multipart upload and
 continues the object's SHA-256 over the bytes as they pass. The repository
 Durable Object serializes metadata, reservations, offsets, receipts and the hash
@@ -181,6 +195,6 @@ push has happened and no new object has become a candidate since the last one.
 Validation uses mocked B2/CockroachDB interfaces, resumable SHA-256 vectors,
 streaming/range tests and native Git push/clone/pull. Stock Git LFS (basic) and
 tus-js-client (resumed tus) uploads have also run locally against the B2
-development bucket. No transfer above 5 GiB has run against real B2. Provider
+development bucket, including a resumed 5.03 GiB object through the desktop agent. Provider
 billing and CockroachDB contention/migration deployment still require an
 authorized staging rehearsal.

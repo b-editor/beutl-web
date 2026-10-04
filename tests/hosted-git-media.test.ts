@@ -7,6 +7,7 @@ import { gitRepositoryObject } from "../packages/api/src/git/environment";
 import { appendTusUpload, createTusUpload, downloadLfsObject, readTusUpload, verifyLfsUpload, type LfsObject } from "../packages/api/src/git/media-worker";
 import { basicCredential, gitAccessTokenDelegate, gitAccessTokenFixture } from "./stubs/git-access-tokens";
 import { type GitDurableStorage, type LfsRecord, lfsKey, MAX_LFS_OBJECT_BYTES } from "../packages/api/src/git/lfs";
+import { ResumableSha256 } from "../packages/api/src/git/resumable-sha256";
 
 const repoId = "12345678-1234-1234-1234-123456789abc";
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -49,12 +50,15 @@ class Bucket {
       const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
       expect(bytes.length).toBe(length); this.uploads++; this.parts.set(partNumber, bytes);
       return { partNumber, etag: `etag-${partNumber}` };
-    }, complete: async () => {
+    }, complete: async (parts: { partNumber: number; etag: string }[]) => {
       if (this.failNextCompletion) { this.failNextCompletion = false; throw new Error("B2 completion response lost"); }
       this.completions++;
-      const size = [...this.parts.values()].reduce((n, bytes) => n + bytes.length, 0);
+      // Like B2, assemble exactly the listed parts in order, each with its own ETag.
+      expect(parts.map((part) => part.partNumber)).toEqual([...this.parts.keys()].sort((a, b) => a - b));
+      for (const part of parts) expect(part.etag).toBe(`etag-${part.partNumber}`);
+      const size = parts.reduce((n, part) => n + this.parts.get(part.partNumber)!.length, 0);
       const bytes = new Uint8Array(size); let offset = 0;
-      for (const part of this.parts.values()) { bytes.set(part, offset); offset += part.length; }
+      for (const part of parts) { bytes.set(this.parts.get(part.partNumber)!, offset); offset += this.parts.get(part.partNumber)!.length; }
       this.versions.set("version-1", { key, bytes, size });
       return { size, versionId: "version-1" };
     }, abort: async () => { this.parts.clear(); } };
@@ -117,10 +121,11 @@ function fixture() {
     const record = await storage.get<LfsRecord>(`lfs:${oid}`);
     return { url: created.headers.get("location")!, record: record! };
   }
-  async function transfer(url: string, oid: string, resource: string, offset: number, bytes?: Uint8Array) {
+  async function transfer(url: string, oid: string, resource: string, offset: number, bytes?: Uint8Array, state?: string) {
     const request = new Request(url, { method: bytes ? "PATCH" : "HEAD", headers: {
       "Tus-Resumable": "1.0.0", ...(bytes ? { "Upload-Offset": String(offset), "Content-Length": String(bytes.length),
         "Content-Type": "application/offset+octet-stream" } : {}),
+      ...(state === undefined ? {} : { "Beutl-Sha256-State": state }),
     }, ...(bytes ? { body: bytes } : {}) });
     return bytes ? appendTusUpload(request, object(oid), resource) : readTusUpload(object(oid), resource);
   }
@@ -276,6 +281,98 @@ describe("Worker media transfers and durable metadata", () => {
       expect((await send(moved.token)).status).toBe(404);
       expect(env.BEUTL_GIT_REPOSITORIES.get).not.toHaveBeenCalled();
     });
+  });
+});
+
+const PART = 32 * 1024 ** 2;
+/** The SHA-256 chaining words after `length` bytes, as a parallel tus client names them. */
+function stateAfter(bytes: Uint8Array, length: number) {
+  const sha = new ResumableSha256();
+  sha.update(bytes.subarray(0, length));
+  return sha.snapshot().words.map((word) => word.toString(16).padStart(8, "0")).join("");
+}
+function media(size: number) {
+  const bytes = new Uint8Array(size);
+  for (let i = 0; i < size; i++) bytes[i] = (i * 7 + (i >>> 13)) % 251;
+  return bytes;
+}
+
+describe("Parallel tus parts", () => {
+  it("accepts 32 MiB parts out of order and publishes once they join up", async () => {
+    const f = fixture(), bytes = media(2 * PART + 1000), oid = hash(bytes);
+    const { url, record } = await f.reserve(oid, bytes.length);
+    const part = (n: number) => f.transfer(url, oid, record.resourceId, n * PART,
+      bytes.subarray(n * PART, Math.min(bytes.length, (n + 1) * PART)), stateAfter(bytes, n * PART));
+    const last = await part(2);
+    expect(last.status).toBe(204);
+    expect(last.headers.get("upload-offset")).toBe("0");
+    expect(last.headers.get("beutl-part-size")).toBe(String(PART));
+    expect((await part(1)).headers.get("upload-offset")).toBe("0");
+    const first = await part(0);
+    expect(first.status).toBe(204);
+    expect(first.headers.get("upload-offset")).toBe(String(bytes.length));
+    expect(first.headers.get("upload-verified")).toBe("true");
+    expect(f.bucket.completions).toBe(1);
+    expect(hash(f.bucket.versions.get("version-1")!.bytes)).toBe(oid);
+    expect(f.accounting.commitLfs).toHaveBeenCalledOnce();
+    expect([...f.storage.values.keys()].filter((key) => key.startsWith("part:"))).toEqual([]);
+  });
+  it("resumes from the SHA-256 state HEAD reports for the accepted offset", async () => {
+    const f = fixture(), bytes = media(PART + 1000), oid = hash(bytes);
+    const { url, record } = await f.reserve(oid, bytes.length);
+    expect((await f.transfer(url, oid, record.resourceId, 0)).headers.has("beutl-sha256-state")).toBe(false);
+    await f.transfer(url, oid, record.resourceId, 0, bytes.subarray(0, PART), stateAfter(bytes, 0));
+    const head = await f.transfer(url, oid, record.resourceId, 0);
+    expect(head.headers.get("upload-offset")).toBe(String(PART));
+    expect(head.headers.get("beutl-sha256-state")).toBe(stateAfter(bytes, PART));
+    const last = await f.transfer(url, oid, record.resourceId, PART, bytes.subarray(PART), head.headers.get("beutl-sha256-state")!);
+    expect(last.headers.get("upload-verified")).toBe("true");
+  });
+  it("discards the upload when a part starts from a state the bytes before it never reached", async () => {
+    const f = fixture(), bytes = media(PART + 1000), oid = hash(bytes);
+    const { url, record } = await f.reserve(oid, bytes.length);
+    // The genuine tail and its genuine starting state hash to the OID; only the
+    // check against the first part's bytes shows they are not what came before.
+    const tail = await f.transfer(url, oid, record.resourceId, PART, bytes.subarray(PART), stateAfter(bytes, PART));
+    expect(tail.status).toBe(204);
+    const replaced = bytes.slice(0, PART).map((byte) => byte ^ 1);
+    const first = await f.transfer(url, oid, record.resourceId, 0, replaced, stateAfter(bytes, 0));
+    expect(first.status).toBe(422);
+    expect(await first.text()).toBe("LFS SHA-256 mismatch");
+    expect(f.bucket.completions).toBe(0);
+    expect(f.accounting.commitLfs).not.toHaveBeenCalled();
+    expect(f.accounting.releaseLfs).toHaveBeenCalledOnce();
+    expect(await f.storage.get(`lfs:${oid}`)).toBeUndefined();
+  });
+  it("takes only whole parts at part boundaries, and only after whole parts", async () => {
+    const f = fixture(), bytes = media(2 * PART + 1000), oid = hash(bytes);
+    const { url, record } = await f.reserve(oid, bytes.length);
+    const send = (offset: number, length: number, state = stateAfter(bytes, offset)) =>
+      f.transfer(url, oid, record.resourceId, offset, bytes.subarray(offset, offset + length), state);
+    expect((await send(PART, 5 * 1024 ** 2)).status).toBe(400);
+    expect((await send(PART + 64, PART)).status).toBe(409);
+    expect((await send(PART, PART, "not a state")).status).toBe(400);
+    expect(f.bucket.uploads).toBe(0);
+    // An upload that began with a shorter sequential part cannot number later parts by offset.
+    const other = fixture(), otherBytes = media(2 * PART), otherOid = hash(otherBytes);
+    const started = await other.reserve(otherOid, otherBytes.length);
+    expect((await other.transfer(started.url, otherOid, started.record.resourceId, 0, otherBytes.subarray(0, 5 * 1024 ** 2))).status).toBe(204);
+    expect((await other.transfer(started.url, otherOid, started.record.resourceId, PART, otherBytes.subarray(PART),
+      stateAfter(otherBytes, PART))).status).toBe(409);
+  });
+  it("holds each part for one request at a time", async () => {
+    const f = fixture(), bytes = media(2 * PART), oid = hash(bytes);
+    const { record } = await f.reserve(oid, bytes.length);
+    const repository = f.object(oid).repository, access = { repoId, ownerId: "owner", scope: "write" as const };
+    const start = { words: [...stateAfter(bytes, PART).matchAll(/.{8}/gu)].map(([word]) => Number.parseInt(word, 16)), tail: "" };
+    const lease = () => repository.media(access, oid, "part", { resourceId: record.resourceId, offset: PART, length: PART, start });
+    const held = await lease();
+    expect(held.status).toBe(200);
+    expect((await lease()).status).toBe(423);
+    const { leaseId, partNumber } = await held.json();
+    expect(partNumber).toBe(2);
+    expect((await repository.media(access, oid, "cancel", { resourceId: record.resourceId, leaseId, partNumber })).status).toBe(200);
+    expect((await lease()).status).toBe(200);
   });
 });
 

@@ -9,7 +9,7 @@ import { cleanupLfs, handleLfsBatch, json, lfsKey, LFS_TOUCH_PRECISION_MS, MAX_L
   partKey, partPrefix, readJson, scheduleGitMaintenance, UPLOAD_LIFETIME_MS,
   type GitDurableStorage, type LfsPart, type LfsRecord } from "./lfs";
 import { referencedLfsOids } from "./lfs-references";
-import { ResumableSha256 } from "./resumable-sha256";
+import { ResumableSha256, type Sha256State } from "./resumable-sha256";
 import type { GitScope } from "./tokens";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
@@ -36,6 +36,9 @@ function validHashState(state: unknown, length: number): boolean {
     return false;
   }
 }
+
+const sameHashState = (a: Sha256State | undefined, b: Sha256State | undefined) =>
+  a === undefined || b === undefined ? a === b : a.tail === b.tail && a.words.every((word, i) => word === b.words[i]);
 
 /** Serializes Git metadata and media receipts; media bodies stay in the Worker. */
 export class GitRepositoryDurableObject {
@@ -238,8 +241,9 @@ export class GitRepositoryDurableObject {
   /** Leases the next part to one PATCH and hands it the SHA-256 state at its offset. */
   private async leasePart(oid: string, record: Record, input: any): Promise<Response> {
     const { offset, length } = input;
-    if (record.verified || record.versionId || !record.uploadId || offset !== record.offset)
-      return new Response("Upload offset mismatch", { status: 409 });
+    if (record.verified || record.versionId || !record.uploadId) return new Response("Upload offset mismatch", { status: 409 });
+    if (record.parallel || input.start !== undefined) return this.leaseParallelPart(oid, record, input);
+    if (offset !== record.offset) return new Response("Upload offset mismatch", { status: 409 });
     if (!Number.isSafeInteger(length) || length <= 0 || length > MAX_GIT_LFS_PART_BYTES ||
         offset + length > record.size || (length < MIN_TUS_PART_BYTES && offset + length !== record.size))
       return new Response("Invalid tus part length", { status: 400 });
@@ -255,6 +259,7 @@ export class GitRepositoryDurableObject {
   /** Records an uploaded part's receipt and hash state, or releases the lease after a failed part. */
   private async settlePart(repoId: string, oid: string, record: Record, input: any, accepted: boolean): Promise<Response> {
     const storage = this.state.storage;
+    if (record.parallel) return this.settleParallelPart(repoId, oid, record, input, accepted);
     if (!record.lease || input.leaseId !== record.lease.id) return new Response("Upload receipt changed", { status: 409 });
     if (accepted) {
       const offset = record.offset + record.lease.length;
@@ -265,15 +270,87 @@ export class GitRepositoryDurableObject {
       await storage.put(partKey(oid, input.partNumber), { partNumber: input.partNumber, etag: input.etag });
       record.offset = offset; record.partCount++;
       if (complete) { record.digest = input.digest; delete record.hash; } else record.hash = input.hash;
-      // A large upload can outlast one lifetime; progress keeps its reservation.
-      if (record.expiresAt - Date.now() < UPLOAD_LIFETIME_MS / 2) {
-        record.expiresAt = Date.now() + UPLOAD_LIFETIME_MS;
-        await this.accounting?.extendLfs(repoId, oid, record.expiresAt).catch((error) =>
-          // This record decides expiry; a stale account row only makes cron ask again.
-          console.error("Git LFS reservation extension failed", { repoId, oid, error }));
-      }
+      await this.extendReservation(repoId, oid, record);
     }
     delete record.lease; await storage.put(`lfs:${oid}`, record); return json(record);
+  }
+
+  /** A large upload can outlast one lifetime; progress keeps its reservation. */
+  private async extendReservation(repoId: string, oid: string, record: Record): Promise<void> {
+    if (record.expiresAt - Date.now() >= UPLOAD_LIFETIME_MS / 2) return;
+    record.expiresAt = Date.now() + UPLOAD_LIFETIME_MS;
+    await this.accounting?.extendLfs(repoId, oid, record.expiresAt).catch((error) =>
+      // This record decides expiry; a stale account row only makes cron ask again.
+      console.error("Git LFS reservation extension failed", { repoId, oid, error }));
+  }
+
+  /**
+   * Leases one 32 MiB part of a parallel upload, numbered by its offset. The
+   * part at the accepted offset continues the recorded SHA-256 state; a later
+   * part starts from the state its client names, which settleParallelPart
+   * checks once the accepted offset reaches it.
+   */
+  private async leaseParallelPart(oid: string, record: Record, input: any): Promise<Response> {
+    const storage = this.state.storage;
+    const { offset, length } = input;
+    // Every part before the accepted offset is full, so offsets name part numbers.
+    if (!Number.isSafeInteger(offset) || offset % MAX_GIT_LFS_PART_BYTES !== 0 || offset < record.offset ||
+        offset >= record.size || record.offset !== record.partCount * MAX_GIT_LFS_PART_BYTES)
+      return new Response("Upload offset mismatch", { status: 409 });
+    if (length !== Math.min(MAX_GIT_LFS_PART_BYTES, record.size - offset))
+      return new Response("Parallel tus parts hold 32 MiB, except the last", { status: 400 });
+    if (offset > record.offset && !validHashState(input.start, offset))
+      return new Response("Invalid SHA-256 state", { status: 400 });
+    if (record.lease && record.lease.until > Date.now())
+      return new Response("Upload part in progress", { status: 423, headers: { "Retry-After": "1" } });
+    const partNumber = offset / MAX_GIT_LFS_PART_BYTES + 1;
+    const key = partKey(oid, partNumber);
+    const part = await storage.get<LfsPart>(key) ?? { partNumber };
+    if (part.lease && part.lease.until > Date.now())
+      return new Response("Upload part in progress", { status: 423, headers: { "Retry-After": "1" } });
+    const start: Sha256State | undefined = offset === record.offset ? record.hash : input.start;
+    // A failed re-upload leaves B2's earlier copy of the part, so its receipt stays until replaced.
+    part.lease = { id: crypto.randomUUID(), until: Date.now() + 15 * 60_000, ...(start ? { start } : {}) };
+    await storage.put(key, part);
+    if (!record.parallel) { record.parallel = true; delete record.lease; await storage.put(`lfs:${oid}`, record); }
+    return json({ uploadId: record.uploadId, partNumber, leaseId: part.lease.id, hash: start });
+  }
+
+  /**
+   * Records a parallel part's receipt, or releases its lease after a failure,
+   * then moves the accepted offset over every following part already stored. A
+   * part whose named start differs from the state the bytes before it reached
+   * cannot belong to this object, so the upload is discarded.
+   */
+  private async settleParallelPart(repoId: string, oid: string, record: Record, input: any, accepted: boolean): Promise<Response> {
+    const storage = this.state.storage;
+    const key = Number.isSafeInteger(input.partNumber) ? partKey(oid, input.partNumber) : "";
+    const part = key ? await storage.get<LfsPart>(key) : undefined;
+    if (!part?.lease || input.leaseId !== part.lease.id) return new Response("Upload receipt changed", { status: 409 });
+    if (!accepted) {
+      delete part.lease;
+      if (part.etag) await storage.put(key, part); else await storage.delete(key);
+      return json(record);
+    }
+    const length = Math.min(MAX_GIT_LFS_PART_BYTES, record.size - (part.partNumber - 1) * MAX_GIT_LFS_PART_BYTES);
+    const end = (part.partNumber - 1) * MAX_GIT_LFS_PART_BYTES + length;
+    if (typeof input.etag !== "string" || input.etag.length > 256 ||
+        (end === record.size ? !/^[0-9a-f]{64}$/u.test(input.digest) : !validHashState(input.hash, end)))
+      return new Response("Invalid upload receipt", { status: 400 });
+    const { start } = part.lease;
+    await storage.put<LfsPart>(key, { partNumber: part.partNumber, etag: input.etag, length,
+      ...(start ? { start } : {}), ...(end === record.size ? { digest: input.digest } : { end: input.hash }) });
+    for (let next = await storage.get<LfsPart>(partKey(oid, record.partCount + 1)); next?.etag && next.length;
+      next = await storage.get<LfsPart>(partKey(oid, record.partCount + 1))) {
+      if (!sameHashState(next.start, record.hash)) {
+        await cleanupLfs(storage, this.objectBucket(), this.accounting, repoId, oid, record);
+        return new Response("LFS SHA-256 mismatch", { status: 422 });
+      }
+      record.offset += next.length; record.partCount++;
+      if (record.offset === record.size) { record.digest = next.digest; delete record.hash; } else record.hash = next.end;
+    }
+    await this.extendReservation(repoId, oid, record);
+    await storage.put(`lfs:${oid}`, record); return json(record);
   }
 
   /**
@@ -293,8 +370,10 @@ export class GitRepositoryDurableObject {
       // A completion whose response was lost has already assembled the object.
       const existing = await this.objectBucket().head(lfsKey(repoId, oid));
       if (existing?.size === record.size) return existing;
+      // Every part up to the accepted offset has a receipt.
       const parts = [...(await this.state.storage.list<LfsPart>({ prefix: partPrefix(oid) })).values()]
-        .filter(p => p.partNumber <= record.partCount).sort((a, b) => a.partNumber - b.partNumber);
+        .filter(p => p.partNumber <= record.partCount).sort((a, b) => a.partNumber - b.partNumber)
+        .map(({ partNumber, etag }) => ({ partNumber, etag: etag! }));
       return this.objectBucket().resumeMultipartUpload(lfsKey(repoId, oid), record.uploadId!).complete(parts);
     });
   }
