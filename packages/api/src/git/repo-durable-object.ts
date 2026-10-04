@@ -8,12 +8,16 @@ import { databaseGitStorageAccounting, withGitDatabase, type GitDatabaseEnvironm
 import { cleanupLfs, handleLfsBatch, json, lfsKey, MAX_LFS_PARTS, MIN_TUS_PART_BYTES,
   partKey, partPrefix, readJson, scheduleGitMaintenance, UPLOAD_LIFETIME_MS,
   type GitDurableStorage, type LfsPart, type LfsRecord } from "./lfs";
+import { referencedLfsOids } from "./lfs-references";
 import { ResumableSha256 } from "./resumable-sha256";
 import type { GitScope } from "./tokens";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const MEDIA = "/internal/git/media/:oid{[0-9a-f]{64}}";
 const DELETION_GRACE_MS = 2 * 60 * 60 * 1000;
+// Clients upload media before pushing the commits that point to it.
+const LFS_COLLECTION_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+const LFS_COLLECTION_BATCH = 100;
 type Environment = GitS3Environment & GitDatabaseEnvironment;
 type Record = LfsRecord & { gcComplete?: boolean };
 const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -301,7 +305,7 @@ export class GitRepositoryDurableObject {
     const object = await store();
     if (!object?.versionId || object.size !== record.size) throw new Error("B2 completion has no pinned version");
     await this.accounting?.commitLfs(repoId, oid);
-    record.versionId = object.versionId; record.verified = true;
+    record.versionId = object.versionId; record.verified = true; record.touchedAt = Date.now();
     delete record.hash; delete record.lease;
     await storage.put(`lfs:${oid}`, record);
     const parts = await storage.list({ prefix: partPrefix(oid) });
@@ -322,6 +326,43 @@ export class GitRepositoryDurableObject {
     if (!object?.versionId || object.size !== record.size || object.checksumSha256 !== sha256Base64(oid))
       return new Response("LFS object has not been uploaded", { status: 404 });
     return this.publish(repoId, oid, record, async () => object);
+  }
+
+  /**
+   * Deletes verified LFS objects that no branch or tag points to anywhere in
+   * its history. An object becomes a candidate only after a grace period
+   * without an upload or upload batch. Returns whether candidates remain.
+   */
+  private async collectUnreferencedLfs(repoId: string): Promise<boolean> {
+    const storage = this.state.storage;
+    const now = Date.now();
+    const checkedAt = await storage.get<number>("lfsCollectionCheckedAt") ?? 0;
+    // References change only with a push, so a candidate that was referenced at
+    // the last check still is unless a push happened since.
+    let changed = (await storage.get<number>("lastPushFinishedAt") ?? 0) > checkedAt;
+    const candidates: [string, Record][] = [];
+    for (const [key, record] of await storage.list<Record>({ prefix: "lfs:" })) {
+      if (!record.verified) continue;
+      // Objects published before collection existed start their grace period now.
+      if (record.touchedAt === undefined) { await storage.put(key, { ...record, touchedAt: now }); continue; }
+      if (record.touchedAt + LFS_COLLECTION_GRACE_MS > now) continue;
+      candidates.push([key, record]);
+      if (record.touchedAt + LFS_COLLECTION_GRACE_MS > checkedAt) changed = true;
+    }
+    if (!candidates.length || !changed) return false;
+    const referenced = await referencedLfsOids(this.objectBucket(), repoId);
+    const unreferenced = candidates.filter(([key]) => !referenced.has(key.slice(4)));
+    for (const [key, record] of unreferenced.slice(0, LFS_COLLECTION_BATCH)) {
+      // Unpublish first; if deletion stops halfway, the expired reservation is
+      // cleaned up like an abandoned upload.
+      const abandoned = { ...record, verified: false, expiresAt: 0 };
+      await storage.put(key, abandoned);
+      await cleanupLfs(storage, this.objectBucket(), this.accounting, repoId, key.slice(4), abandoned);
+    }
+    if (unreferenced.length) console.info("Git LFS objects collected", { repoId, count: Math.min(unreferenced.length, LFS_COLLECTION_BATCH) });
+    if (unreferenced.length > LFS_COLLECTION_BATCH) return true;
+    await storage.put("lfsCollectionCheckedAt", now);
+    return false;
   }
 
   alarm(): Promise<void> {
@@ -371,6 +412,17 @@ export class GitRepositoryDurableObject {
           [...active.values()].filter(r => !r.verified && r.expiresAt > Date.now()).flatMap(r => r.uploadId ? [r.uploadId] : []),
           Date.now() - UPLOAD_LIFETIME_MS);
       } catch (error) { failed = true; console.error("Git object cleanup failed", { repoId, error }); }
+      if (Date.now() >= (await storage.get<number>("lfsCollectionAt") ?? 0)) {
+        let next = Date.now() + UPLOAD_LIFETIME_MS;
+        try { if (await this.collectUnreferencedLfs(repoId)) next = Date.now() + 60_000; }
+        catch (error) {
+          // Nothing was deleted on the strength of a partial history; try again later.
+          next = Date.now() + 60 * 60_000;
+          console.error("Git LFS collection failed", { repoId, error });
+        }
+        await storage.put("lfsCollectionAt", next);
+        await scheduleGitMaintenance(storage, next);
+      }
       await scheduleGitMaintenance(storage, Date.now() + (records.size === 50 || failed ? 60_000 : UPLOAD_LIFETIME_MS));
     });
   }

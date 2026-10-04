@@ -31,6 +31,8 @@ export interface LfsRecord {
   offset: number; partCount: number;
   /** SHA-256 of the first `offset` bytes, and the digest once every byte arrived. */
   hash?: Sha256State; digest?: string;
+  /** When the object was last uploaded or offered to an upload batch; collection waits a grace period from it. */
+  touchedAt?: number;
   lease?: { id: string; until: number; offset: number; length: number };
 }
 export type LfsPart = { partNumber: number; etag: string };
@@ -107,7 +109,11 @@ export async function handleLfsBatch(
         : { oid, size, error: { code: 404, message: "LFS object is not verified" } });
       continue;
     }
-    if (record?.verified) { objects.push({ oid, size }); continue; }
+    if (record?.verified) {
+      // The client may be about to push a commit that points here.
+      if (Date.now() - (record.touchedAt ?? 0) > 60 * 60_000) await storage.put(`lfs:${oid}`, { ...record, touchedAt: Date.now() });
+      objects.push({ oid, size }); continue;
+    }
     // Objects already stored need no transfer, whatever their size.
     if (size > (transfer === "basic" ? MAX_BASIC_LFS_OBJECT_BYTES : MAX_LFS_OBJECT_BYTES)) {
       objects.push({ oid, size, error: { code: 422, message: size > MAX_LFS_OBJECT_BYTES
