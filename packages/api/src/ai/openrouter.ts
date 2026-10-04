@@ -200,7 +200,7 @@ export async function verifyOpenRouterWebhookSignature({
   return false;
 }
 
-// Exported for the SDK-backed client, which needs the same key and the same
+// Shared by the SDK-backed client below, which needs the same key and the same
 // "not configured" failure as the hand-rolled requests.
 function getOpenRouterApiKey(): string {
   const key = process.env.OPENROUTER_API_KEY;
