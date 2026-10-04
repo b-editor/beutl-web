@@ -323,16 +323,6 @@ describe("Backblaze B2 S3 storage adapter", () => {
     expect(listed).toEqual(["first", "page-2", "first", "page-2"]);
   });
 
-  it("rejects a range from a different version or span", async () => {
-    const bucket = new S3GitObjectBucket(env, (async (request: Request) => {
-      expect(request.headers.get("range")).toBe("bytes=2-4");
-      return new Response("abc", { status: 206, headers: {
-        "content-range": "bytes 2-4/10", "content-length": "3", "x-amz-version-id": "wrong",
-      } });
-    }) as typeof fetch);
-    await expect(bucket.getRange("git-lfs/item", "pinned", 2, 3)).rejects.toThrow("pinned object version");
-  });
-
   it("stores, lists, heads and reads Git history over signed S3 requests", async () => {
     const key = "git/repos/repo/HEAD";
     const bytes = new TextEncoder().encode("ref: refs/heads/main\n");

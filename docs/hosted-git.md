@@ -102,8 +102,9 @@ behavior. Git and Git LFS must be installed on the client.
 
 Git smart HTTP supports small project history: an 8 MiB push, 16 MiB of current
 repository objects, 128 refs and 9,000 history objects. Track videos and other
-large media with Git LFS. Each LFS object and a repository's aggregate LFS data
-are limited to 20 GiB, subject to the account's existing plan quota.
+large media with Git LFS. An LFS object can hold up to 312.5 GiB (10,000 tus
+parts of 32 MiB). A repository's LFS data is bounded only by the account's plan
+quota and 10,000 objects.
 
 Stock Git LFS uses the `basic` transfer, so pushing media needs no desktop app.
 The batch response gives each object a presigned B2 PUT URL that signs its
@@ -117,20 +118,26 @@ before its URL expires can leave identical extra versions until the next version
 sweep. File locking is not offered: `info/lfs/locks/verify` answers 501, which
 makes Git LFS stop checking locks on later pushes.
 
-The desktop negotiates the `beutl-tus` custom transfer. Non-final PATCH
-requests must contain 5–32 MiB; the desktop sends 32 MiB parts. A final part can
-be smaller, including an empty object. This deliberately avoids persisting byte
-tails in Durable Objects. HEAD recovers the accepted offset after interruption or
-a lost response. Upload reservations expire after 24 hours; the client
-authenticates each tus request with its repository access token.
+The desktop negotiates the `beutl-tus` transfer. Its upload action is a
+standard tus 1.0 endpoint (core, creation and expiration) that any tus client
+can use with the repository access token, for example tus-js-client with a
+`chunkSize` from 5 to 32 MiB. Each PATCH stores one B2 multipart part, so
+non-final PATCH requests must contain 5–32 MiB, an object has at most 10,000
+parts, and the 10,000th part must finish it; the desktop sends 32 MiB parts.
+An empty object is complete once it is created. HEAD recovers the accepted
+offset after interruption or a lost response. An upload reservation lasts 24
+hours; accepted parts extend it, so a large upload on a slow link keeps going.
 
-For tus, an ordinary Worker streams each part into a B2 multipart upload. The
-repository Durable Object serializes metadata, reservations, offsets and
-receipts. It never relays LFS upload or download bodies. After completion, Worker HEAD requests
-verify one 32 MiB range at a time against the pinned B2 version. SHA-256 chaining
-words and offsets are checkpointed so verification resumes after a restart.
-`Upload-Verified: true` is returned only after the complete SHA-256 matches the
-LFS OID and the account reservation is committed.
+For tus, an ordinary Worker streams each part into a B2 multipart upload and
+continues the object's SHA-256 over the bytes as they pass. The repository
+Durable Object serializes metadata, reservations, offsets, receipts and the hash
+state at the accepted offset (eight words and fewer than 64 tail bytes). It
+never relays LFS upload or download bodies, and stored bytes are never read
+back. The PATCH that stores the last byte compares the digest with the LFS OID
+before B2 assembles the parts: a mismatch discards the upload, and a match pins
+the B2 version and commits the account reservation. A tus client is therefore
+finished when that PATCH returns 204 with `Upload-Verified: true`; if the
+response is lost, HEAD completes the publication.
 
 Downloads use **B2 → ordinary Cloudflare Worker → client** streaming. They check
 repository ownership and token scope, fetch the recorded version, and support
@@ -159,7 +166,8 @@ repository/OID and failure counts; investigate provider permissions or retention
 before manually changing accounting.
 
 Validation uses mocked B2/CockroachDB interfaces, resumable SHA-256 vectors,
-streaming/range tests and native Git push/clone/pull. The virtual object test
-exercises offsets above 5 GiB and bounded verification reads; it is not a real
-5 GiB B2 transfer. Real B2 operations, provider billing and CockroachDB contention/
-migration deployment still require an authorized staging rehearsal.
+streaming/range tests and native Git push/clone/pull. Stock Git LFS (basic) and
+tus-js-client (resumed tus) uploads have also run locally against the B2
+development bucket. No transfer above 5 GiB has run against real B2. Provider
+billing and CockroachDB contention/migration deployment still require an
+authorized staging rehearsal.

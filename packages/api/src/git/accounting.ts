@@ -1,5 +1,5 @@
 import {
-  commitGitLfs, releaseGitLfs, releaseGitRepositoryStorage,
+  commitGitLfs, extendGitLfsReservation, releaseGitLfs, releaseGitRepositoryStorage,
   reserveGitHistory, reserveGitLfs, settleGitHistory,
 } from "@beutl/db";
 import { runWithDbProvider, type PrismaClient } from "@beutl/db";
@@ -34,6 +34,7 @@ export interface GitStorageAccounting {
   reserveLfs(input: { repoId: string; oid: string; ownerId: string; size: number; expiresAt: number }):
     Promise<"reserved" | "existing" | "overQuota">;
   commitLfs(repoId: string, oid: string): Promise<void>;
+  extendLfs(repoId: string, oid: string, expiresAt: number): Promise<void>;
   releaseLfs(repoId: string, oid: string): Promise<void>;
   reserveHistory(repoId: string, ownerId: string, maxAdditionalBytes: number): Promise<boolean>;
   settleHistory(repoId: string, bytes: number): Promise<void>;
@@ -43,6 +44,7 @@ export interface GitStorageAccounting {
 export const databaseGitStorageAccounting: GitStorageAccounting = {
   reserveLfs: reserveGitLfs,
   commitLfs: commitGitLfs,
+  extendLfs: extendGitLfsReservation,
   releaseLfs: releaseGitLfs,
   reserveHistory: reserveGitHistory,
   settleHistory: settleGitHistory,

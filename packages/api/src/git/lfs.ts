@@ -1,11 +1,16 @@
+import { MAX_GIT_LFS_PART_BYTES } from "@beutl/core";
 import type { GitObjectBucket } from "./git-object-store";
 import type { GitStorageAccounting } from "./accounting";
-import type { Sha256Checkpoint } from "./checkpoint-sha256";
 import { readBodyAtMost } from "./git-http";
+import type { Sha256State } from "./resumable-sha256";
 import { sha256Base64 } from "./s3-object-store";
 import type { GitScope } from "./tokens";
 
-export const MAX_LFS_OBJECT_BYTES = 20 * 1024 ** 3;
+/** B2 multipart uploads have at most 10,000 parts, and each tus PATCH stores one. */
+export const MAX_LFS_PARTS = 10_000;
+export const MAX_LFS_OBJECT_BYTES = MAX_LFS_PARTS * MAX_GIT_LFS_PART_BYTES;
+// Bounds the records a batch lists and the repository object sweeps.
+const MAX_LFS_OBJECTS = 10_000;
 /** B2 accepts one PUT of at most 5 GB; larger objects need the desktop's beutl-tus agent. */
 export const MAX_BASIC_LFS_OBJECT_BYTES = 5_000_000_000;
 export const MIN_TUS_PART_BYTES = 5 * 1024 ** 2;
@@ -23,7 +28,9 @@ export interface GitDurableStorage {
 export interface LfsRecord {
   size: number; expiresAt: number; verified: boolean;
   resourceId: string; uploadId?: string; versionId?: string;
-  offset: number; partCount: number; checkpoint?: Sha256Checkpoint;
+  offset: number; partCount: number;
+  /** SHA-256 of the first `offset` bytes, and the digest once every byte arrived. */
+  hash?: Sha256State; digest?: string;
   lease?: { id: string; until: number; offset: number; length: number };
 }
 export type LfsPart = { partNumber: number; etag: string };
@@ -81,6 +88,7 @@ export async function handleLfsBatch(
   const authorization = request.headers.get("authorization");
   const base = `${new URL(request.url).origin}/api/v3/git/${repoId}.git/info/lfs/objects`;
   const objects = [];
+  let stored: number | undefined;
   for (const object of input.objects) {
     const { oid, size } = object;
     let record = await storage.get<LfsRecord>(`lfs:${oid}`);
@@ -103,28 +111,31 @@ export async function handleLfsBatch(
     // Objects already stored need no transfer, whatever their size.
     if (size > (transfer === "basic" ? MAX_BASIC_LFS_OBJECT_BYTES : MAX_LFS_OBJECT_BYTES)) {
       objects.push({ oid, size, error: { code: 422, message: size > MAX_LFS_OBJECT_BYTES
-        ? "LFS objects are limited to 20 GiB"
+        ? `LFS objects are limited to ${MAX_LFS_OBJECT_BYTES / 1024 ** 3} GiB`
         : "LFS objects over 5 GB need the Beutl desktop app" } });
       continue;
     }
     if (!record) {
-      const records = await storage.list<LfsRecord>({ prefix: "lfs:" });
-      const used = [...records.values()].reduce((n, r) => n + r.size, 0);
+      stored ??= (await storage.list({ prefix: "lfs:" })).size;
+      if (stored >= MAX_LFS_OBJECTS) {
+        objects.push({ oid, size, error: { code: 413, message: "Repositories are limited to 10,000 LFS objects" } }); continue;
+      }
       const expiresAt = Date.now() + UPLOAD_LIFETIME_MS;
-      if (records.size >= 10_000 || used + size > MAX_LFS_OBJECT_BYTES ||
-          await accounting?.reserveLfs({ repoId, oid, ownerId, size, expiresAt }) === "overQuota") {
+      if (await accounting?.reserveLfs({ repoId, oid, ownerId, size, expiresAt }) === "overQuota") {
         objects.push({ oid, size, error: { code: 413, message: "Account storage quota exceeded" } }); continue;
       }
       record = { size, expiresAt, verified: false, resourceId: crypto.randomUUID(), offset: 0, partCount: 0 };
       await storage.put(`lfs:${oid}`, record);
+      stored++;
       await scheduleGitMaintenance(storage, expiresAt + 1000);
     }
     // The client's own repository credential authorizes tus and verification requests.
     const credential = { Authorization: authorization };
     const reservedUntil = new Date(record.expiresAt).toISOString();
+    const verify = { href: `${base}/${oid}/verify`, header: credential, expires_at: reservedUntil };
     if (transfer === "beutl-tus") {
       objects.push({ oid, size, authenticated: true, actions: {
-        upload: { href: `${base}/${oid}/tus`, header: credential, expires_at: reservedUntil },
+        upload: { href: `${base}/${oid}/tus`, header: credential, expires_at: reservedUntil }, verify,
       } });
       continue;
     }
@@ -137,7 +148,7 @@ export async function handleLfsBatch(
         header: { "x-amz-checksum-sha256": sha256Base64(oid) },
         expires_at: new Date(Date.now() + lifetime).toISOString(),
       },
-      verify: { href: `${base}/${oid}/verify`, header: credential, expires_at: reservedUntil },
+      verify,
     } });
   }
   return new Response(JSON.stringify({ transfer, objects }), {

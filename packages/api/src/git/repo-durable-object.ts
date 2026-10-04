@@ -5,23 +5,32 @@ import { advertiseGitRefs, initializeGitRepository, isGitService, receiveGitPack
 import { S3GitObjectBucket, sha256Base64, type GitS3Environment } from "./s3-object-store";
 import type { GitObjectBucket } from "./git-object-store";
 import { databaseGitStorageAccounting, withGitDatabase, type GitDatabaseEnvironment, type GitStorageAccounting } from "./accounting";
-import { cleanupLfs, handleLfsBatch, json, lfsKey, MIN_TUS_PART_BYTES,
+import { cleanupLfs, handleLfsBatch, json, lfsKey, MAX_LFS_PARTS, MIN_TUS_PART_BYTES,
   partKey, partPrefix, readJson, scheduleGitMaintenance, UPLOAD_LIFETIME_MS,
   type GitDurableStorage, type LfsPart, type LfsRecord } from "./lfs";
-import type { Sha256Checkpoint } from "./checkpoint-sha256";
+import { ResumableSha256 } from "./resumable-sha256";
 import type { GitScope } from "./tokens";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const MEDIA = "/internal/git/media/:oid{[0-9a-f]{64}}";
 const DELETION_GRACE_MS = 2 * 60 * 60 * 1000;
 type Environment = GitS3Environment & GitDatabaseEnvironment;
-type Record = LfsRecord & { digest?: string; gcComplete?: boolean };
+type Record = LfsRecord & { gcComplete?: boolean };
+const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 type Routes = { Variables: { repoId: string } };
 // Only the Worker reaches this object. It verified the token and ownership, and
 // it overwrites these headers on every request it forwards.
 const scopeOf = (c: Context) => c.req.header("x-beutl-git-scope") ?? "";
 const ownerOf = (c: Context) => c.req.header("x-beutl-git-owner-id")!;
 type MediaAction = (repoId: string, oid: string, record: Record, input: any) => Promise<Response>;
+
+function validHashState(state: unknown, length: number): boolean {
+  try { new ResumableSha256(state as never, length); return true; }
+  catch {
+    // The constructor rejects any state that cannot describe `length` bytes.
+    return false;
+  }
+}
 
 /** Serializes Git metadata and media receipts; media bodies stay in the Worker. */
 export class GitRepositoryDurableObject {
@@ -125,11 +134,9 @@ export class GitRepositoryDurableObject {
       .post(`${MEDIA}/create`, scope("write"), media((repoId, oid, record, input) =>
         this.createUpload(repoId, oid, record, input), { resource: false }))
       .post(`${MEDIA}/part`, scope("write"), media((_repoId, oid, record, input) => this.leasePart(oid, record, input)))
-      .post(`${MEDIA}/accept`, scope("write"), media((_repoId, oid, record, input) => this.settlePart(oid, record, input, true)))
-      .post(`${MEDIA}/cancel`, scope("write"), media((_repoId, oid, record, input) => this.settlePart(oid, record, input, false)))
+      .post(`${MEDIA}/accept`, scope("write"), media((repoId, oid, record, input) => this.settlePart(repoId, oid, record, input, true)))
+      .post(`${MEDIA}/cancel`, scope("write"), media((repoId, oid, record, input) => this.settlePart(repoId, oid, record, input, false)))
       .post(`${MEDIA}/complete`, scope("write"), media((repoId, oid, record) => this.completeUpload(repoId, oid, record)))
-      .post(`${MEDIA}/checkpoint`, scope("write"), media((repoId, oid, record, input) =>
-        this.checkpoint(repoId, oid, record, input)))
       .post(`${MEDIA}/verify`, scope("write"), media((repoId, oid, record, input) =>
         this.verifyUpload(repoId, oid, record, input), { resource: false }))
       // Git and LFS batch requests keep their public URL so LFS actions link back to it.
@@ -203,6 +210,19 @@ export class GitRepositoryDurableObject {
 
   private async createUpload(repoId: string, oid: string, record: Record, input: any): Promise<Response> {
     if (input.length !== record.size) return new Response("Upload length mismatch", { status: 409 });
+    // tus treats an empty upload as finished once it is created.
+    if (record.size === 0) {
+      if (record.verified) return json(record);
+      if (oid !== EMPTY_SHA256) {
+        await cleanupLfs(this.state.storage, this.objectBucket(), this.accounting, repoId, oid, record);
+        return new Response("LFS SHA-256 mismatch", { status: 422 });
+      }
+      record.digest = oid;
+      return this.publish(repoId, oid, record, async () => {
+        await this.objectBucket().put(lfsKey(repoId, oid), new Uint8Array());
+        return this.objectBucket().head(lfsKey(repoId, oid));
+      });
+    }
     if (!record.uploadId && !record.versionId) {
       record.uploadId = (await this.objectBucket().createMultipartUpload(lfsKey(repoId, oid))).uploadId;
       await this.state.storage.put(`lfs:${oid}`, record);
@@ -210,76 +230,83 @@ export class GitRepositoryDurableObject {
     return json(record);
   }
 
+  /** Leases the next part to one PATCH and hands it the SHA-256 state at its offset. */
   private async leasePart(oid: string, record: Record, input: any): Promise<Response> {
     const { offset, length } = input;
     if (record.verified || record.versionId || !record.uploadId || offset !== record.offset)
       return new Response("Upload offset mismatch", { status: 409 });
-    if (!Number.isSafeInteger(length) || length < 0 || length > MAX_GIT_LFS_PART_BYTES ||
-        offset + length > record.size || (length < MIN_TUS_PART_BYTES && offset + length !== record.size) ||
-        (length === 0 && record.size !== 0)) return new Response("Invalid tus part length", { status: 400 });
+    if (!Number.isSafeInteger(length) || length <= 0 || length > MAX_GIT_LFS_PART_BYTES ||
+        offset + length > record.size || (length < MIN_TUS_PART_BYTES && offset + length !== record.size))
+      return new Response("Invalid tus part length", { status: 400 });
+    if (record.partCount + 1 >= MAX_LFS_PARTS && offset + length !== record.size)
+      return new Response("The upload needs larger parts to fit in 10,000", { status: 400 });
     if (record.lease && record.lease.until > Date.now())
       return new Response("Upload part in progress", { status: 423, headers: { "Retry-After": "1" } });
     record.lease = { id: crypto.randomUUID(), until: Date.now() + 15 * 60_000, offset, length };
     await this.state.storage.put(`lfs:${oid}`, record);
-    return json({ uploadId: record.uploadId, partNumber: record.partCount + 1, leaseId: record.lease.id });
+    return json({ uploadId: record.uploadId, partNumber: record.partCount + 1, leaseId: record.lease.id, hash: record.hash });
   }
 
-  /** Records an uploaded part's receipt, or releases the lease after a failed part. */
-  private async settlePart(oid: string, record: Record, input: any, accepted: boolean): Promise<Response> {
+  /** Records an uploaded part's receipt and hash state, or releases the lease after a failed part. */
+  private async settlePart(repoId: string, oid: string, record: Record, input: any, accepted: boolean): Promise<Response> {
     const storage = this.state.storage;
     if (!record.lease || input.leaseId !== record.lease.id) return new Response("Upload receipt changed", { status: 409 });
     if (accepted) {
-      if (typeof input.etag !== "string" || input.etag.length > 256 || input.partNumber !== record.partCount + 1)
+      const offset = record.offset + record.lease.length;
+      const complete = offset === record.size;
+      if (typeof input.etag !== "string" || input.etag.length > 256 || input.partNumber !== record.partCount + 1 ||
+          (complete ? !/^[0-9a-f]{64}$/u.test(input.digest) : !validHashState(input.hash, offset)))
         return new Response("Invalid upload receipt", { status: 400 });
       await storage.put(partKey(oid, input.partNumber), { partNumber: input.partNumber, etag: input.etag });
-      record.offset += record.lease.length; record.partCount++;
+      record.offset = offset; record.partCount++;
+      if (complete) { record.digest = input.digest; delete record.hash; } else record.hash = input.hash;
+      // A large upload can outlast one lifetime; progress keeps its reservation.
+      if (record.expiresAt - Date.now() < UPLOAD_LIFETIME_MS / 2) {
+        record.expiresAt = Date.now() + UPLOAD_LIFETIME_MS;
+        await this.accounting?.extendLfs(repoId, oid, record.expiresAt).catch((error) =>
+          // This record decides expiry; a stale account row only makes cron ask again.
+          console.error("Git LFS reservation extension failed", { repoId, oid, error }));
+      }
     }
     delete record.lease; await storage.put(`lfs:${oid}`, record); return json(record);
   }
 
+  /**
+   * Publishes a tus upload once every byte arrived. The PATCH requests hashed
+   * the bytes they stored, so a wrong digest discards the upload before B2
+   * assembles it.
+   */
   private async completeUpload(repoId: string, oid: string, record: Record): Promise<Response> {
-    const storage = this.state.storage;
-    if (record.versionId) return json(record);
-    if (record.offset !== record.size || !record.uploadId || record.partCount === 0)
+    if (record.verified) return json(record);
+    if (record.offset !== record.size || !record.uploadId || record.partCount === 0 || !record.digest)
       return new Response("Upload incomplete", { status: 409 });
-    let object = await this.objectBucket().head(lfsKey(repoId, oid));
-    if (!object) {
-      const parts = [...(await storage.list<LfsPart>({ prefix: partPrefix(oid) })).values()]
-        .filter(p => p.partNumber <= record.partCount).sort((a, b) => a.partNumber - b.partNumber);
-      object = await this.objectBucket().resumeMultipartUpload(lfsKey(repoId, oid), record.uploadId).complete(parts);
+    if (record.digest !== oid) {
+      await cleanupLfs(this.state.storage, this.objectBucket(), this.accounting, repoId, oid, record);
+      return new Response("LFS SHA-256 mismatch", { status: 422 });
     }
-    if (object.size !== record.size || !object.versionId) throw new Error("B2 completion has no pinned version");
-    record.versionId = object.versionId; await storage.put(`lfs:${oid}`, record); return json(record);
+    return this.publish(repoId, oid, record, async () => {
+      // A completion whose response was lost has already assembled the object.
+      const existing = await this.objectBucket().head(lfsKey(repoId, oid));
+      if (existing?.size === record.size) return existing;
+      const parts = [...(await this.state.storage.list<LfsPart>({ prefix: partPrefix(oid) })).values()]
+        .filter(p => p.partNumber <= record.partCount).sort((a, b) => a.partNumber - b.partNumber);
+      return this.objectBucket().resumeMultipartUpload(lfsKey(repoId, oid), record.uploadId!).complete(parts);
+    });
   }
 
-  private async checkpoint(repoId: string, oid: string, record: Record, input: any): Promise<Response> {
+  /** Pins the stored version, commits the account reservation and marks the object verified. */
+  private async publish(repoId: string, oid: string, record: Record,
+    store: () => Promise<{ size: number; versionId?: string } | null>): Promise<Response> {
     const storage = this.state.storage;
-    const key = `lfs:${oid}`;
-    if (record.verified) return json(record);
-    if (!record.versionId || input.versionId !== record.versionId ||
-        input.expectedOffset !== (record.checkpoint?.offset ?? 0)) return new Response("Verification receipt changed", { status: 409 });
-    const checkpoint = input.checkpoint as Sha256Checkpoint | undefined;
-    if (input.digest !== undefined) {
-      if (input.digest !== oid) {
-        await cleanupLfs(storage, this.objectBucket(), this.accounting, repoId, oid, record);
-        return new Response("LFS SHA-256 mismatch", { status: 422 });
-      }
-      record.digest = input.digest;
-    } else {
-      if (!checkpoint || checkpoint.oid !== oid || checkpoint.size !== record.size || checkpoint.versionId !== record.versionId ||
-          checkpoint.offset <= input.expectedOffset || checkpoint.offset >= record.size || checkpoint.offset % 64 !== 0 ||
-          checkpoint.words.length !== 8) return new Response("Invalid SHA-256 checkpoint", { status: 400 });
-      record.checkpoint = checkpoint;
-    }
-    await storage.put(key, record);
-    if (record.digest) {
-      await this.accounting?.commitLfs(repoId, oid);
-      record.verified = true; delete record.checkpoint;
-      await storage.put(key, record);
-      const parts = await storage.list({ prefix: partPrefix(oid) });
-      if (parts.size) await storage.delete([...parts.keys()]);
-      await scheduleGitMaintenance(storage, Date.now() + 60_000);
-    }
+    const object = await store();
+    if (!object?.versionId || object.size !== record.size) throw new Error("B2 completion has no pinned version");
+    await this.accounting?.commitLfs(repoId, oid);
+    record.versionId = object.versionId; record.verified = true;
+    delete record.hash; delete record.lease;
+    await storage.put(`lfs:${oid}`, record);
+    const parts = await storage.list({ prefix: partPrefix(oid) });
+    if (parts.size) await storage.delete([...parts.keys()]);
+    await scheduleGitMaintenance(storage, Date.now() + 60_000);
     return json(record);
   }
 
@@ -289,20 +316,12 @@ export class GitRepositoryDurableObject {
    * keeps that checksum; tus objects have none and are verified by hashing.
    */
   private async verifyUpload(repoId: string, oid: string, record: Record, input: any): Promise<Response> {
-    const storage = this.state.storage;
     if (input.size !== record.size) return new Response("LFS size differs from its reservation", { status: 422 });
     if (record.verified) return json(record);
     const object = await this.objectBucket().head(lfsKey(repoId, oid), undefined, { checksum: true });
     if (!object?.versionId || object.size !== record.size || object.checksumSha256 !== sha256Base64(oid))
       return new Response("LFS object has not been uploaded", { status: 404 });
-    await this.accounting?.commitLfs(repoId, oid);
-    record.versionId = object.versionId; record.verified = true;
-    delete record.checkpoint; delete record.lease;
-    await storage.put(`lfs:${oid}`, record);
-    const parts = await storage.list({ prefix: partPrefix(oid) });
-    if (parts.size) await storage.delete([...parts.keys()]);
-    await scheduleGitMaintenance(storage, Date.now() + 60_000);
-    return json(record);
+    return this.publish(repoId, oid, record, async () => object);
   }
 
   alarm(): Promise<void> {

@@ -1,10 +1,19 @@
-import { describe, expect, it } from "vitest";
-import { runWithDbProvider, reserveGitLfs, createFileWithStorageQuota, createDedicatedStorageReservation, commitDedicatedStorageReservation, sumFileSizeByUserId, sumStorageUploadSizeByUserId } from "@beutl/db";
+import { describe, expect, it, vi } from "vitest";
+import { runWithDbProvider, extendGitLfsReservation, reserveGitLfs, createFileWithStorageQuota, createDedicatedStorageReservation, commitDedicatedStorageReservation, sumFileSizeByUserId, sumStorageUploadSizeByUserId } from "@beutl/db";
 import { getStorageEntitlement } from "@beutl/api";
 import { STORAGE_FREE_QUOTA_BYTES } from "@beutl/core";
 import { createInMemoryPrisma } from "./stubs/in-memory-prisma";
 
 describe("shared File and hosted Git storage admission", () => {
+  it("extends only a pending LFS reservation", async () => {
+    const updateMany = vi.fn(async () => ({ count: 1 }));
+    const expiresAt = Date.parse("2026-10-05T00:00:00Z");
+    await runWithDbProvider(async () => ({ gitLfsStorage: { updateMany } }) as never,
+      () => extendGitLfsReservation("repo", "a".repeat(64), expiresAt));
+    expect(updateMany).toHaveBeenCalledWith({ where: { repoId: "repo", oid: "a".repeat(64), verified: false },
+      data: { expiresAt: new Date(expiresAt) } });
+  });
+
   it.each(["history", "lfs"])("keeps pending %s bytes reserved when a dedicated file completes after a quota reduction", async (kind) => {
     const memory = createInMemoryPrisma(), userId = "owner";
     memory.state.files.set("existing", { id: "existing", userId, size: STORAGE_FREE_QUOTA_BYTES - 32,
