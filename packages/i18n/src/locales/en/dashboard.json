@@ -7,7 +7,8 @@
     "storage": "Storage",
     "library": "Library",
     "developer": "Developer",
-    "account": "Account"
+    "account": "Account",
+    "repositories": "Repositories"
   },
   "overview": {
     "title": "Overview",
@@ -317,5 +318,53 @@
       "audio": "Audio to guide video generation. Up to {{maximum}} files, {{size}} or smaller per file."
     },
     "resultPlaceholderVideoEdit": "Video generation takes some time. You can view the completed video in the job history."
+  },
+  "repositories": {
+    "title": "Repositories",
+    "rename": "Rename",
+    "name": "Repository name",
+    "nameDescription": "Choose a recognizable project name (up to {{max}} characters).",
+    "refresh": "Refresh",
+    "search": "Search repositories",
+    "emptyTitle": "No repositories yet",
+    "noResults": "No matching repositories.",
+    "private": "Private",
+    "actions": "Actions",
+    "delete": "Delete",
+    "cloneUrl": "Clone URL",
+    "copyUrl": "Copy URL",
+    "connect": "Connection details",
+    "copied": "Copied.",
+    "copyFailed": "Could not copy. Please try again.",
+    "created": "Repository created.",
+    "renamed": "Repository renamed.",
+    "deleted": "Repository deleted.",
+    "deleteTitle": "Delete this repository?",
+    "deleteDescription": "Git history and LFS files will be deleted. This cannot be undone.",
+    "confirmName": "Type “{{name}}” to confirm.",
+    "tokenScope": "Access",
+    "read": "Read only",
+    "write": "Read and write",
+    "generateToken": "Issue token",
+    "token": "Connection token",
+    "copyToken": "Copy token",
+    "tokenExpires": "Expires: {{date}} UTC",
+    "copyCloneCommand": "Copy clone command",
+    "close": "Close",
+    "errors": {
+      "unavailable": "Repositories are currently unavailable. Please refresh later.",
+      "requestFailed": "The request failed. Please try again.",
+      "unauthorized": "Authentication failed. Please sign in again.",
+      "notFound": "Repository not found. Refresh the list.",
+      "invalidName": "Use 1–80 characters without slashes, backslashes, or control characters.",
+      "limitReached": "You can create up to 20 repositories. Delete an unused repository first.",
+      "conflict": "This operation could not be completed. Refresh the list and try again.",
+      "accountChanged": "The signed-in account changed. Please reload this page."
+    },
+    "regenerateToken": "Issue new token",
+    "createTitle": "Create repository",
+    "createSubmit": "Create",
+    "createdDate": "Created",
+    "visibility": "Visibility"
   }
 }

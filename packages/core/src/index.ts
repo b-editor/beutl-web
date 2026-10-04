@@ -194,3 +194,4 @@ export {
   isZeroCostStripeCheckoutSessionAmount,
 } from "./stripe-checkout";
 export * from "./storage-management";
+export * from "./git-repositories";

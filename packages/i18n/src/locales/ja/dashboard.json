@@ -7,7 +7,8 @@
     "storage": "ストレージ",
     "library": "ライブラリ",
     "developer": "開発者向け",
-    "account": "アカウント"
+    "account": "アカウント",
+    "repositories": "リポジトリ"
   },
   "overview": {
     "title": "概要",
@@ -317,5 +318,53 @@
       "audio": "動画生成の参考にする音声です。最大 {{maximum}} ファイル、1 ファイルあたり {{size}} 以下。"
     },
     "resultPlaceholderVideoEdit": "動画の生成には時間がかかります。完成した動画はジョブ履歴で確認できます。"
+  },
+  "repositories": {
+    "title": "リポジトリ",
+    "rename": "名前を変更",
+    "name": "リポジトリ名",
+    "nameDescription": "プロジェクトが分かる名前を付けてください（{{max}}文字まで）。",
+    "refresh": "更新",
+    "search": "リポジトリを検索",
+    "emptyTitle": "リポジトリはまだありません",
+    "noResults": "一致するリポジトリがありません。",
+    "private": "非公開",
+    "actions": "操作",
+    "delete": "削除",
+    "cloneUrl": "クローンURL",
+    "copyUrl": "URLをコピー",
+    "connect": "接続情報",
+    "copied": "コピーしました。",
+    "copyFailed": "コピーできませんでした。もう一度お試しください。",
+    "created": "リポジトリを作成しました。",
+    "renamed": "名前を変更しました。",
+    "deleted": "リポジトリを削除しました。",
+    "deleteTitle": "リポジトリを削除しますか？",
+    "deleteDescription": "Git履歴とLFSファイルが削除されます。この操作は取り消せません。",
+    "confirmName": "確認のため「{{name}}」を入力してください。",
+    "tokenScope": "アクセス権限",
+    "read": "読み取り",
+    "write": "読み取りと書き込み",
+    "generateToken": "トークンを発行",
+    "token": "接続トークン",
+    "copyToken": "トークンをコピー",
+    "tokenExpires": "有効期限: {{date}} UTC",
+    "copyCloneCommand": "クローンコマンドをコピー",
+    "close": "閉じる",
+    "errors": {
+      "unavailable": "現在、リポジトリ機能を利用できません。時間をおいて更新してください。",
+      "requestFailed": "処理に失敗しました。もう一度お試しください。",
+      "unauthorized": "認証を確認できませんでした。再度ログインしてください。",
+      "notFound": "リポジトリが見つかりません。一覧を更新してください。",
+      "invalidName": "1〜80文字で入力してください。スラッシュ、バックスラッシュ、制御文字は使用できません。",
+      "limitReached": "リポジトリは20件まで作成できます。不要なリポジトリを削除してください。",
+      "conflict": "この操作を完了できません。一覧を更新してからお試しください。",
+      "accountChanged": "ログイン中のアカウントが変わりました。ページを再読み込みしてください。"
+    },
+    "regenerateToken": "トークンを再発行",
+    "createTitle": "リポジトリを作成",
+    "createSubmit": "作成",
+    "createdDate": "作成日",
+    "visibility": "公開設定"
   }
 }
