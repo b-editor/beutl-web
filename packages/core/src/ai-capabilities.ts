@@ -32,9 +32,9 @@ export const AI_LEGACY_IMAGE_SIZES = [
   "1024x1536",
   "1536x1024",
 ] as const;
-export type AiLegacyImageSize = (typeof AI_LEGACY_IMAGE_SIZES)[number];
+type AiLegacyImageSize = (typeof AI_LEGACY_IMAGE_SIZES)[number];
 
-export const AI_LEGACY_IMAGE_SIZE_ASPECT_RATIOS: Record<
+const AI_LEGACY_IMAGE_SIZE_ASPECT_RATIOS: Record<
   AiLegacyImageSize,
   AiImageAspectRatio
 > = {
@@ -158,7 +158,7 @@ export const AI_VIDEO_DURATIONS_SECONDS: readonly number[] = Array.from(
 // Which edit tasks need a prompt to mean anything. Published by the
 // capabilities endpoint and enforced by every entry point, so a task that
 // changes here changes in both places at once.
-export const AI_PROMPT_REQUIRED_IMAGE_EDIT_TASKS = [
+const AI_PROMPT_REQUIRED_IMAGE_EDIT_TASKS = [
   "restyle",
   "remove_object",
   "outpaint",

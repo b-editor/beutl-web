@@ -24,7 +24,7 @@ export type PromptTemplate = {
   pinned: boolean;
 };
 
-export type PromptDraft = Omit<PromptTemplate, "id" | "name" | "pinned">;
+type PromptDraft = Omit<PromptTemplate, "id" | "name" | "pinned">;
 
 const PROMPT_LIBRARY_NAMESPACE = "beutl:ai:prompt-library";
 

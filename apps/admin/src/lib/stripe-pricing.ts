@@ -77,7 +77,7 @@ function parseStripePrice(value: unknown): {
   };
 }
 
-export type OfferPricing = {
+type OfferPricing = {
   stripePriceId: string;
   unitAmount: number;
   currency: string;
@@ -86,9 +86,9 @@ export type OfferPricing = {
   creditAmount: number | null;
 };
 
-export type OfferPricingSource = "stripe" | "database";
+type OfferPricingSource = "stripe" | "database";
 
-export type OfferPricingUnavailable =
+type OfferPricingUnavailable =
   | "notConfigured"
   | "unavailable"
   | "notFound";

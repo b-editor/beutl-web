@@ -7,7 +7,7 @@ import {
 import { getSubscription } from "./subscription";
 import type { PrismaTransaction } from "./transaction";
 
-export type ResolvedStorageQuota = StorageQuota & {
+type ResolvedStorageQuota = StorageQuota & {
   subscription: Awaited<ReturnType<typeof getSubscription>>;
 };
 

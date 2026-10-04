@@ -20,12 +20,12 @@ type PackagePaymentStripeClient = {
   refunds: Pick<Stripe.RefundsResource, "create">;
 };
 
-export type PackagePaymentOwnerResolution =
+type PackagePaymentOwnerResolution =
   | { status: "owned"; reference: PackagePaymentReference }
   | { status: "invalid"; reason: string }
   | { status: "unrecognized" };
 
-export type PackagePaymentResolution =
+type PackagePaymentResolution =
   | { status: "fulfill"; reference: PackagePaymentReference }
   | { status: "refund"; reason: string }
   | { status: "unrecognized" };

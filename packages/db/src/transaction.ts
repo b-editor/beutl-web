@@ -5,7 +5,7 @@ export type PrismaTransaction = Parameters<
   Parameters<typeof PrismaClient.prototype.$transaction>[0]
 >[0];
 
-export type PrismaTransactionOptions = {
+type PrismaTransactionOptions = {
   maxWait?: number;
   timeout?: number;
   isolationLevel?: Prisma.TransactionIsolationLevel;

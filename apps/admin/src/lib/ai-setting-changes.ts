@@ -21,7 +21,7 @@ export type AiSettingChange = {
 
 export const MAX_CHANGES_PER_SAVE = 64;
 
-export type AiSettingChangesResult =
+type AiSettingChangesResult =
   // The allowance the batch leaves in force, which the caller checks against
   // the registered models before committing.
   | { ok: true; changes: AiSettingChange[]; allowance: number }

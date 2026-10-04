@@ -22,9 +22,9 @@ import {
   isAiProviderConfigured,
 } from "./providers/registry";
 
-export type AiModelCostTier = "low" | "medium" | "high";
+type AiModelCostTier = "low" | "medium" | "high";
 
-export type AiOperationModelEntry = {
+type AiOperationModelEntry = {
   operation: string;
   modelId: string;
   /**

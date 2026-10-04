@@ -70,7 +70,7 @@ export type FolderHandlers = {
   requestDeleteFolder: (folder: StorageFolder) => void;
 };
 
-export type ItemAction = {
+type ItemAction = {
   id: string;
   label: string;
   icon: LucideIcon;
@@ -199,7 +199,7 @@ export function useFileActions(
   return { actions, note };
 }
 
-export function useFolderActions(
+function useFolderActions(
   folder: StorageFolder,
   lang: string,
   handlers: FolderHandlers,
@@ -255,7 +255,7 @@ function groupActions(actions: ItemAction[]): ItemAction[][] {
 const DESTRUCTIVE_ITEM =
   "text-destructive focus:bg-destructive/10 focus:text-destructive";
 
-export function ActionDropdownContent({
+function ActionDropdownContent({
   actions,
   note,
   align = "end",
@@ -294,7 +294,7 @@ export function ActionDropdownContent({
   );
 }
 
-export function ActionContextContent({
+function ActionContextContent({
   actions,
   note,
 }: {

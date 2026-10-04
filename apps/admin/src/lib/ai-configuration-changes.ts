@@ -29,7 +29,7 @@ import {
 // adding, repricing, removing and reordering are the same thing to the server:
 // the rows it does not mention are gone, and the order it gives is the display
 // order with the first entry as the default.
-export type AiOperationModelsDraft = {
+type AiOperationModelsDraft = {
   operation: string;
   models: AiOperationModelInput[];
   expected: AiOperationModelSnapshot[];
@@ -73,7 +73,7 @@ export function matchesAiOperationModelSnapshot(
   });
 }
 
-export type AiConfigurationChanges = {
+type AiConfigurationChanges = {
   settings: AiSettingChange[];
   models: AiOperationModelsDraft[];
 };
@@ -82,7 +82,7 @@ export type AiConfigurationChanges = {
 // short of anything a person types by hand.
 export const MAX_MODELS_PER_OPERATION = 20;
 
-export type AiConfigurationValidation =
+type AiConfigurationValidation =
   | ({ ok: true; allowance: number } & AiConfigurationChanges)
   | { ok: false; message: string };
 

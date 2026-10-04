@@ -18,14 +18,7 @@ vi.mock("@beutl/db", () => ({
   createStorageFolder: vi.fn(),
   deleteStorageFolderTree: vi.fn(),
   deleteUserFilesWithStorageCleanup: vi.fn(),
-  moveStorageFiles: vi.fn(),
-  moveStorageFolder: vi.fn(),
-  renameStorageFolder: vi.fn(),
-  retrieveFilesByIdsAndUserId: vi.fn(),
-  retrieveStorageFilesByUserId: vi.fn(),
   retrieveStorageFoldersByUserId: vi.fn(),
-  updateFileName: vi.fn(),
-  updateFileVisibility: vi.fn(),
 }));
 
 import {
@@ -41,9 +34,6 @@ import {
   updateOwnedStorageFolder,
   storageFolderSummary,
   deleteStorageFolderTree,
-  moveStorageFiles,
-  moveStorageFolder,
-  renameStorageFolder,
 } from "@beutl/db";
 
 describe("dashboard storage folders", () => {
@@ -53,8 +43,6 @@ describe("dashboard storage folders", () => {
     vi.mocked(updateOwnedStorageFolder).mockResolvedValue({ kind: "updated" });
     vi.mocked(updateOwnedStorageFiles).mockResolvedValue({ kind: "updated", count: 2 });
     vi.mocked(storageFolderSummary).mockResolvedValue({ folder: { id: "folder-1" }, ancestors: [], folderCount: 0, fileCount: 0 } as never);
-    vi.mocked(moveStorageFolder).mockResolvedValue({ kind: "moved" });
-    vi.mocked(moveStorageFiles).mockResolvedValue({ kind: "moved" });
     vi.mocked(deleteStorageFolderTree).mockResolvedValue({
       kind: "deleted",
       fileCount: 2,

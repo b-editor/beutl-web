@@ -17,7 +17,7 @@ export type ModelDraftState = {
   expected: AiOperationModelSnapshot[];
 };
 
-export type ModelDraftAction =
+type ModelDraftAction =
   | {
       type: "set";
       operation: string;

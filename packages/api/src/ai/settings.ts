@@ -13,9 +13,9 @@ import {
   type AiSettingDefinition,
 } from "@beutl/core";
 
-export type AiSettingSource = "database" | "default";
+type AiSettingSource = "database" | "default";
 
-export type ResolvedAiSetting = AiSettingDefinition & {
+type ResolvedAiSetting = AiSettingDefinition & {
   value: string;
   // Lets the admin UI identify whether the value is still using a fallback.
   source: AiSettingSource;

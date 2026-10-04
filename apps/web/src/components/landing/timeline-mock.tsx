@@ -19,7 +19,7 @@ const MOBILE_RULER_TICKS = 3;
 const LANE_H = 30;
 const LANE_COUNT = 7;
 
-export type TimelineClipKey = "scene" | "text" | "shape" | "audio";
+type TimelineClipKey = "scene" | "text" | "shape" | "audio";
 
 /** Positions and widths are percentages of the track. */
 const TIMELINE_CLIPS: {

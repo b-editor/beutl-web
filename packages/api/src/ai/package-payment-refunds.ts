@@ -12,7 +12,7 @@ const MAX_ATTEMPTS = 12;
 const BASE_RETRY_MS = 5 * 60_000;
 const MAX_RETRY_MS = 6 * 60 * 60_000;
 
-export type PackagePaymentRefundReconcileResult = {
+type PackagePaymentRefundReconcileResult = {
   inspected: number;
   claimed: number;
   refunded: number;
@@ -20,7 +20,7 @@ export type PackagePaymentRefundReconcileResult = {
   interventionRequired: number;
 };
 
-export type PackagePaymentRefundAttemptReconcileResult = {
+type PackagePaymentRefundAttemptReconcileResult = {
   status:
     | "not-configured"
     | "not-claimed"

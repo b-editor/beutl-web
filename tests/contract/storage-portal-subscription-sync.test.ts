@@ -18,7 +18,6 @@ vi.mock("@/lib/stripe/config", () => ({
   }),
 }));
 vi.mock("@beutl/db", () => ({
-  LEGACY_STRIPE_CUSTOMER_MIGRATION_COHORT: "pre-owner-metadata-2026-08-09",
   activateBillingOffer: mocks.activateBillingOffer,
   findBillingOfferByStripePriceId: mocks.findBillingOfferByStripePriceId,
   findCustomerByUserId: mocks.findCustomerByUserId,

@@ -20,20 +20,20 @@ import {
   type CanonicalPaymentRefundState,
 } from "./refund-state";
 
-export const TOP_UP_REFUND_LEASE_MS = 10 * 60 * 1_000;
+const TOP_UP_REFUND_LEASE_MS = 10 * 60 * 1_000;
 export const TOP_UP_REFUND_BASE_RETRY_MS = 5 * 60 * 1_000;
-export const TOP_UP_REFUND_MAX_RETRY_MS = 6 * 60 * 60 * 1_000;
+const TOP_UP_REFUND_MAX_RETRY_MS = 6 * 60 * 60 * 1_000;
 export const TOP_UP_REFUND_MAX_ATTEMPTS = 12;
 
 const TOP_UP_REFUND_BATCH_SIZE = 25;
 const MAX_ERROR_LENGTH = 2_000;
 
-export type TopUpRefundStripeClient = Pick<
+type TopUpRefundStripeClient = Pick<
   Stripe,
   "checkout" | "paymentIntents" | "refunds"
 >;
 
-export type TopUpRefundProcessingResult = {
+type TopUpRefundProcessingResult = {
   inspected: number;
   claimed: number;
   refunded: number;

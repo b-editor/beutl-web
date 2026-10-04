@@ -352,7 +352,7 @@ async function enqueueObjectCleanupBatch(
 // them would outgrow the statement and time limits, as it would for a folder.
 export const ACCOUNT_STORAGE_DRAIN_BATCH = 500;
 
-export type AccountStorageDrainResult =
+type AccountStorageDrainResult =
   | { kind: "drained"; fileCount: number }
   | { kind: "notAuthorized" };
 

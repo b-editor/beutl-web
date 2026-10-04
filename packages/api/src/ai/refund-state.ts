@@ -1,6 +1,6 @@
 import Stripe from "stripe";
 
-export type RefundStateStripeClient = Pick<
+type RefundStateStripeClient = Pick<
   Stripe,
   "paymentIntents" | "refunds"
 >;

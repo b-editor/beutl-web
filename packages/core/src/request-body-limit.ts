@@ -33,7 +33,7 @@ export const MAX_STRIPE_WEBHOOK_BODY_BYTES = 1024 * 1024;
 export const MAX_OPENROUTER_CALLBACK_BODY_BYTES = 64 * 1024;
 // The Gateway's delivery carries terminal facts only — no URLs and no bytes —
 // so the same cap is generous.
-export const MAX_AI_VIDEO_CALLBACK_BODY_BYTES = MAX_OPENROUTER_CALLBACK_BODY_BYTES;
+const MAX_AI_VIDEO_CALLBACK_BODY_BYTES = MAX_OPENROUTER_CALLBACK_BODY_BYTES;
 
 /** A request body crossed the limit while it was being consumed. */
 export class RequestBodyLimitExceededError extends Error {

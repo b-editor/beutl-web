@@ -22,10 +22,10 @@ export type PackagePurchaseExpectation = {
   currency?: string;
 };
 
-export const PACKAGE_CHECKOUT_FINGERPRINT_VERSION = "package-checkout-v2";
+const PACKAGE_CHECKOUT_FINGERPRINT_VERSION = "package-checkout-v2";
 export const PACKAGE_CHECKOUT_SESSION_EXACT_EXPANDS = ["line_items.data.price.product", "payment_intent"] as const;
 
-export type PackageCheckoutCompletionDecision =
+type PackageCheckoutCompletionDecision =
   | "open"
   | "complete-pending"
   | "rotate-terminal";
@@ -73,35 +73,6 @@ export async function listAllOpenPackageCheckoutSessions({
     if (!last) throw new Error("Stripe returned an empty Checkout page with has_more");
     startingAfter = last.id;
   }
-}
-
-export async function listAllPackageCheckoutSessions({
-  stripe,
-  customerId,
-  pageSize = 100,
-}: {
-  stripe: StripeClientLike;
-  customerId: string;
-  pageSize?: number;
-}): Promise<Stripe.Checkout.Session[]> {
-  const sessions = new Map<string, Stripe.Checkout.Session>();
-  for (const status of ["open", "complete", "expired"] as const) {
-    let startingAfter: string | undefined;
-    for (;;) {
-      const page = await stripe.checkout.sessions.list({
-        customer: customerId,
-        status,
-        limit: pageSize,
-        ...(startingAfter ? { starting_after: startingAfter } : {}),
-      });
-      for (const session of page.data) sessions.set(session.id, session);
-      if (!page.has_more) break;
-      const last = page.data.at(-1);
-      if (!last) throw new Error(`Stripe returned an empty ${status} Checkout page with has_more`);
-      startingAfter = last.id;
-    }
-  }
-  return [...sessions.values()];
 }
 
 export async function listLegacyCompletePackageCheckoutSessions({ stripe, customerId, userId, packageId, pageSize = 100 }: { stripe: StripeClientLike; customerId: string; userId: string; packageId: string; pageSize?: number }): Promise<Stripe.Checkout.Session[]> {
@@ -249,18 +220,6 @@ export function isOwnedPackageCheckoutSession(
       expected,
     )
   );
-}
-
-/**
- * A legacy Session is bindable only when Stripe carries the exact durable
- * attempt id. Price/metadata/success-url similarity alone is not an identity
- * proof because response-lost creates and parameter changes can overlap.
- */
-export function isDurablyAssociatedPackageCheckoutSession(
-  checkoutSession: Pick<Stripe.Checkout.Session, "metadata">,
-  attemptId: string,
-): boolean {
-  return checkoutSession.metadata?.packageCheckoutAttemptId === attemptId;
 }
 
 /**

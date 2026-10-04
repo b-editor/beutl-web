@@ -4,7 +4,7 @@ import { startRetryableTransaction, type PrismaTransaction } from "@beutl/db";
 // through Hyperdrive. Prisma's five-second default can expire mid-ledger update.
 // Keep these atomic, database-only units bounded without changing unrelated
 // transactions. Provider requests and object-store I/O stay outside the callback.
-export const AI_JOB_TRANSACTION_TIMEOUT_MS = 30_000;
+const AI_JOB_TRANSACTION_TIMEOUT_MS = 30_000;
 
 export async function startAiJobTransaction<T>(
   callback: (prisma: PrismaTransaction) => Promise<T>,

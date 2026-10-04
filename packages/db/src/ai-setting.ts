@@ -1,7 +1,7 @@
 import { getDb } from "./provider";
 import type { PrismaTransaction } from "./transaction";
 
-export type AiSettingRecord = {
+type AiSettingRecord = {
   key: string;
   value: string;
   updatedBy: string | null;

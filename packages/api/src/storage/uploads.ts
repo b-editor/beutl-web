@@ -1044,7 +1044,7 @@ export async function cancelUpload({
 }
 
 // 取り消しがどこまで行ったか。片付いた／まだ残っている／そんなものは無い。
-export type CancelOutcome = "cancelled" | "pending" | "missing";
+type CancelOutcome = "cancelled" | "pending" | "missing";
 
 // Whether the parts are gone. A failure here is usually "already gone", but it
 // can be the bucket being briefly unreachable, and the two are told apart by

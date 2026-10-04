@@ -1,7 +1,7 @@
 import { parseBuffer } from "music-metadata";
 import { MAX_AI_TRANSCRIPTION_UPLOAD_BYTES } from "./upload-limits";
 
-export type ParsedAudio = {
+type ParsedAudio = {
   bytes: ArrayBuffer;
   durationSeconds: number;
 };

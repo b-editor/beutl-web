@@ -211,19 +211,3 @@ export async function findCheckoutBillingOffer({
   });
 }
 
-export async function listBillingOfferPriceIds({
-  kind,
-  tier,
-  prisma,
-}: {
-  kind: BillingOfferKind;
-  tier?: string | null;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma ?? (await getDb());
-  const offers = await db.billingOffer.findMany({
-    where: { kind, ...(tier !== undefined ? { tier } : {}) },
-    select: { stripePriceId: true },
-  });
-  return offers.map((offer) => offer.stripePriceId);
-}

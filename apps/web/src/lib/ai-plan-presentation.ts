@@ -14,7 +14,7 @@ type AiPlanEntitlementPresentationInput = {
 };
 
 export type AiPlanStatusPresentation = SubscriptionStatusPresentation;
-export type AiPlanPresentation = SubscriptionPresentation;
+type AiPlanPresentation = SubscriptionPresentation;
 
 export function getAiPlanPresentation(
   entitlements: AiPlanEntitlementPresentationInput,

@@ -9,7 +9,7 @@ export const STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS = 15 * 60 * 1000;
 export const STORAGE_MULTIPART_MAX_ATTEMPTS = 5;
 const STORAGE_MULTIPART_CLEANUP_BATCH_SIZE = 500;
 
-export type StorageMultipartCleanupSnapshot = {
+type StorageMultipartCleanupSnapshot = {
   objectKey: string;
   uploadId: string;
   leaseToken: string | null;

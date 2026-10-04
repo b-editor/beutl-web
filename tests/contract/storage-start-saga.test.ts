@@ -6,10 +6,8 @@ import {
   createStorageUploadIntent,
   touchStorageUploadActivity,
   deleteClaimedStorageUpload,
-  deleteStorageUpload,
   findStorageUploadByIdAndUserId,
   listStorageUploadsStartedBefore,
-  releaseStorageUploadCreation,
   setDbProvider,
 } from "@beutl/db";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
@@ -140,7 +138,6 @@ describe("durable storage-upload start saga", () => {
     expect(await claimStorageUploadCreation({
       id, userId, now, leaseUntil: new Date(now.getTime() + 60_000), leaseToken: "B",
     })).toBe(true);
-    expect(await releaseStorageUploadCreation({ id, now, leaseToken: "A" })).toBe(false);
     expect((await findStorageUploadByIdAndUserId({ id, userId }))?.creationLeaseToken).toBe("B");
   });
 
@@ -233,7 +230,7 @@ describe("durable storage-upload start saga", () => {
     const id = await intent("reused-id");
     const original = await findStorageUploadByIdAndUserId({ id, userId });
     expect(original).not.toBeNull();
-    await deleteStorageUpload({ id });
+    state.storageUploads.delete(id);
     await intent(id);
     const replacement = state.storageUploads.get(id)!;
     replacement.createdAt = new Date(original!.createdAt.getTime() + 1);
@@ -265,7 +262,7 @@ describe("durable storage-upload start saga", () => {
     const claimed = await findStorageUploadByIdAndUserId({ id, userId });
     expect(claimed?.abandonedAt).not.toBeNull();
 
-    await deleteStorageUpload({ id });
+    state.storageUploads.delete(id);
     await intent(id);
     const replacement = state.storageUploads.get(id)!;
     replacement.createdAt = new Date(claimed!.createdAt.getTime() + 1);

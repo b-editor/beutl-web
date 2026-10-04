@@ -39,7 +39,7 @@ function asPlanOffer(
   return { ...offer, kind: plan.offerKind, tier: offer.tier ?? null };
 }
 
-export function subscriptionTermsFromPrice(
+function subscriptionTermsFromPrice(
   plan: SubscriptionPlanConfig,
   price: Stripe.Price,
   tier: string | null,
@@ -137,7 +137,7 @@ export function subscriptionPlanFromStripe(
   return subscriptionPlanConfigOf(subscription.metadata?.planId);
 }
 
-export function isSubscriptionForOffer(
+function isSubscriptionForOffer(
   plan: Pick<SubscriptionPlanConfig, "offerKind">,
   subscription: Stripe.Subscription,
   offer: Pick<

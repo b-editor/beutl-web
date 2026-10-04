@@ -10,7 +10,6 @@ import {
 import {
   AiProviderError,
   aiProviderFailureCode,
-  translateSegments,
 } from "../../ai/openrouter";
 import { MAX_MODEL_ID_LENGTH } from "@beutl/core";
 import {

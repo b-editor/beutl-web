@@ -29,7 +29,7 @@ export type AiUsageDistributionRow = {
   usagePeriodEnd: Date | null;
 };
 
-export type AiUsageQuantiles = {
+type AiUsageQuantiles = {
   p50: number;
   p75: number;
   p90: number;

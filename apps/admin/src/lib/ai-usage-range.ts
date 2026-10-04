@@ -16,7 +16,7 @@ const RANGE_MS: Record<AiUsageRange, number> = {
   "90d": 90 * 24 * HOUR_MS,
 };
 
-export function isAiUsageRange(value: unknown): value is AiUsageRange {
+function isAiUsageRange(value: unknown): value is AiUsageRange {
   return (
     typeof value === "string" &&
     (AI_USAGE_RANGES as readonly string[]).includes(value)

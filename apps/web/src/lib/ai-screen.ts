@@ -656,7 +656,7 @@ export function settleAiRequestName(
   return { ...names, held, heldModels, heldCapabilities };
 }
 
-export type AiRequestRecoveryEvent =
+type AiRequestRecoveryEvent =
   | {
       type: "commit";
       request: string;

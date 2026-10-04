@@ -10,7 +10,7 @@ import { getEntitlementSummary } from "@beutl/api/ai/entitlements";
 import { retrievePackages } from "./library/actions";
 
 // 概要に出すライブラリのパッケージ数。これを超える分は一覧ページで見てもらう。
-export const LIBRARY_PREVIEW_COUNT = 6;
+const LIBRARY_PREVIEW_COUNT = 6;
 
 export async function retrieveDashboardOverview(userId: string) {
   // Explicitly share the render-scoped PrismaClient across all overview reads.

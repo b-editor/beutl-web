@@ -40,7 +40,7 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
-export function canonicalRetryPayload({
+function canonicalRetryPayload({
   kind,
   model,
   inputParams,

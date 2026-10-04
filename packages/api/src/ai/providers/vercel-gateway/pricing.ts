@@ -73,7 +73,7 @@ function toNumber(value: string | number | null | undefined): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export type GatewayVideoRate = {
+type GatewayVideoRate = {
   /** The label the provider tagged the rate with, or null for a rate that applies to any shape. */
   label: string | null;
   usdPerSecond: number;

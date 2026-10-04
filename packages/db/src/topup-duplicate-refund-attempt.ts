@@ -67,7 +67,7 @@ export async function scheduleTopUpDuplicateRefundAttempt({
   });
 }
 
-export type ClaimedTopUpDuplicateRefund = Awaited<
+type ClaimedTopUpDuplicateRefund = Awaited<
   ReturnType<typeof scheduleTopUpDuplicateRefundAttempt>
 > & {
   claimKind: "automatic" | "canonical-recheck";

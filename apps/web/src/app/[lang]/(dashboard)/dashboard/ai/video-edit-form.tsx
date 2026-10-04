@@ -67,7 +67,7 @@ import {
 } from "./shared";
 
 /** Which of the three things to do with a video. */
-export type AiVideoEditMode = "edit" | "extend" | "motion";
+type AiVideoEditMode = "edit" | "extend" | "motion";
 
 // Which edit to run decides what the form asks for and what it costs, so it is
 // a visible choice rather than an item in a list the user has to open — the
@@ -84,7 +84,7 @@ const MODES: readonly {
 
 const MODE_OPERATIONS = MODES.map((entry) => entry.operation);
 
-export type AiVideoEditScreenOptions = Record<
+type AiVideoEditScreenOptions = Record<
   AiSourceVideoOperation,
   {
     models: AiScreenModel[];

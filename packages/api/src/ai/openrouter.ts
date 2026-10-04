@@ -1,5 +1,3 @@
-import { MAX_AI_RESULT_TEXT_LENGTH } from "@beutl/core";
-import { z } from "zod";
 import { HTTPClient, OpenRouter, type Fetcher } from "@openrouter/sdk";
 import type {
   CreateImagesResponse,
@@ -29,9 +27,6 @@ import {
   AI_MAX_IMAGE_REFERENCES,
   type AiImageAspectRatio,
   type AiImageBackground,
-  type AiLegacyImageSize,
-  type AiVideoAspectRatio,
-  type AiVideoResolution,
 } from "@beutl/core";
 import {
   inspectGeneratedVideo,
@@ -100,7 +95,7 @@ export type VideoGenerationStatus = AiVideoJobStatus;
 export type VideoJobInfo = AiVideoJobInfo & { unsignedUrls?: string[] };
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-export const DEFAULT_OPENROUTER_REQUEST_TIMEOUT_MS = 120_000;
+const DEFAULT_OPENROUTER_REQUEST_TIMEOUT_MS = 120_000;
 export const MAX_OPENROUTER_JSON_RESPONSE_BYTES = 32 * 1024 * 1024;
 const MAX_OPENROUTER_ERROR_RESPONSE_BYTES = 16 * 1024;
 
@@ -205,9 +200,9 @@ export async function verifyOpenRouterWebhookSignature({
   return false;
 }
 
-// Exported for the SDK-backed client, which needs the same key and the same
+// Shared by the SDK-backed client below, which needs the same key and the same
 // "not configured" failure as the hand-rolled requests.
-export function getOpenRouterApiKey(): string {
+function getOpenRouterApiKey(): string {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) {
     throw new AiProviderError("OPENROUTER_API_KEY is not set");
@@ -417,7 +412,7 @@ export function openRouterExecutionOf(
 // The provider's own words about a failure. Users are shown a generic message,
 // so without this the reason — an unsupported parameter, a model that is gone —
 // is lost entirely.
-export function openRouterFailureMessage(
+function openRouterFailureMessage(
   cause: unknown,
   fallback: string,
 ): string {
@@ -588,10 +583,6 @@ async function requestJson(
     requestScope.release();
   }
 }
-
-// The fixed sizes the image endpoint used to take. Callers map them onto a
-// ratio at the edge; the provider has never been sent pixels.
-export type ImageGenerationSize = AiLegacyImageSize;
 
 function toInputReference(reference: ImageReference) {
   return {
