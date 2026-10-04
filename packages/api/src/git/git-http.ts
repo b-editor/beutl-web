@@ -7,7 +7,6 @@ import {
   parseReceivePackBody,
   receivePackResponse,
 } from "git-fs-s3/http";
-import type { GitScope } from "./tokens";
 import { MAX_GIT_NEGOTIATION_BYTES, MAX_GIT_PUSH_BYTES } from "@beutl/core";
 import { GitObjectStore, type GitObjectBucket } from "./git-object-store";
 
@@ -83,22 +82,21 @@ export async function initializeGitRepository(bucket: GitObjectBucket, repoId: s
   await openRepository(bucket, repoId);
 }
 
-export async function advertiseGitRefs(
-  bucket: GitObjectBucket, repoId: string, service: string | null, scope: GitScope,
-): Promise<Response> {
-  if (service !== "git-upload-pack" && service !== "git-receive-pack") {
-    return new Response("Unsupported Git service", { status: 400 });
-  }
-  if (service === "git-receive-pack" && scope !== "write") {
-    return new Response("Forbidden", { status: 403 });
-  }
+export type GitService = "git-upload-pack" | "git-receive-pack";
+
+export function isGitService(value: string | undefined): value is GitService {
+  return value === "git-upload-pack" || value === "git-receive-pack";
+}
+
+export async function advertiseGitRefs(bucket: GitObjectBucket, repoId: string, service: GitService): Promise<Response> {
   const { repo } = await openRepository(bucket, repoId);
   return response(await handleInfoRefs(repo, { service }));
 }
 
 export async function uploadGitPack(request: Request, bucket: GitObjectBucket, repoId: string): Promise<Response> {
-  const { store, prefix, fs, repo } = await openRepository(bucket, repoId);
+  // Reject an oversized body before any repository storage I/O.
   const body = await readBodyAtMost(request, MAX_GIT_NEGOTIATION_BYTES);
+  const { store, prefix, fs, repo } = await openRepository(bucket, repoId);
   const objects = await store.list(`${prefix}/repo.git/objects/`);
   if (objects.objects.reduce((size, object) => size + object.size, 0) > MAX_GIT_REPOSITORY_BYTES) {
     return new Response("Git history exceeds the serving limit", { status: 413 });
@@ -120,8 +118,8 @@ export async function receiveGitPack(
   request: Request, bucket: GitObjectBucket, repoId: string,
   reserveHistory?: (maxAdditionalBytes: number) => Promise<boolean>,
 ): Promise<Response> {
-  const { store, prefix, repo } = await openRepository(bucket, repoId);
   const body = await readBodyAtMost(request, MAX_GIT_PUSH_BYTES);
+  const { store, prefix, repo } = await openRepository(bucket, repoId);
   const parsed = parseReceivePackBody(body);
   let additionalBytes: number;
   try { additionalBytes = incomingGitObjectBytes(parsed.packData); }

@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { createMiddleware } from "hono/factory";
 import { MAX_GIT_LFS_PART_BYTES } from "@beutl/core";
-import { advertiseGitRefs, initializeGitRepository, receiveGitPack, uploadGitPack } from "./git-http";
+import { advertiseGitRefs, initializeGitRepository, isGitService, receiveGitPack, uploadGitPack, type GitService } from "./git-http";
 import { S3GitObjectBucket, type GitS3Environment } from "./s3-object-store";
 import type { GitObjectBucket } from "./git-object-store";
 import { databaseGitStorageAccounting, withGitDatabase, type GitDatabaseEnvironment, type GitStorageAccounting } from "./accounting";
@@ -64,6 +64,13 @@ export class GitRepositoryDurableObject {
         try { await initializeGitRepository(this.objectBucket(), repoId); }
         finally { await this.accounting.settleHistory(repoId, await this.gitBytes(repoId)); }
       }
+      await next();
+    });
+    // Reject a bad ref advertisement before initialization reserves account storage.
+    const advertisedService = createMiddleware<Routes>(async (c, next) => {
+      const service = c.req.query("service");
+      if (!isGitService(service)) return c.text("Unsupported Git service", 400);
+      if (service === "git-receive-pack" && scopeOf(c) !== "write") return c.text("Forbidden", 403);
       await next();
     });
     const reservation = async (c: Context<Routes>): Promise<Record | Response> => {
@@ -130,8 +137,8 @@ export class GitRepositoryDurableObject {
       })
       .post("/api/v3/git/:repo/info/lfs/objects/batch", (c) => handleLfsBatch(c.req.raw, this.objectBucket(), storage,
         this.env, c.get("repoId"), scopeOf(c) as GitScope, this.accounting))
-      .get("/api/v3/git/:repo/info/refs", initialized, (c) =>
-        advertiseGitRefs(this.objectBucket(), c.get("repoId"), c.req.query("service") ?? null, scopeOf(c) as GitScope))
+      .get("/api/v3/git/:repo/info/refs", advertisedService, initialized, (c) =>
+        advertiseGitRefs(this.objectBucket(), c.get("repoId"), c.req.query("service") as GitService))
       .post("/api/v3/git/:repo/git-upload-pack", initialized, (c) =>
         uploadGitPack(c.req.raw, this.objectBucket(), c.get("repoId")))
       .post("/api/v3/git/:repo/git-receive-pack", scope("write"), initialized, (c) => this.receivePack(c))

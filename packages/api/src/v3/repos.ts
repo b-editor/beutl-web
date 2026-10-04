@@ -17,7 +17,10 @@ type Routes = { Bindings: GitEnvironment; Variables: { ownerId: string } };
 const REPOSITORY = "/:id{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}";
 
 async function jsonInput(c: Context): Promise<Record<string, unknown> | null | undefined> {
-  try { return await c.req.json(); } catch { return undefined; }
+  try { return await c.req.json(); } catch {
+    // A body that is not JSON is the caller's input error, reported as 400.
+    return undefined;
+  }
 }
 const message = (c: Context, text: string, status: 400 | 401 | 409) => c.json({ message: text }, status);
 const origin = (c: Context<Routes>) => gitPublicOrigin(c.env, c.req.url);
