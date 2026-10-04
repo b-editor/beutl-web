@@ -516,7 +516,7 @@ export async function loadAiCostEstimates({
       pairs
         .filter(({ operation }) => operation === "image.generate" && request === undefined)
         .map((pair) => [
-          `${pair.provider} ${pair.model}`,
+          `${pair.provider}\u0000${pair.model}`,
           { modelId: pair.model, provider: pair.provider },
         ]),
     ).values(),
