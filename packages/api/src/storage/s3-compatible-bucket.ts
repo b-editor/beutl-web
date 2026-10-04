@@ -464,16 +464,23 @@ export function createS3CompatibleBucket(
       const etag = response.headers.get("etag");
       return etag === null ? { key } : { key, etag: stripEtagQuotes(etag) };
     },
-    async get(key) {
+    async get(key, getOptions) {
+      const range = getOptions?.range;
       const response = await send({
         method: "GET",
         url: objectUrl(key),
+        headers: range ? { range: `bytes=${range.offset}-${range.offset + range.length - 1}` } : undefined,
       });
       if (response.status === 404) {
         await response.body?.cancel().catch(() => undefined);
         return null;
       }
       if (!response.ok) throw await failure("get", key, response);
+      // A service that ignored the range would hand back the whole object.
+      if (range && response.status !== 206) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new S3StorageError({ operation: "get", key, status: response.status, detail: "the range was not honored" });
+      }
       return {
         body: response.body ?? undefined,
         size: contentLengthOf(response),

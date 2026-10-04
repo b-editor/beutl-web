@@ -51,9 +51,16 @@ describe("a bucket layered over the store objects used to live in", () => {
 
     fallback.bucket.get.mockResolvedValueOnce({ size: 7 });
     expect(await layered.get!("old")).toEqual({ size: 7 });
-    expect(fallback.bucket.get).toHaveBeenCalledWith("old");
+    expect(fallback.bucket.get).toHaveBeenCalledWith("old", undefined);
 
     expect(await layered.get!("gone")).toBeNull();
+
+    // A byte range reaches whichever bucket holds the object.
+    const range = { range: { offset: 2, length: 4 } };
+    fallback.bucket.get.mockResolvedValueOnce({ size: 4 });
+    await layered.get!("old", range);
+    expect(primary.bucket.get).toHaveBeenLastCalledWith("old", range);
+    expect(fallback.bucket.get).toHaveBeenLastCalledWith("old", range);
   });
 
   it("measures through the same order as it reads", async () => {

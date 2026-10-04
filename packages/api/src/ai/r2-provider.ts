@@ -15,13 +15,17 @@ const SCOPE_KEY = "__BEUTL_R2_BUCKET_PROVIDER_SCOPE__";
  */
 export type StorageStreamOptions = { contentLength?: number };
 
+/** A byte range to read, as R2's `get` takes it. */
+export type StorageGetOptions = { range?: { offset: number; length: number } };
+
 export type R2BucketLike = {
   put(
     key: string,
     value: ArrayBuffer | ReadableStream | string,
     options?: { httpMetadata?: { contentType?: string } } & StorageStreamOptions,
   ): Promise<unknown>;
-  get?(key: string): Promise<{
+  /** With `range`, the body holds only those bytes (R2's own option). */
+  get?(key: string, options?: StorageGetOptions): Promise<{
     body?: ReadableStream<Uint8Array>;
     arrayBuffer?: () => Promise<ArrayBuffer>;
     size?: number;

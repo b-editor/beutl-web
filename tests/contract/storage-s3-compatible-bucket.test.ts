@@ -114,6 +114,23 @@ describe("S3 compatible bucket adapter", () => {
     expect(await s3.get!("missing")).toBeNull();
   });
 
+  it("asks for a byte range and refuses a whole object served in its place", async () => {
+    respond(
+      new Response(new Uint8Array([8, 7]), { status: 206, headers: { "content-length": "2", "content-range": "bytes 1-2/3" } }),
+      new Response(new Uint8Array([9, 8, 7]), { status: 200, headers: { "content-length": "3" } }),
+    );
+    const s3 = bucket();
+    const part = await s3.get!("clip", { range: { offset: 1, length: 2 } });
+    expect(recorded[0].headers.get("range")).toBe("bytes=1-2");
+    expect(new Uint8Array(await new Response(part!.body).arrayBuffer())).toEqual(new Uint8Array([8, 7]));
+
+    await expect(s3.get!("clip", { range: { offset: 1, length: 2 } })).rejects.toMatchObject({
+      name: "S3StorageError",
+      operation: "get",
+      status: 200,
+    });
+  });
+
   it("surfaces the service error code on a failed read", async () => {
     respond(xml("<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>", { status: 403 }));
     await expect(bucket().get!("secret")).rejects.toMatchObject({

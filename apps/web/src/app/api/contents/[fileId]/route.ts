@@ -1,4 +1,4 @@
-import { resolveContentAccess } from "@beutl/core";
+import { byteRangeHeaders, parseByteRange, resolveContentAccess } from "@beutl/core";
 import {
   existsUserPaymentHistory,
   findFileForContentAccess,
@@ -56,7 +56,19 @@ export async function GET(
     if (!bucket.get) {
       throw new Error("The configured storage bucket cannot read objects");
     }
-    const object = await bucket.get(file.objectKey);
+    // Media players seek with one byte range at a time.
+    const size = Number(file.size);
+    const range = parseByteRange(request.headers.get("range"), size);
+    if (range === "unsatisfiable") {
+      return new NextResponse(null, {
+        status: 416,
+        headers: { ...byteRangeHeaders(null, size), ...contentCacheHeaders(false) },
+      });
+    }
+    const object = await bucket.get(
+      file.objectKey,
+      range ? { range: { offset: range.start, length: range.end - range.start + 1 } } : undefined,
+    );
     if (!object) {
       return NextResponse.json(
         {
@@ -76,9 +88,12 @@ export async function GET(
     }
     return new NextResponse(body, {
       headers: {
-        ...(typeof object.size === "number"
-          ? { "Content-Length": object.size.toString() }
-          : {}),
+        ...(range
+          ? byteRangeHeaders(range, size)
+          : typeof object.size === "number"
+            ? { "Content-Length": object.size.toString() }
+            : {}),
+        "Accept-Ranges": "bytes",
         ...deliveryHeaders,
         "Content-Disposition": contentDisposition(
           deliveryHeaders["Content-Disposition"],
@@ -86,7 +101,7 @@ export async function GET(
         ),
         ...contentCacheHeaders(access.canUsePublicCache),
       },
-      status: 200,
+      status: range ? 206 : 200,
     });
   }
 

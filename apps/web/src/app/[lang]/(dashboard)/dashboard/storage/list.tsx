@@ -115,7 +115,8 @@ import {
 import { useTranslation } from "@beutl/ui/i18n-client";
 import type { StorageFile, StorageFolder } from "./types";
 import { COLUMN_CLASS, getColumns } from "./columns";
-import { FILE_KINDS, isDedicated, openFile, RAW } from "./file-kind";
+import { contentUrl, FILE_KINDS, isDedicated, RAW } from "./file-kind";
+import { FilePreviewDialog, type PreviewFile } from "@/components/dashboard/file-preview";
 import {
   FileContextMenu,
   FolderActionsButton,
@@ -653,6 +654,9 @@ export function List({
     setRowSelection({ [file.id]: true });
     setDetailsOpen(true);
   }, []);
+  // The file the preview shows; it moves through the files in their listed order.
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const requestPreview = useCallback((file: StorageFile) => setPreviewId(file.id), []);
   const handlers = useMemo<FileListHandlers>(
     () => ({
       requestDelete,
@@ -660,9 +664,10 @@ export function List({
       requestMove,
       changeVisibility,
       showDetails,
+      requestPreview,
       detailsAvailable: isLarge,
     }),
-    [requestDelete, requestRename, requestMove, changeVisibility, showDetails, isLarge],
+    [requestDelete, requestRename, requestMove, changeVisibility, showDetails, requestPreview, isLarge],
   );
   const folderHandlers = useMemo<FolderHandlers>(
     () => ({
@@ -893,6 +898,13 @@ export function List({
     },
   });
   const fileRows = table.getRowModel().rows;
+  const previewFiles = useMemo<PreviewFile[]>(
+    () => fileRows.map(({ original: file }) => ({
+      key: file.id, name: file.name, url: contentUrl(file), mimeType: file.mimeType, size: Number(file.size),
+    })),
+    [fileRows],
+  );
+  const previewIndex = previewFiles.findIndex((file) => file.key === previewId);
   const filteredCount = total;
   const selectedFiles = useMemo(
     () => table.getSelectedRowModel().rows.map((row) => row.original),
@@ -959,12 +971,12 @@ export function List({
         return;
       }
       if (event.key === "Enter" && selectedFilesRef.current.length === 1) {
-        openFile(selectedFilesRef.current[0]);
+        requestPreview(selectedFilesRef.current[0]);
       }
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [table, requestDelete]);
+  }, [table, requestDelete, requestPreview]);
 
   // ---- moving by drag and drop -------------------------------------------
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
@@ -1028,7 +1040,7 @@ export function List({
     },
     onDoubleClick: (event) => {
       if (isInteractiveTarget(event.target)) return;
-      openFile(row.original);
+      requestPreview(row.original);
     },
     onContextMenu: () => {
       if (!row.getIsSelected()) {
@@ -1040,7 +1052,7 @@ export function List({
       if (event.target !== event.currentTarget) return;
       if (event.key === "Enter") {
         event.preventDefault();
-        openFile(row.original);
+        requestPreview(row.original);
       } else if (event.key === " ") {
         event.preventDefault();
         row.toggleSelected();
@@ -1776,6 +1788,13 @@ export function List({
             />
           )}
         </div>
+
+        <FilePreviewDialog
+          files={previewFiles}
+          index={previewIndex < 0 ? null : previewIndex}
+          onIndexChange={(index) => setPreviewId(index === null ? null : previewFiles[index].key)}
+          lang={lang}
+        />
 
         <AlertDialog
           open={confirmDelete !== null}

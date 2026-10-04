@@ -22,10 +22,10 @@ export function createLayeredBucket({
 
   if (primary.get) {
     const read = primary.get.bind(primary);
-    bucket.get = async (key) => {
-      const found = await read(key);
+    bucket.get = async (key, options) => {
+      const found = await read(key, options);
       if (found !== null || !fallback.get) return found;
-      return await fallback.get(key);
+      return await fallback.get(key, options);
     };
   }
 
