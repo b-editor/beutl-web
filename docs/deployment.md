@@ -72,8 +72,8 @@ Prisma model.
 Optional hosted Git uses private Backblaze B2 storage and adds Git/LFS
 bytes to the existing account meter. See [Hosted Git and large media](hosted-git.md)
 for the required migration, Web Worker configuration, transfer limits and cleanup.
-Its `BEUTL_GIT_S3_*` settings are separate configuration; the physical bucket
-can be shared with File/AI storage when its lifecycle rules preserve Git versions.
+Git/LFS uses the same `BEUTL_S3_*` configuration and private bucket as
+File/AI storage. Its lifecycle rules must preserve referenced Git/LFS versions.
 
 User files and AI outputs live in one object store used by the Web Worker's
 UI, public APIs and scheduled reconcilers. The admin and private image Workers

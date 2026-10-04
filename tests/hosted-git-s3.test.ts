@@ -1,20 +1,50 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { S3GitObjectBucket } from "../packages/api/src/git/s3-object-store";
+import { createStorageBucket } from "../packages/api/src/storage/bucket-from-env";
 
 const env = {
-  BEUTL_GIT_S3_ENDPOINT: "https://s3.us-east-005.backblazeb2.com/",
-  BEUTL_GIT_S3_REGION: "us-east-005",
-  BEUTL_GIT_S3_BUCKET: "beutl-test",
-  BEUTL_GIT_S3_ACCESS_KEY_ID: "test-key",
-  BEUTL_GIT_S3_SECRET_ACCESS_KEY: "test-secret",
-  BEUTL_GIT_S3_PATH_STYLE: "true",
+  BEUTL_S3_ENDPOINT: "https://s3.us-east-005.backblazeb2.com/",
+  BEUTL_S3_REGION: "us-east-005",
+  BEUTL_S3_BUCKET: "beutl-test",
+  BEUTL_S3_ACCESS_KEY_ID: "test-key",
+  BEUTL_S3_SECRET_ACCESS_KEY: "test-secret",
+  BEUTL_S3_FORCE_PATH_STYLE: "true",
 };
 const response = (body: string, headers: Record<string, string> = {}) => new Response(body, {
   status: 200, headers: { "Content-Type": "application/xml", ...headers },
 });
 
 describe("Backblaze B2 S3 storage adapter", () => {
+  it.each([[undefined, true], [" yes ", true], ["false", false]] as const)(
+    "uses the same S3 configuration for File/AI and Git/LFS (path style: %s)", async (setting, pathStyle) => {
+      const requests: Request[] = [];
+      const fetcher = vi.fn(async (request: Request) => {
+        requests.push(request);
+        return new Response(null, { status: 200 });
+      });
+      vi.stubGlobal("fetch", fetcher);
+      try {
+        const shared = { ...env, BEUTL_STORAGE_PROVIDER: "s3", BEUTL_S3_FORCE_PATH_STYLE: setting,
+          BEUTL_S3_SESSION_TOKEN: "shared-session" };
+        const files = createStorageBucket(shared);
+        const git = new S3GitObjectBucket(shared, fetcher as typeof fetch);
+        await files.put("file", "content");
+        await git.put("git/item", new Uint8Array([1]));
+        const base = pathStyle ? `${env.BEUTL_S3_ENDPOINT}${env.BEUTL_S3_BUCKET}/`
+          : `https://${env.BEUTL_S3_BUCKET}.s3.us-east-005.backblazeb2.com/`;
+        expect(requests.map(request => request.url)).toEqual([`${base}file`, `${base}git/item`]);
+        for (const request of requests) {
+          expect(request.headers.get("authorization"))
+            .toContain("Credential=test-key/");
+          expect(request.headers.get("authorization"))
+            .toContain("/us-east-005/s3/aws4_request");
+          expect(request.headers.get("x-amz-security-token")).toBe("shared-session");
+        }
+      } finally { vi.unstubAllGlobals(); }
+    },
+  );
+
   it("rejects missing-bucket writes while preserving missing reads and idempotent aborts", async () => {
     const bucket = new S3GitObjectBucket(env, (async () =>
       new Response("<Error><Code>NoSuchBucket</Code></Error>", { status: 404 })) as typeof fetch);

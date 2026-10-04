@@ -6,9 +6,10 @@ and desktop remotes remain in place; no migration is performed.
 
 ## Storage configuration
 
-Git storage uses `BEUTL_GIT_S3_*`, separately from the ordinary File/AI
-`BEUTL_S3_*` configuration. Set development and production Git credentials on
-their respective environments; the existing S3 settings do not enable Git.
+Git/LFS and ordinary File/AI storage use the same `BEUTL_S3_*` connection
+configuration and private bucket in each environment. Development and production
+keep separate buckets and credentials. Git enablement and token signing are
+configured independently of storage.
 Git/LFS pins object versions, so its bucket must retain referenced versions.
 It can share the environment's existing private File/AI bucket when lifecycle
 rules expire ordinary objects only, without matching `git/` or `git-lfs/`.
@@ -28,12 +29,12 @@ Configure the Web Worker (`apps/web/wrangler.jsonc`) with a private B2 bucket an
 | Setting | Value |
 | --- | --- |
 | `BEUTL_GIT_ENABLED` | `true` after configuration and validation |
-| `BEUTL_GIT_S3_ENDPOINT` | The bucket's HTTPS S3 endpoint |
-| `BEUTL_GIT_S3_REGION` | The B2 region, such as `us-west-004` |
-| `BEUTL_GIT_S3_BUCKET` | The private bucket name |
-| `BEUTL_GIT_S3_PATH_STYLE` | `true` for path-style requests |
-| `BEUTL_GIT_S3_ACCESS_KEY_ID` | Bucket-scoped application key ID (secret) |
-| `BEUTL_GIT_S3_SECRET_ACCESS_KEY` | Application key (secret) |
+| `BEUTL_S3_ENDPOINT` | The bucket's HTTPS S3 endpoint |
+| `BEUTL_S3_REGION` | The B2 region, such as `us-west-004` |
+| `BEUTL_S3_BUCKET` | The private bucket name |
+| `BEUTL_S3_FORCE_PATH_STYLE` | `true` for path-style requests |
+| `BEUTL_S3_ACCESS_KEY_ID` | Bucket-scoped application key ID (secret) |
+| `BEUTL_S3_SECRET_ACCESS_KEY` | Application key (secret) |
 | `BEUTL_GIT_TOKEN_SECRET` | Independent random signing secret, at least 32 characters |
 
 The key needs object read, write, list, version deletion and multipart operations

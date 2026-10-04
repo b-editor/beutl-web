@@ -2,14 +2,16 @@ import { AwsClient } from "aws4fetch";
 import { XMLParser } from "fast-xml-parser";
 import { createHash } from "node:crypto";
 import type { GitMultipartUpload, GitObjectBucket } from "./git-object-store";
+import { s3BucketOptionsFromEnv } from "../storage/bucket-from-env";
 
 export interface GitS3Environment {
-  BEUTL_GIT_S3_ENDPOINT?: string;
-  BEUTL_GIT_S3_REGION?: string;
-  BEUTL_GIT_S3_BUCKET?: string;
-  BEUTL_GIT_S3_ACCESS_KEY_ID?: string;
-  BEUTL_GIT_S3_SECRET_ACCESS_KEY?: string;
-  BEUTL_GIT_S3_PATH_STYLE?: string;
+  BEUTL_S3_ENDPOINT?: string;
+  BEUTL_S3_REGION?: string;
+  BEUTL_S3_BUCKET?: string;
+  BEUTL_S3_ACCESS_KEY_ID?: string;
+  BEUTL_S3_SECRET_ACCESS_KEY?: string;
+  BEUTL_S3_FORCE_PATH_STYLE?: string;
+  BEUTL_S3_SESSION_TOKEN?: string;
 }
 
 const parser = new XMLParser({ ignoreAttributes: true, parseTagValue: false });
@@ -48,26 +50,24 @@ export class S3GitObjectBucket implements GitObjectBucket {
   private readonly pathStyle: boolean;
 
   constructor(env: GitS3Environment, private readonly fetcher: typeof fetch = fetch) {
+    const options = s3BucketOptionsFromEnv(env);
     let endpoint: URL;
-    try { endpoint = new URL(env.BEUTL_GIT_S3_ENDPOINT ?? ""); }
+    try { endpoint = new URL(options.endpoint); }
     catch { throw new Error("Hosted Git S3 endpoint is invalid"); }
-    const bucket = env.BEUTL_GIT_S3_BUCKET ?? "";
-    const region = env.BEUTL_GIT_S3_REGION ?? "";
+    const bucket = options.bucket;
+    const region = options.region ?? "";
     if (endpoint.protocol !== "https:" || !endpoint.hostname || endpoint.username || endpoint.password ||
         endpoint.search || endpoint.hash || endpoint.pathname !== "/" ||
         !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/u.test(bucket) ||
-        !/^[a-z0-9][a-z0-9-]{0,62}$/u.test(region) ||
-        !env.BEUTL_GIT_S3_ACCESS_KEY_ID || !env.BEUTL_GIT_S3_SECRET_ACCESS_KEY ||
-        (env.BEUTL_GIT_S3_PATH_STYLE !== undefined &&
-          env.BEUTL_GIT_S3_PATH_STYLE !== "true" && env.BEUTL_GIT_S3_PATH_STYLE !== "false")) {
+        !/^[a-z0-9][a-z0-9-]{0,62}$/u.test(region)) {
       throw new Error("Hosted Git S3 storage is not configured");
     }
     this.endpoint = endpoint;
     this.bucket = bucket;
-    this.pathStyle = env.BEUTL_GIT_S3_PATH_STYLE !== "false";
+    this.pathStyle = options.forcePathStyle !== false;
     this.client = new AwsClient({ service: "s3", region,
-      accessKeyId: env.BEUTL_GIT_S3_ACCESS_KEY_ID,
-      secretAccessKey: env.BEUTL_GIT_S3_SECRET_ACCESS_KEY });
+      accessKeyId: options.accessKeyId,
+      secretAccessKey: options.secretAccessKey, sessionToken: options.sessionToken });
   }
 
   private url(key?: string, params?: Record<string, string>): URL {

@@ -28,9 +28,9 @@ const env = {
   JWT_SECRET: "web-entrypoint-test-secret", JWT_ISSUER: "", JWT_AUDIENCE: "",
   PUBLIC_ORIGIN: "https://beutl.beditor.net", BEUTL_GIT_ENABLED: "true",
   BEUTL_GIT_TOKEN_SECRET: "web-entrypoint-git-secret-long-enough",
-  BEUTL_GIT_S3_ENDPOINT: "https://s3.example.test", BEUTL_GIT_S3_REGION: "test",
-  BEUTL_GIT_S3_BUCKET: "git", BEUTL_GIT_S3_ACCESS_KEY_ID: "test",
-  BEUTL_GIT_S3_SECRET_ACCESS_KEY: "test",
+  BEUTL_S3_ENDPOINT: "https://s3.example.test", BEUTL_S3_REGION: "test",
+  BEUTL_S3_BUCKET: "git", BEUTL_S3_ACCESS_KEY_ID: "test",
+  BEUTL_S3_SECRET_ACCESS_KEY: "test",
   BEUTL_GIT_REPOSITORIES: { idFromName: (name: string) => name, get: () => ({ fetch: gitFetch }) },
 } satisfies Env;
 

@@ -4,7 +4,7 @@
 // Worker の両方がここを通るので、設定の読み方はこの 1 か所に閉じる。
 import type { R2BucketLike } from "../ai/r2-provider";
 import { createLayeredBucket } from "./layered-bucket";
-import { createS3CompatibleBucket } from "./s3-compatible-bucket";
+import { createS3CompatibleBucket, type S3CompatibleBucketOptions } from "./s3-compatible-bucket";
 
 export const STORAGE_PROVIDERS = ["r2", "s3"] as const;
 export type StorageProvider = (typeof STORAGE_PROVIDERS)[number];
@@ -82,8 +82,8 @@ function s3Configured(env: object): boolean {
   return Object.values(S3_KEYS).some((key) => readString(env, key) !== undefined);
 }
 
-function s3Bucket(env: object): R2BucketLike {
-  return createS3CompatibleBucket({
+export function s3BucketOptionsFromEnv(env: object): S3CompatibleBucketOptions {
+  return {
     endpoint: requireString(env, S3_KEYS.endpoint),
     bucket: requireString(env, S3_KEYS.bucket),
     region: readString(env, S3_KEYS.region),
@@ -92,7 +92,11 @@ function s3Bucket(env: object): R2BucketLike {
     sessionToken: readString(env, S3_KEYS.sessionToken),
     forcePathStyle: readBoolean(env, S3_KEYS.forcePathStyle, true),
     allowInsecureHttp: readBoolean(env, S3_KEYS.allowInsecureHttp, false),
-  });
+  };
+}
+
+function s3Bucket(env: object): R2BucketLike {
+  return createS3CompatibleBucket(s3BucketOptionsFromEnv(env));
 }
 
 /** Which providers the configuration describes, primary first. */
