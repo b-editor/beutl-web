@@ -36,8 +36,20 @@ export interface LfsRecord {
   /** When the object was last uploaded or offered to an upload batch; collection waits a grace period from it. */
   touchedAt?: number;
   lease?: { id: string; until: number; offset: number; length: number };
+  /** Parts are numbered by offset and may arrive out of order; see LfsPart. */
+  parallel?: boolean;
 }
-export type LfsPart = { partNumber: number; etag: string };
+/**
+ * A stored B2 part. In a parallel upload it also keeps the SHA-256 state its
+ * client said the part starts from and the state the part's bytes led to; the
+ * accepted offset passes a part only when its start continues the bytes before.
+ */
+export type LfsPart = {
+  /** Absent while the part's only upload is still in flight. */
+  etag?: string;
+  partNumber: number; length?: number; start?: Sha256State; end?: Sha256State; digest?: string;
+  lease?: { id: string; until: number; start?: Sha256State };
+};
 export const lfsKey = (repoId: string, oid: string) => `git-lfs/repos/${repoId}/${oid.slice(0, 2)}/${oid}`;
 export const partPrefix = (oid: string) => `part:${oid}:`;
 export const partKey = (oid: string, n: number) => `${partPrefix(oid)}${String(n).padStart(5, "0")}`;
