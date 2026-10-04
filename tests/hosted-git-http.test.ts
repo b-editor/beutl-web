@@ -7,7 +7,6 @@ import { join, sep } from "node:path";
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
 import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable-object";
-import { handleGitHttp } from "../packages/api/src/git/git-http";
 
 const execute = promisify(execFile);
 const repoId = "12345678-1234-1234-1234-123456789abc";
@@ -30,13 +29,25 @@ class Bucket {
     return { objects, delimitedPrefixes: [...prefixes], truncated: false };
   }
 }
-it("rejects unsupported Git routes before creating unreserved objects", async () => {
+function memoryStorage() {
+  const values = new Map<string, unknown>();
+  return { values, get: async (key: string) => values.get(key), put: async (key: string, value: unknown) => { values.set(key, value); },
+    getAlarm: async () => null, setAlarm: async () => undefined };
+}
+it("rejects unsupported Git routes and services before creating unreserved objects", async () => {
   const bucket = new Bucket();
-  for (const [method, path] of [["GET", "config"], ["HEAD", "info/refs"], ["POST", "unknown"]]) {
-    const response = await handleGitHttp(new Request(`https://git.internal/api/v3/git/${repoId}.git/${path}`, { method }),
-      bucket as never, repoId, "write");
-    expect(response.status).toBe(404);
+  const durable = new GitRepositoryDurableObject({ storage: memoryStorage() as never }, {}, bucket as never);
+  const send = (method: string, path: string, scope = "write") => durable.fetch(new Request(
+    `https://git.internal/api/v3/git/${path}`, { method, headers: { "x-beutl-repo-id": repoId, "x-beutl-git-scope": scope } }));
+  for (const [method, path] of [["GET", "config"], ["DELETE", "info/refs"], ["POST", "unknown"], ["GET", "git-upload-pack"]]) {
+    expect((await send(method, `${repoId}.git/${path}`)).status).toBe(404);
   }
+  // The object serves only the repository bound by the Worker's verified headers.
+  expect((await send("GET", `${"0".repeat(8)}-0000-4000-8000-${"0".repeat(12)}.git/info/refs?service=git-upload-pack`)).status).toBe(404);
+  expect((await send("GET", `${repoId}.git/info/refs?service=git-unknown`)).status).toBe(400);
+  expect((await send("GET", `${repoId}.git/info/refs?service=git-receive-pack`, "read")).status).toBe(403);
+  expect((await send("POST", `${repoId}.git/git-receive-pack`, "read")).status).toBe(403);
+  expect((await send("GET", `${repoId}.git/info/refs?service=git-upload-pack`, "admin")).status).toBe(403);
   expect(bucket.objects.size).toBe(0);
 });
 it("waits a full second after the previous push before writing Git objects to B2", async () => {

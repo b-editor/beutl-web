@@ -2,7 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import { authenticated } from "@/lib/auth-guard";
-import { GitRepositoryError, gitRepositoryRequest } from "@/lib/git-repositories";
+import { GitRepositoryError, hostedGit } from "@/lib/git-repositories";
+import {
+  createGitRepository,
+  deleteGitRepository,
+  issueGitRepositoryToken,
+  listGitRepositories,
+  renameGitRepository,
+} from "@beutl/api/git/repositories";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
 import { isGitRepositoryId, isValidGitRepositoryName, type ActionResult, type GitRepositorySummary, type GitRepositoryToken } from "@beutl/core";
@@ -36,11 +43,7 @@ function repositoryId(id: string) {
 }
 
 export async function retrieveRepositories(): Promise<ActionResult<GitRepositorySummary[]>> {
-  return action(async (userId) => {
-    const response = await gitRepositoryRequest(userId);
-    const body = await response.json() as { repositories: GitRepositorySummary[] };
-    return body.repositories;
-  });
+  return action(async (userId) => listGitRepositories(userId, (await hostedGit()).origin));
 }
 
 export async function createRepository(name: string, creationId: string, expectedOwnerId: string): Promise<ActionResult<GitRepositorySummary>> {
@@ -48,22 +51,27 @@ export async function createRepository(name: string, creationId: string, expecte
     if (userId !== expectedOwnerId) throw new GitRepositoryError("accountChanged");
     if (!isValidGitRepositoryName(name)) throw new GitRepositoryError("invalidName");
     if (!isGitRepositoryId(creationId)) throw new GitRepositoryError("conflict");
-    const response = await gitRepositoryRequest(userId, "", "POST", { name: name.trim(), creationId, ownerId: userId });
-    return await response.json() as GitRepositorySummary;
+    const { origin } = await hostedGit();
+    const result = await createGitRepository(userId, name.trim(), creationId, origin);
+    if (result.status !== "created") throw new GitRepositoryError(result.status);
+    return result.repository;
   }, true);
 }
 
 export async function renameRepository(id: string, name: string): Promise<ActionResult<GitRepositorySummary>> {
   return action(async (userId) => {
     if (!isValidGitRepositoryName(name)) throw new GitRepositoryError("invalidName");
-    const response = await gitRepositoryRequest(userId, `/${repositoryId(id)}`, "PATCH", { name: name.trim() });
-    return await response.json() as GitRepositorySummary;
+    const repoId = repositoryId(id);
+    const repository = await renameGitRepository(userId, repoId, name.trim(), (await hostedGit()).origin);
+    if (!repository) throw new GitRepositoryError("notFound");
+    return repository;
   }, true);
 }
 
 export async function deleteRepository(id: string): Promise<ActionResult> {
   return action(async (userId) => {
-    await gitRepositoryRequest(userId, `/${repositoryId(id)}`, "DELETE");
+    const repoId = repositoryId(id);
+    if (!await deleteGitRepository((await hostedGit()).env, userId, repoId)) throw new GitRepositoryError("notFound");
     return undefined;
   }, true);
 }
@@ -71,7 +79,9 @@ export async function deleteRepository(id: string): Promise<ActionResult> {
 export async function createRepositoryToken(id: string, scope: "read" | "write"): Promise<ActionResult<GitRepositoryToken>> {
   return action(async (userId) => {
     if (scope !== "read" && scope !== "write") throw new GitRepositoryError("requestFailed");
-    const response = await gitRepositoryRequest(userId, `/${repositoryId(id)}/token`, "POST", { scope });
-    return await response.json() as GitRepositoryToken;
+    const repoId = repositoryId(id);
+    const token = await issueGitRepositoryToken((await hostedGit()).env, userId, repoId, scope);
+    if (!token) throw new GitRepositoryError("notFound");
+    return token;
   });
 }

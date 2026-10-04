@@ -2,7 +2,7 @@ import type { ListOptions, ListResult, ObjectStore } from "git-fs-s3";
 
 // git-fs-s3 reads packs into memory. Keep each stored Git object well below the
 // Worker memory limit; media belongs in LFS, not in ordinary Git history.
-export const MAX_GIT_OBJECT_BYTES = 16 * 1024 * 1024;
+const MAX_GIT_OBJECT_BYTES = 16 * 1024 * 1024;
 const MAX_LIST_ENTRIES = 10_000;
 
 export interface GitObjectBucket {
@@ -41,7 +41,6 @@ export interface GitObjectBucket {
 export interface GitMultipartUpload {
   uploadId: string;
   uploadPart(partNumber: number, value: ReadableStream<Uint8Array>, length: number): Promise<{ partNumber: number; etag: string }>;
-  listParts(): Promise<{ partNumber: number; etag: string; size: number }[]>;
   complete(parts: { partNumber: number; etag: string }[]): Promise<{ size: number; versionId?: string }>;
   abort(): Promise<void>;
 }

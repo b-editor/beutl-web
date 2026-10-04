@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { runWithDbProvider } from "@beutl/db";
+import { api } from "@beutl/api";
 import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable-object";
-import { handleLfsDownload, handleTusWorker } from "../packages/api/src/git/media-worker";
+import { gitRepositoryObject } from "../packages/api/src/git/environment";
+import { appendTusUpload, createTusUpload, downloadLfsObject, readTusUpload, type LfsObject } from "../packages/api/src/git/media-worker";
 import { issueGitToken, issueUploadToken } from "../packages/api/src/git/tokens";
-import { routeGitRequest } from "../packages/api/src/git/router";
 import { type GitDurableStorage, type LfsRecord, lfsKey } from "../packages/api/src/git/lfs";
 
 const repoId = "12345678-1234-1234-1234-123456789abc";
@@ -39,7 +40,7 @@ class Bucket {
       for (const part of this.parts.values()) { bytes.set(part, offset); offset += part.length; }
       this.versions.set("version-1", { key, bytes, size: this.virtualSize ?? size });
       return { size: this.virtualSize ?? size, versionId: "version-1" };
-    }, abort: async () => { this.parts.clear(); }, listParts: async () => [] };
+    }, abort: async () => { this.parts.clear(); } };
   }
   async head(key: string, versionId?: string) {
     const entry = versionId ? this.versions.get(versionId) : [...this.versions.values()].find(v => v.key === key);
@@ -78,31 +79,33 @@ function fixture() {
     releaseLfs: vi.fn(async () => undefined), releaseRepository: vi.fn(async () => undefined) };
   const durable = new GitRepositoryDurableObject({ storage }, { BEUTL_GIT_TOKEN_SECRET: secret }, bucket as never, accounting as never);
   const bodies: number[] = [];
-  const stub = { fetch: async (r: Request) => {
+  const repository = gitRepositoryObject({ BEUTL_GIT_REPOSITORIES: { idFromName: (name) => name, get: () => ({ fetch: async (r: Request) => {
     if (r.body) bodies.push((await r.clone().text()).length);
     return durable.fetch(r);
-  } };
-  const headers = new Headers({ "x-beutl-repo-id": repoId, "x-beutl-git-owner-id": "owner", "x-beutl-git-scope": "write" });
+  } }) } }, repoId);
+  const access = { repoId, ownerId: "owner", scope: "write" as const };
+  const object = (oid: string): LfsObject => ({ bucket: bucket as never, repository, access, oid });
   async function reserve(oid: string, size: number) {
-    const r = await durable.fetch(new Request(`https://beutl.test/api/v3/git/${repoId}.git/info/lfs/objects/batch`, {
-      method: "POST", headers, body: JSON.stringify({ operation: "upload", transfers: ["beutl-tus"], objects: [{ oid, size }] }),
-    }));
+    const r = await repository.forward(new Request(`https://beutl.test/api/v3/git/${repoId}.git/info/lfs/objects/batch`, {
+      method: "POST", body: JSON.stringify({ operation: "upload", transfers: ["beutl-tus"], objects: [{ oid, size }] }),
+    }), access);
     expect(r.status).toBe(200); expect((await r.json()).transfer).toBe("beutl-tus");
     const base = `https://beutl.test/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/tus`;
-    const created = await handleTusWorker(new Request(base, { method: "POST", headers: {
+    const created = await createTusUpload(new Request(base, { method: "POST", headers: {
       "Tus-Resumable": "1.0.0", "Upload-Length": String(size),
-    } }), bucket as never, stub, headers, repoId, oid);
+    } }), object(oid));
     expect(created.status).toBe(201);
     const record = await storage.get<LfsRecord>(`lfs:${oid}`);
     return { url: created.headers.get("location")!, record: record! };
   }
   async function transfer(url: string, oid: string, resource: string, offset: number, bytes?: Uint8Array) {
-    return handleTusWorker(new Request(url, { method: bytes ? "PATCH" : "HEAD", headers: {
+    const request = new Request(url, { method: bytes ? "PATCH" : "HEAD", headers: {
       "Tus-Resumable": "1.0.0", ...(bytes ? { "Upload-Offset": String(offset), "Content-Length": String(bytes.length),
         "Content-Type": "application/offset+octet-stream" } : {}),
-    }, ...(bytes ? { body: bytes } : {}) }), bucket as never, stub, headers, repoId, oid, resource);
+    }, ...(bytes ? { body: bytes } : {}) });
+    return bytes ? appendTusUpload(request, object(oid), resource) : readTusUpload(request, object(oid), resource);
   }
-  return { storage, bucket, accounting, durable, stub, headers, reserve, transfer, bodies };
+  return { storage, bucket, accounting, durable, object, reserve, transfer, bodies };
 }
 describe("Worker media transfers and durable metadata", () => {
   it("uploads, verifies and streams a pinned version with Range and If-Range", async () => {
@@ -112,9 +115,9 @@ describe("Worker media transfers and durable metadata", () => {
     expect(uploaded.status).toBe(204); expect(uploaded.headers.get("upload-verified")).toBe("true");
     expect(f.accounting.commitLfs).toHaveBeenCalledOnce();
     f.bucket.versions.set("unreferenced-newer", { key: lfsKey(repoId, oid), bytes: new Uint8Array([9]), size: 1 });
-    const download = (range?: string, ifRange?: string, method = "GET") => handleLfsDownload(new Request(url, {
+    const download = (range?: string, ifRange?: string, method = "GET") => downloadLfsObject(new Request(url, {
       method, headers: { ...(range ? { Range: range } : {}), ...(ifRange ? { "If-Range": ifRange } : {}) },
-    }), f.bucket as never, f.stub, f.headers, repoId, oid);
+    }), f.object(oid));
     const response = await download("bytes=2-6");
     expect(response.status).toBe(206); expect(await response.text()).toBe("priva");
     expect(response.headers.get("content-range")).toBe(`bytes 2-6/${bytes.length}`);
@@ -182,12 +185,14 @@ describe("Worker media transfers and durable metadata", () => {
     const db = { gitRepository: { findFirst: async () => null } };
     await runWithDbProvider(async () => db as never, async () => {
       const url = `https://beutl.test/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/tus`;
-      expect((await routeGitRequest(new Request(url, { headers: { Authorization: `Bearer ${read}` } }), env))!.status).toBe(401);
-      expect((await routeGitRequest(new Request(url.replace(oid, "c".repeat(64)), {
-        headers: { Authorization: `Bearer ${token}` },
-      }), env))!.status).toBe(401);
-      expect((await routeGitRequest(new Request(url, { headers: { Authorization: `Bearer ${token}`,
-        "x-beutl-git-owner-id": "owner", "x-beutl-git-scope": "write" } }), env))!.status).toBe(404);
+      const send = (target: string, authorization: string, headers: Record<string, string> = {}) =>
+        api.fetch(new Request(target, { method: "POST", headers: { Authorization: `Bearer ${authorization}`, "Tus-Resumable": "1.0.0", ...headers } }), env);
+      const readOnly = await send(url, read);
+      expect(readOnly.status).toBe(401);
+      expect(readOnly.headers.get("tus-resumable")).toBe("1.0.0");
+      expect((await send(url.replace(oid, "c".repeat(64)), token)).status).toBe(401);
+      // A valid upload token still needs an active repository owned by its subject.
+      expect((await send(url, token, { "x-beutl-git-owner-id": "owner", "x-beutl-git-scope": "write" })).status).toBe(404);
       expect(env.BEUTL_GIT_REPOSITORIES.get).not.toHaveBeenCalled();
     });
   });
