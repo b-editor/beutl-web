@@ -500,6 +500,3 @@ async function errorCodeOf(response: Response): Promise<string> {
   }
 }
 
-export function isTerminalStorageUploadError(errorCode: string): boolean {
-  return TERMINAL_COMPLETION_ERRORS.has(errorCode);
-}

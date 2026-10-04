@@ -46,11 +46,6 @@ const FINALIZATION_LEASE_MILLISECONDS = 10 * 60 * 1000;
 // moved when it stopped being the only provider's.
 export { PROVIDER_POLL_LEASE_MARGIN_MILLISECONDS } from "./providers/openrouter";
 
-/** The default provider's poll lease. A job's own provider decides its lease. */
-export function getProviderPollLeaseMilliseconds(): number {
-  return videoProviderFor(DEFAULT_AI_PROVIDER_ID).pollLeaseMilliseconds();
-}
-
 // The local job lost its link to a submission the provider accepted.
 export class DetachedRemoteVideoJobError extends AiProviderError {}
 

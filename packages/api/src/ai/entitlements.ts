@@ -417,6 +417,3 @@ export async function canStartAiOperation(
   });
 }
 
-export function isAiPlanActive(entitlements: EntitlementsResponse): boolean {
-  return entitlements.canUseAi;
-}

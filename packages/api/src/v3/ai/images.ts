@@ -29,8 +29,6 @@ import {
 import {
   AiProviderError,
   aiProviderFailureCode,
-  editImage,
-  generateImage,
 } from "../../ai/openrouter";
 import {
   AI_IMAGE_ASPECT_RATIOS,
@@ -44,7 +42,6 @@ import {
   aiImageEditTaskRequiresPrompt,
   aspectRatioOfLegacyImageSize,
   type AiImageAspectRatio,
-  type AiImageEditTask,
 } from "@beutl/core";
 import { saveAiImage } from "../../ai/storage";
 import {
@@ -86,8 +83,6 @@ const generateSchema = z
   );
 
 const editTasks = AI_IMAGE_EDIT_TASKS;
-type EditTask = AiImageEditTask;
-
 const editFieldsSchema = z.object({
   task: z.enum(editTasks),
   prompt: z.string().trim().max(MAX_AI_PROMPT_LENGTH).optional(),

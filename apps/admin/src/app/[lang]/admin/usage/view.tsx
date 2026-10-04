@@ -1,4 +1,3 @@
-import React from "react";
 import Link from "next/link";
 import { getTranslation } from "@beutl/i18n";
 import { formatNumber, formatTimestamp } from "../../../../lib/format";

@@ -2,25 +2,6 @@ import { getDb } from "./provider";
 import { decimalNumberRows, decimalNumbers } from "./decimal";
 import type { PrismaTransaction } from "./transaction";
 
-export async function getCreditTransactionsByUserId({
-  userId,
-  prisma,
-}: {
-  userId: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma ?? await getDb();
-  const rows = await db.creditTransaction.findMany({
-    where: {
-      userId,
-    },
-    orderBy: {
-      createdAt: "desc",
-    },
-  });
-  return decimalNumberRows(rows);
-}
-
 // Only the money-in side of the credit ledger. Usage rows are deliberately
 // excluded so the billing history never exposes the per-operation usage cost.
 // Each purchase carries how many of its credits were later reversed by a refund
@@ -78,24 +59,6 @@ export async function getCreditPurchasesByUserId({
         reversedCredits > 0 && reversedCredits >= purchase.creditAmount,
     };
   });
-}
-
-export async function existsCreditTransactionByStripePaymentId({
-  stripePaymentId,
-  prisma,
-}: {
-  stripePaymentId: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma ?? await getDb();
-  return !!(await db.creditTransaction.findUnique({
-    where: {
-      stripePaymentId,
-    },
-    select: {
-      id: true,
-    },
-  }));
 }
 
 export async function findCreditPurchaseByStripePaymentId({

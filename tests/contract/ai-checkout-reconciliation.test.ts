@@ -53,8 +53,6 @@ vi.mock("@/lib/stripe/ai-billing", () => ({
   }),
 }));
 vi.mock("@beutl/db", () => ({
-  LEGACY_STRIPE_CUSTOMER_MIGRATION_COHORT:
-    "pre-owner-metadata-2026-08-09",
   deleteBoundSubscriptionCheckoutAttempt: mocks.deleteBoundSubscriptionCheckoutAttempt,
   expireTopUpCheckoutAttempt: mocks.expireTopUpCheckoutAttempt,
   findBillingOfferById: mocks.findBillingOfferById,

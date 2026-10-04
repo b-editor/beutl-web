@@ -506,20 +506,6 @@ export async function findTopUpCheckoutAttemptBySessionId({
   });
 }
 
-export async function findTopUpCheckoutAttemptByPaymentIntentId({
-  stripePaymentIntentId,
-  prisma,
-}: {
-  stripePaymentIntentId: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma ?? (await getDb());
-  return await db.topUpCheckoutAttempt.findUnique({
-    where: { stripePaymentIntentId },
-    include: { billingOffer: true },
-  });
-}
-
 export async function fulfillTopUpCheckoutAttempt({
   attemptId,
   stripePaymentIntentId,

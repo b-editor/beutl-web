@@ -1,5 +1,3 @@
-import { MAX_AI_RESULT_TEXT_LENGTH } from "@beutl/core";
-import { z } from "zod";
 import { HTTPClient, OpenRouter, type Fetcher } from "@openrouter/sdk";
 import type {
   CreateImagesResponse,
@@ -29,9 +27,6 @@ import {
   AI_MAX_IMAGE_REFERENCES,
   type AiImageAspectRatio,
   type AiImageBackground,
-  type AiLegacyImageSize,
-  type AiVideoAspectRatio,
-  type AiVideoResolution,
 } from "@beutl/core";
 import {
   inspectGeneratedVideo,
@@ -588,10 +583,6 @@ async function requestJson(
     requestScope.release();
   }
 }
-
-// The fixed sizes the image endpoint used to take. Callers map them onto a
-// ratio at the edge; the provider has never been sent pixels.
-export type ImageGenerationSize = AiLegacyImageSize;
 
 function toInputReference(reference: ImageReference) {
   return {

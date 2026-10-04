@@ -4,7 +4,6 @@ import {
   markTopUpDuplicateRefundIntervention,
   rescheduleTopUpDuplicateRefundAttempt,
   resumeSettledTopUpCheckoutInterventions,
-  type ClaimedTopUpDuplicateRefund,
 } from "@beutl/db";
 import Stripe from "stripe";
 

@@ -5,17 +5,13 @@ const mocks = vi.hoisted(() => ({
   addPurchasedCredits: vi.fn(),
   constructEvent: vi.fn(),
   createUserPackage: vi.fn(),
-  createUserPaymentHistory: vi.fn(),
   deleteSubscriptionCheckoutAttempt: vi.fn(),
-  existsCreditTransactionByStripePaymentId: vi.fn(),
-  existsUserPaymentHistoryByPaymentId: vi.fn(),
   findCreditPurchaseByStripePaymentId: vi.fn(),
   findBillingOfferByStripePriceId: vi.fn(),
   findTopUpCheckoutAttempt: vi.fn(),
   findCustomerByStripeId: vi.fn(),
   findPackagePaymentReference: vi.fn(),
   findStripeCustomerOwnershipByStripeId: vi.fn(),
-  findPackageIdById: vi.fn(),
   getSubscription: vi.fn(),
   reconcilePurchasedCreditReversal: vi.fn(),
   reconcileSubscriptionObservation: vi.fn(),
@@ -98,16 +94,9 @@ vi.mock("@/lib/stripe/package-payment", () => ({
   resolvePackagePaymentOwner: mocks.resolvePackagePaymentOwner,
 }));
 vi.mock("@beutl/db", () => ({
-  LEGACY_STRIPE_CUSTOMER_MIGRATION_COHORT:
-    "pre-owner-metadata-2026-08-09",
   addPurchasedCredits: mocks.addPurchasedCredits,
   createUserPackage: mocks.createUserPackage,
-  createUserPaymentHistory: mocks.createUserPaymentHistory,
   deleteSubscriptionCheckoutAttempt: mocks.deleteSubscriptionCheckoutAttempt,
-  existsCreditTransactionByStripePaymentId:
-    mocks.existsCreditTransactionByStripePaymentId,
-  existsUserPaymentHistoryByPaymentId:
-    mocks.existsUserPaymentHistoryByPaymentId,
   findCreditPurchaseByStripePaymentId:
     mocks.findCreditPurchaseByStripePaymentId,
   findBillingOfferByStripePriceId: mocks.findBillingOfferByStripePriceId,
@@ -116,7 +105,6 @@ vi.mock("@beutl/db", () => ({
   findPackagePaymentReference: mocks.findPackagePaymentReference,
   findStripeCustomerOwnershipByStripeId:
     mocks.findStripeCustomerOwnershipByStripeId,
-  findPackageIdById: mocks.findPackageIdById,
   getSubscription: mocks.getSubscription,
   listSubscriptionsByUserId: async ({ userId }: { userId: string }) => {
     const stored = await mocks.getSubscription({ userId, planId: "pro" });
@@ -424,7 +412,6 @@ describe("Stripe AI billing webhook", () => {
     mocks.findPackagePaymentReference.mockResolvedValue(null);
     mocks.revokePackagePayment.mockResolvedValue(null);
     mocks.restorePackagePayment.mockResolvedValue(null);
-    mocks.existsCreditTransactionByStripePaymentId.mockResolvedValue(false);
     mocks.getSubscription.mockResolvedValue(null);
     mocks.retrievePrice.mockResolvedValue({
       id: "price_credits",
@@ -1114,9 +1101,7 @@ describe("Stripe AI billing webhook", () => {
     const response = await POST(webhookRequest() as never);
 
     expect(response.status).toBe(200);
-    expect(mocks.findPackageIdById).not.toHaveBeenCalled();
     expect(mocks.createUserPackage).not.toHaveBeenCalled();
-    expect(mocks.createUserPaymentHistory).not.toHaveBeenCalled();
   });
 
   it("does not register a historical Pro price without matching ownership metadata", async () => {

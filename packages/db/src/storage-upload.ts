@@ -1179,32 +1179,6 @@ export async function recordStorageUploadRemoteAfterAttachFailure({
   return result.count > 0;
 }
 
-/** Return an unknown-outcome create to the retryable intent state. */
-export async function releaseStorageUploadCreation({
-  id,
-  now,
-  leaseToken,
-  prisma,
-}: {
-  id: string;
-  now: Date;
-  leaseToken: string | null;
-  prisma?: PrismaTransaction;
-}): Promise<boolean> {
-  const db = prisma ?? (await getDb());
-  const result = await db.storageUpload.updateMany({
-    where: {
-      id,
-      uploadId: null,
-      startState: "creating",
-      creationLeaseUntil: { lte: now },
-      creationLeaseToken: leaseToken,
-    },
-    data: { startState: "intent", creationLeaseUntil: null, creationLeaseToken: null },
-  });
-  return result.count > 0;
-}
-
 // An upload is only ever reached through its own id together with the user it
 // belongs to: the bucket would take parts from anyone who knew the key and the
 // upload id, so those are never what a request is trusted on.
@@ -1221,17 +1195,6 @@ export async function findStorageUploadByIdAndUserId({
   return withCompletionFields(
     await db.storageUpload.findFirst({ where: { id, userId } }),
   );
-}
-
-export async function deleteStorageUpload({
-  id,
-  prisma,
-}: {
-  id: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma ?? (await getDb());
-  await db.storageUpload.deleteMany({ where: { id } });
 }
 
 /** Delete only the exact row snapshot already frozen for remote cleanup. */

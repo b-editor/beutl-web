@@ -5,7 +5,7 @@ import {
   prepareAiJobDeletionByUserId,
   type AiJobHistoryCursor,
 } from "@beutl/db";
-import { Hono, type Context } from "hono";
+import { Hono } from "hono";
 import { z } from "zod";
 import { deleteAiOutputObject, prepareGatewayVideoUsageForDeletion } from "../../ai/storage";
 import { MAX_AI_PROMPT_LENGTH } from "../../ai/upload-limits";

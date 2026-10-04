@@ -9,24 +9,6 @@ import {
   deleteUnreferencedFileWithStorageCleanup,
 } from "./file";
 
-export async function findPackageIdById({
-  id,
-  prisma,
-}: {
-  id: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma ?? await getDb();
-  return await db.package.findFirst({
-    where: {
-      id,
-    },
-    select: {
-      id: true,
-    },
-  });
-}
-
 export async function findPackageBasicByName({
   name,
   prisma,
@@ -595,29 +577,6 @@ export async function updateDevPackagePublished({
   });
 }
 
-export async function updateDevPackageIconFile({
-  packageId,
-  fileId,
-  prisma,
-}: {
-  packageId: string;
-  fileId: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma || await getDb();
-  return await db.package.update({
-    where: {
-      id: packageId,
-    },
-    data: {
-      iconFileId: fileId,
-    },
-    select: {
-      name: true,
-    },
-  });
-}
-
 /** Publish a newly-uploaded dedicated icon and retire the previous file atomically. */
 export async function replaceDevPackageIconFile({
   packageId,
@@ -648,81 +607,6 @@ export async function replaceDevPackageIconFile({
     return pkg;
   };
   return prisma ? run(prisma) : startRetryableTransaction(run);
-}
-
-export async function retrieveDevPackageDependsFile({
-  packageId,
-  prisma,
-}: {
-  packageId: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma || await getDb();
-  const pkg = await db.package.findFirstOrThrow({
-    where: {
-      id: packageId,
-    },
-    select: {
-      PackageScreenshot: {
-        select: {
-          file: {
-            select: {
-              id: true,
-              objectKey: true,
-            },
-          },
-        },
-      },
-      iconFile: {
-        select: {
-          id: true,
-          objectKey: true,
-        },
-      },
-      Release: {
-        select: {
-          file: {
-            select: {
-              id: true,
-              objectKey: true,
-            },
-          },
-        },
-      },
-    },
-  });
-  const files = pkg.PackageScreenshot.map((item) => item.file).concat(
-    pkg.Release.map((item) => item.file as NonNullable<typeof item.file>),
-  );
-  if (pkg.iconFile) {
-    files.push(pkg.iconFile);
-  }
-  return files;
-}
-
-export async function retrieveDevPackageIconFile({
-  packageId,
-  prisma,
-}: {
-  packageId: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma || await getDb();
-  return (await db.package.findFirst({
-      where: {
-        id: packageId,
-      },
-      select: {
-        iconFile: {
-          select: {
-            id: true,
-            objectKey: true,
-            size: true,
-          },
-        },
-      },
-    })
-  )?.iconFile;
 }
 
 export async function retrieveDevPackageScreenshots({
@@ -858,26 +742,6 @@ export async function updateDevPackageTags({
     },
     select: {
       name: true,
-    },
-  });
-}
-
-export async function deleteDevPackageScreenshot({
-  packageId,
-  fileId,
-  prisma,
-}: {
-  packageId: string;
-  fileId: string;
-  prisma?: PrismaTransaction;
-}) {
-  const db = prisma || await getDb();
-  return await db.packageScreenshot.delete({
-    where: {
-      packageId_fileId: {
-        packageId: packageId,
-        fileId: fileId,
-      },
     },
   });
 }

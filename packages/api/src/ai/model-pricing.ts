@@ -563,11 +563,6 @@ export async function loadAiCostEstimates({
   return { fetchedAt: now, entries };
 }
 
-// Entries are keyed by the pair, since one operation now has several.
-export function aiCostEstimateKey(operation: string, model: string): string {
-  return `${operation}\u0000${model}`;
-}
-
 // The Gateway's rate card for one model, cached like OpenRouter's: every
 // operation that shares the model shares the fetch.
 async function loadGatewayPricing(
