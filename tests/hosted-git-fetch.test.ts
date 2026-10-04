@@ -133,7 +133,7 @@ it("still sends a complete pack to a client that shares no history", async () =>
   } finally { await f.close(); }
 }, 60_000);
 
-it("keeps the previous replies for a client that does not use multi_ack_detailed", async () => {
+it("follows the capabilities a client requests and bounds the haves it looks up", async () => {
   const f = await fixture();
   try {
     const origin = join(f.root, "origin"); mkdirSync(origin);
@@ -147,5 +147,16 @@ it("keeps the previous replies for a client that does not use multi_ack_detailed
       headers: { "Content-Type": "application/x-git-upload-pack-request" },
       body: `${pkt(`want ${head} side-band-64k\n`)}0000${pkt(`have ${head}\n`)}0000` });
     expect(await round.text()).toBe("0008NAK\n");
+    // The capability counts at the end of the line too.
+    const last = await fetch(`${f.url}/git-upload-pack`, { method: "POST",
+      headers: { "Content-Type": "application/x-git-upload-pack-request" },
+      body: `${pkt(`want ${head} side-band-64k multi_ack_detailed\n`)}0000${pkt(`have ${head}\n`)}0000` });
+    expect(await last.text()).toBe(`0038ACK ${head} common\n0008NAK\n`);
+    // Only the first 1,024 haves of a request are looked up.
+    const unknown = Array.from({ length: 1024 }, (_, n) => pkt(`have ${n.toString(16).padStart(40, "0")}\n`)).join("");
+    const late = await fetch(`${f.url}/git-upload-pack`, { method: "POST",
+      headers: { "Content-Type": "application/x-git-upload-pack-request" },
+      body: `${pkt(`want ${head} multi_ack_detailed\n`)}0000${unknown}${pkt(`have ${head}\n`)}0000` });
+    expect(await late.text()).toBe("0008NAK\n");
   } finally { await f.close(); }
 }, 60_000);

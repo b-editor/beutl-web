@@ -117,13 +117,17 @@ function advertiseMultiAck(body: Uint8Array): Uint8Array {
   }));
 }
 
+// A repository with loose objects reads storage for every unknown have. Haves
+// past this many in one request count as unknown: the pack stays correct, at
+// worst larger. Git sends its newest commits first, so shared ones come early.
+const MAX_CHECKED_HAVES = 1024;
 const encodePktLines = (lines: (string | null)[]) => concat(...lines.map((line) => line === null ? FLUSH : pktLine(line)));
 const haveOf = (line: string | null) => line?.startsWith("have ") ? line.slice(5, 45) : undefined;
 
 /** The haves this repository also holds, in request order; their ancestry is common too. */
 async function commonObjects(repo: ReturnType<typeof readGitRepository>["repo"], haves: string[]): Promise<string[]> {
   const common: string[] = [];
-  for (const oid of new Set(haves)) {
+  for (const oid of [...new Set(haves)].slice(0, MAX_CHECKED_HAVES)) {
     try {
       await git.readObject({ ...repo, oid, format: "deflated" });
       common.push(oid);
@@ -156,7 +160,7 @@ export async function uploadGitPack(request: Request, bucket: GitObjectBucket, r
   const done = lines.some((line) => line?.startsWith("done"));
   let common: string[] = [];
   // Only the client's first want line names the capabilities it uses.
-  const multiAck = lines.find((line) => line?.startsWith("want "))?.split(" ").includes("multi_ack_detailed") ?? false;
+  const multiAck = lines.find((line) => line?.startsWith("want "))?.trimEnd().split(" ").includes("multi_ack_detailed") ?? false;
   if (haves.length && multiAck) {
     await prepare();
     common = await commonObjects(repo, haves);
