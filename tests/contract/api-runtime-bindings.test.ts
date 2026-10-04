@@ -22,14 +22,17 @@ vi.mock("@prisma/client", async (importOriginal) => ({
 }));
 vi.mock("../../packages/api/src/ai/reconcile-jobs", () => ({ reconcileAiJobs }));
 
-import { reconcileWebAiJobs } from "../../apps/web/src/lib/ai-scheduled-reconciliation";
+import { withApiBindings } from "../../packages/api/src/runtime";
+
+const reconcileWebAiJobs = (env: Parameters<typeof withApiBindings>[0], at: Date) =>
+  withApiBindings(env, () => reconcileAiJobs(at));
 
 const emptyResult = {
   inspected: 0, succeeded: 0, failed: 0, pending: 0, errors: 0,
   cleanupInspected: 0, cleanupDeleted: 0, cleanupErrors: 0,
 };
 
-describe("Web Worker AI cron bindings", () => {
+describe("embedded API invocation bindings", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("runs reconciliation with its own database and storage bindings", async () => {
@@ -111,4 +114,28 @@ describe("Web Worker AI cron bindings", () => {
     gate.resolve();
     await scheduled;
   });
+  it("keeps the invocation DB alive until background API work completes", async () => {
+    const env = {
+      BEUTL_DATABASE_HYPERDRIVE: { connectionString: "postgresql://test:test@127.0.0.1:5432/api_test" },
+    };
+    const gate = Promise.withResolvers<void>();
+    const pending: Promise<unknown>[] = [];
+    const context = { waitUntil: (promise: Promise<unknown>) => pending.push(promise),
+      passThroughOnException() {}, props: {} };
+    const result = await withApiBindings(env, async (ctx) => {
+      await getDb();
+      ctx!.waitUntil(gate.promise.then(async () => {
+        expect(typeof (await getDb()).$transaction).toBe("function");
+        expect(prismaCalls.disconnect).not.toHaveBeenCalled();
+      }));
+      return "accepted";
+    }, context);
+    expect(result).toBe("accepted");
+    expect(prismaCalls.disconnect).not.toHaveBeenCalled();
+    gate.resolve();
+    await Promise.all(pending);
+    expect(prismaCalls.construct).toHaveBeenCalledTimes(1);
+    expect(prismaCalls.disconnect).toHaveBeenCalledTimes(1);
+  });
+
 });

@@ -3,7 +3,7 @@ import { sign } from "hono/jwt";
 import worker, {
   requestBodyLimitForWorker,
   type Env,
-} from "../../packages/api/src/worker";
+} from "../../packages/api/src/runtime";
 import {
   MAX_API_JSON_REQUEST_BYTES,
   MAX_OPENROUTER_CALLBACK_BODY_BYTES,
@@ -47,12 +47,9 @@ vi.mock("../../packages/api/src/ai/entitlements", async (importOriginal) => {
   };
 });
 
-// 独立 Worker (beutl-web-api) は workerd 上で動くため、vars/secrets は
-// env バインディングとして渡され、process.env には自動投入されない。
-// worker.ts の fetch が文字列バインディングを process.env へコピーすることを
-// 検証する。v1/account (JWT) と v1/app (バージョン) は process.env を直接
-// 参照するため、このコピーが無いと独立 Worker で undefined になる。
-// DB に依存しない v2/identity/signInWith (リダイレクトのみ) を経由して検証する。
+// The Web entrypoint invokes this runtime before OpenNext. Copy string bindings
+// for legacy JWT helpers while keeping database/storage providers scoped.
+// Use the DB-free v2 sign-in redirect to verify the real API path.
 
 const originalEnv = { ...process.env };
 
@@ -67,7 +64,7 @@ async function expectFileTooLarge(response: Response): Promise<void> {
   });
 }
 
-describe("worker.ts env → process.env コピー", () => {
+describe("embedded API env → process.env コピー", () => {
   afterEach(() => {
     for (const key of Object.keys(process.env)) {
       if (!(key in originalEnv)) {

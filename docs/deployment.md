@@ -1,15 +1,15 @@
 # Deployment configuration
 
 This document records configuration and operational requirements shared by the
-four Cloudflare Workers. Worker routes and deploy commands are listed in the
+three Cloudflare Workers. The public Web app and desktop APIs deploy together
+as `beutl-web`; `packages/api` has no independent deployment. Worker routes and deploy commands are listed in the
 root [README](../README.md#deployment).
 
 ## Configuration sources
 
 Cloudflare bindings are declared alongside each deployable application:
 
-- Web: [`apps/web/wrangler.jsonc`](../apps/web/wrangler.jsonc)
-- Desktop API: [`packages/api/wrangler.jsonc`](../packages/api/wrangler.jsonc)
+- Web and public API: [`apps/web/wrangler.jsonc`](../apps/web/wrangler.jsonc)
 - Private image edit: [`packages/api/wrangler-ai-images.jsonc`](../packages/api/wrangler-ai-images.jsonc)
 - Admin: [`apps/admin/wrangler.jsonc`](../apps/admin/wrangler.jsonc)
 
@@ -19,9 +19,10 @@ Local environment placeholders are documented in
 in Cloudflare and local Worker secrets in ignored `.dev.vars` files; never
 commit secret values.
 
-`JWT_SECRET`, `JWT_ISSUER`, and `JWT_AUDIENCE` must match between the Web and
-desktop API Workers. The Web Worker issues the JWTs that the API Worker
-validates.
+`JWT_SECRET`, `JWT_ISSUER`, and `JWT_AUDIENCE` belong to the Web Worker, which
+both issues and validates desktop JWTs. Public versioned APIs, Git Durable
+Objects and all scheduled reconcilers use the Web deployment and bindings.
+Do not add a separate API Worker or route public APIs away from Web.
 
 The private image-edit Worker has a separate JWT signing key. Set the same
 new random value as `AI_IMAGE_WORKER_JWT_SECRET` on `beutl-web` and
@@ -32,6 +33,15 @@ public route or workers.dev URL. Its database Hyperdrive, R2 binding, storage
 configuration, and `OPENROUTER_API_KEY` / `VERCEL_AI_GATEWAY_API_KEY` secrets
 must address the same production resources as Web before the Web service
 binding is deployed. Other Web/API routes retain their existing behavior.
+
+## First hosted Git deployment
+
+The `hosted-git-v1` Durable Object migration creates a new namespace in the
+Web Worker. Cloudflare `versions upload` cannot apply a pending Durable Object
+migration. After reviewing the change and applying the database migration,
+perform the first Web release with `vp run deploy:web` (`wrangler deploy`)
+before using `vp run upload:web` for later preview versions. This is a production
+release step; a successful local build or dry run does not apply the migration.
 
 ## Publisher identities
 
@@ -59,15 +69,15 @@ Prisma model.
 
 ## Object storage
 
-Optional hosted Git uses its own private Backblaze B2 bucket and adds Git/LFS
+Optional hosted Git uses private Backblaze B2 storage and adds Git/LFS
 bytes to the existing account meter. See [Hosted Git and large media](hosted-git.md)
-for the required migration, API Worker configuration, transfer limits and cleanup.
+for the required migration, Web Worker configuration, transfer limits and cleanup.
+Its `BEUTL_GIT_S3_*` settings are separate configuration; the physical bucket
+can be shared with File/AI storage when its lifecycle rules preserve Git versions.
 
-User files and AI outputs live in one object store that the Web Worker and the
-desktop API Worker share. Both Workers must be configured for the same bucket:
-the Web Worker writes uploads that the API Worker's scheduled reconcilers
-inspect and clean up, and either Worker may serve or delete an object the
-other one wrote. The admin Worker takes the same configuration so that
+User files and AI outputs live in one object store used by the Web Worker's
+UI, public APIs and scheduled reconcilers. The admin and private image Workers
+use the same bucket. The admin Worker takes the same configuration so that
 `/admin/storage` can show where each file's object lives and move it.
 
 `BEUTL_STORAGE_PROVIDER` selects the implementation:
@@ -79,7 +89,7 @@ other one wrote. The admin Worker takes the same configuration so that
 
 ### S3 compatible storage
 
-Set `BEUTL_STORAGE_PROVIDER=s3` on all four Workers (Web, desktop API, admin,
+Set `BEUTL_STORAGE_PROVIDER=s3` on all three Workers (Web/API, admin,
 and private image edit) together with:
 
 - `BEUTL_S3_ENDPOINT`: the service URL, for example `https://s3.example.com`,
@@ -112,6 +122,9 @@ delete marker, while the cleanup outboxes and the storage console take a
 successful delete as the object being gone; the noncurrent versions would
 then stay stored and billed with nothing tracking them. If versioning cannot
 be turned off, add a lifecycle rule that expires noncurrent versions promptly.
+On a bucket shared with Git, scope that expiration to ordinary object prefixes
+as described in [Hosted Git storage configuration](hosted-git.md#storage-configuration).
+Never apply a bucket-wide expiration rule to `git/` or `git-lfs/`.
 
 Uploads stream each part straight from the browser request to the service with
 an unsigned payload (`x-amz-content-sha256: UNSIGNED-PAYLOAD`). This has been
@@ -175,25 +188,23 @@ host-only session cookies when enabling session sharing.
 
 Provider credentials are local to each Worker. The Web Worker executes
 dashboard AI requests through `/api/internal/ai/*`; only image edits are
-forwarded to the private image Worker. It does not forward them to the desktop
-API Worker. All four Workers load the AI model catalog, so keep their enabled
-Gateway configuration aligned:
+forwarded to the private image Worker. Desktop APIs and scheduled reconciliation
+run in that same Web Worker. All three Workers load the AI model catalog, so
+keep their enabled Gateway configuration aligned:
 
-| Setting | Web | Desktop API | Admin | Image edit |
-| --- | --- | --- | --- | --- |
-| `OPENROUTER_API_KEY` | Required for OpenRouter operations | Required for OpenRouter operations and reconciliation | Not needed for public catalog and price reads | Required for OpenRouter edits |
-| `VERCEL_AI_GATEWAY_API_KEY` | Required when Gateway is enabled | Required when Gateway is enabled | Required when Gateway is enabled, including built-in model visibility | Required for Gateway edits |
+| Setting | Web/API | Admin | Image edit |
+| --- | --- | --- | --- |
+| `OPENROUTER_API_KEY` | Required for OpenRouter operations and reconciliation | Not needed for public catalog and price reads | Required for OpenRouter edits |
+| `VERCEL_AI_GATEWAY_API_KEY` | Required when Gateway is enabled | Required when Gateway is enabled, including built-in model visibility | Required for Gateway edits |
 
-Configure `VERCEL_AI_GATEWAY_API_KEY` as a secret on **all four Workers** when
+Configure `VERCEL_AI_GATEWAY_API_KEY` as a secret on **all three Workers** when
 enabling Gateway, including an upgrade that relies on the built-in
 `video.edit`, `video.extend`, and `video.motion` models before any rows have
-been registered. Setting it only on the desktop API Worker leaves those modes
-hidden in the Web and admin catalogs. Keep Web and desktop API credentials on
-the same provider account so scheduled reconciliation can retrieve jobs
-started by either Worker. Configure secrets separately for each deployed
+been registered. Setting it only on Web leaves those modes hidden in the
+admin catalog. Configure secrets separately for each deployed
 Worker/environment; they are not inherited from another Worker.
 
-An OpenRouter-only installation may omit the Gateway key on all four Workers;
+An OpenRouter-only installation may omit the Gateway key on all three Workers;
 the Gateway-only built-in modes then remain unavailable. Gateway supports
 image, transcription, and translation operations as well as video, so the key
 requirement is not limited to registered video models. There is no
@@ -218,19 +229,17 @@ The Web Worker requires:
 Historical offers are explicit rather than learned from a customer-edited
 subscription.
 
-In addition to the provider settings above, the desktop API Worker requires:
+In addition to the provider settings above, the Web Worker requires:
 
 - `OPENROUTER_WEBHOOK_SECRET`, used to verify callbacks that reconcile
   ambiguous video submissions
 - `STRIPE_SECRET_KEY`, used by scheduled top-up and Pro refund reconciliation
 
-Both providers default to a 120-second request deadline. Override it on Web
-and desktop API with `OPENROUTER_REQUEST_TIMEOUT_MS` or
+Both providers default to a 120-second request deadline. Override it on Web with `OPENROUTER_REQUEST_TIMEOUT_MS` or
 `VERCEL_AI_GATEWAY_REQUEST_TIMEOUT_MS` as needed.
 
-Without `STRIPE_SECRET_KEY`, the API Worker's scheduled billing reconcilers
-fail and compensating refunds stop being issued. Use the same Stripe secret as
-the Web Worker.
+Without `STRIPE_SECRET_KEY`, the Web Worker's scheduled billing reconcilers
+fail and compensating refunds stop being issued.
 
 The admin Worker can read current prices from Stripe before the first sale.
 Configure `STRIPE_PRO_PRICE_ID`, `STRIPE_CREDIT_PRICE_ID`, and a restricted
@@ -281,7 +290,7 @@ See [AI actual-cost billing](ai-actual-cost-billing.md) for the formula,
 provider metadata sources and fallback behavior. The fractional ledger requires
 the [maintenance cutover](ai-actual-cost-billing.md#migration-cutover) using
 `vp run migrate:ai-usage`; all ledger writers must be stopped until the updated
-Web/API/Admin builds are deployed.
+Web and Admin builds are deployed.
 
 ### Admin reporting and adjustments
 
@@ -364,8 +373,7 @@ The Web Worker requires one monthly recurring Price per storage tier:
 
 Only these Prices can grant storage entitlement. The tier of record is always
 resolved from the Price (`BillingOffer.tier`); the `tier` metadata on a
-subscription is informational. All Prices must share one currency. The API
-Worker needs nothing new.
+subscription is informational. All Prices must share one currency. The desktop API uses the same Web configuration.
 
 Tier quotas are code constants in `packages/core/src/storage-plan.ts`
 (100 GiB, 200 GiB, 1 TiB; 100,000 files) and are not configurable from the

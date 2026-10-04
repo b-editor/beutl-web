@@ -16,7 +16,8 @@
     "./storage/s3-compatible-bucket": "./src/storage/s3-compatible-bucket.ts",
     "./storage/management": "./src/storage/management.ts",
     "./storage/uploads": "./src/storage/uploads.ts",
-    "./storage/files": "./src/storage/files.ts"
+    "./storage/files": "./src/storage/files.ts",
+    "./runtime": "./src/runtime.ts"
   },
   "dependencies": {
     "@ai-sdk/gateway": "^4.0.103",
@@ -42,9 +43,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "deploy": "wrangler deploy",
-    "deploy:image-worker": "wrangler deploy --config wrangler-ai-images.jsonc",
-    "preview": "wrangler dev"
+    "deploy:image-worker": "wrangler deploy --config wrangler-ai-images.jsonc"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

@@ -94,12 +94,9 @@ const editFieldsSchema = z.object({
   model: z.string().min(1).max(MAX_MODEL_ID_LENGTH).optional(),
 }).strict();
 
-// v3 endpoints live in packages/api because production routes /api/v3/* to
-// the standalone beutl-web-api Worker (ADR 0002). R2 is injected by the host
-// Worker so this package remains runtime-independent.
-// Usage consumption and entitlement checks live in shared packages/api logic
-// (createReservedAiJob / getEntitlements),
-// and can also be reused by the Web route during rollback.
+// v3 endpoints are shared package logic embedded in the beutl-web Worker.
+// Database and storage providers are injected by that host. Web actions reuse
+// the same entitlement and usage accounting helpers.
 
 const supportedInputImageTypes = new Set<AiInputImageMimeType>([
   "image/png",

@@ -493,7 +493,7 @@ not rebuild anything.
 The primary-key change is why this release needs a short rolling window: the
 previous runtime upserts `Subscription` and `ProCheckoutAttempt` by `userId`
 alone, which stops being a unique key once the migration runs. Apply the
-migration immediately before deploying the Web and API Workers, and do not
+migration immediately before deploying the Web Worker (including its APIs), and do not
 run a Worker built from an older commit against the migrated database.
 Nothing needs to be backfilled.
 
