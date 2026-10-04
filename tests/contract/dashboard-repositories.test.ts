@@ -20,6 +20,11 @@ let actions: typeof import("../../apps/web/src/app/[lang]/(dashboard)/dashboard/
 let request: typeof import("../../apps/web/src/lib/git-repositories").gitRepositoryRequest;
 const id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const repository = { id, name: "Project", url: `https://git.example/api/v3/git/${id}.git`, createdAt: "2026-10-04T00:00:00Z", updatedAt: "2026-10-04T00:00:00Z" };
+const repositoryOperations = [
+  { name: "rename", run: () => actions.renameRepository(id, "New name") },
+  { name: "delete", run: () => actions.deleteRepository(id) },
+  { name: "token", run: () => actions.createRepositoryToken(id, "read") },
+];
 
 beforeAll(async () => {
   const fromWeb = createRequire(new URL("../../apps/web/package.json", import.meta.url));
@@ -67,7 +72,7 @@ describe("Web repository management", () => {
     }
     expect(mocks.revalidate.mock.calls).toEqual([["/ja/dashboard/repositories"], ["/ja/dashboard/storage"]]);
   });
-  it.each(["", "  ", "a/b", "a\\b", "a\u0000b", "x".repeat(81)])("rejects an invalid name before mutation: %j", async (name) => {
+  it.each(["", "  ", "a/b", "a\\b", "a\u0000b", "\u0085", "a\u009fb", "x".repeat(81)])("rejects an invalid name before mutation: %j", async (name) => {
     expect(isValidGitRepositoryName(name)).toBe(false);
     expect((await actions.createRepository(name, id, "owner")).success).toBe(false);
     expect((await actions.renameRepository(id, name)).success).toBe(false);
@@ -84,6 +89,18 @@ describe("Web repository management", () => {
     expect(await actions.retrieveRepositories()).toEqual({ success: false, message: `dashboard:repositories.errors.${code}` });
     mocks.route.mockResolvedValue(Response.json({ repositories: [] }));
     expect(await actions.retrieveRepositories()).toEqual({ success: true, data: [] });
+  });
+  it.each(repositoryOperations)("reports a disabled Git service as unavailable during $name", async ({ run }) => {
+    const { routeGitRequest } = await vi.importActual<typeof import("@beutl/api/git/router")>("@beutl/api/git/router");
+    mocks.route.mockImplementationOnce(routeGitRequest);
+    mocks.context.mockReturnValue({ env: { BEUTL_GIT_ENABLED: "false" } });
+    expect(await run()).toEqual({ success: false, message: "dashboard:repositories.errors.unavailable" });
+    expect(mocks.revalidate).not.toHaveBeenCalled();
+  });
+  it.each(repositoryOperations)("reports a missing repository as not found during $name when Git is enabled", async ({ run }) => {
+    mocks.route.mockResolvedValue(new Response(null, { status: 404 }));
+    expect(await run()).toEqual({ success: false, message: "dashboard:repositories.errors.notFound" });
+    expect(mocks.revalidate).not.toHaveBeenCalled();
   });
   it("reports the repository cap without refreshing paths on failure", async () => {
     mocks.route.mockResolvedValue(Response.json({ message: "Repository limit reached" }, { status: 409 }));

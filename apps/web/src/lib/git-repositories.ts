@@ -62,7 +62,7 @@ export async function gitRepositoryRequest(
   }
   if (response.ok) return response;
   if (response.status === 401) throw new GitRepositoryError("unauthorized");
-  if (response.status === 404) throw new GitRepositoryError(suffix ? "notFound" : "unavailable");
+  if (response.status === 404) throw new GitRepositoryError(suffix && env.BEUTL_GIT_ENABLED === "true" ? "notFound" : "unavailable");
   if (response.status === 503) throw new GitRepositoryError("unavailable");
   if (response.status === 400) throw new GitRepositoryError("invalidName");
   if (response.status === 409) {

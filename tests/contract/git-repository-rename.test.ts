@@ -49,7 +49,7 @@ describe("repository name changes", () => {
     expect((await rename({ name: "New" }))!.status).toBe(404);
     expect(update.mock.calls[0][0].where.deletedAt).toBeNull();
   });
-  it.each([null, {}, { name: "a/b" }, { name: "\u007f" }, { name: "x".repeat(81) }])("rejects invalid name input %j", async (body) => {
+  it.each([null, {}, { name: "a/b" }, { name: "\u007f" }, { name: "\u0085" }, { name: "a\u009fb" }, { name: "x".repeat(81) }])("rejects invalid name input %j", async (body) => {
     expect((await rename(body))!.status).toBe(400);
     expect(update).not.toHaveBeenCalled();
   });

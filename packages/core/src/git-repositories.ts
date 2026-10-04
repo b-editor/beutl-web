@@ -3,7 +3,7 @@ export const GIT_REPOSITORY_NAME_MAX_LENGTH = 80;
 
 export function isValidGitRepositoryName(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 &&
-    value.length <= GIT_REPOSITORY_NAME_MAX_LENGTH && !/[\x00-\x1f\x7f/\\]/u.test(value);
+    value.length <= GIT_REPOSITORY_NAME_MAX_LENGTH && !/[\p{Cc}/\\]/u.test(value);
 }
 
 export function isGitRepositoryId(value: unknown): value is string {
