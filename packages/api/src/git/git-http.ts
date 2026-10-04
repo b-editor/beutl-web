@@ -68,14 +68,19 @@ function response(result: { status: number; headers: Record<string, string>; bod
   });
 }
 
-/** Opens the bare repository, writing HEAD/config the first time it is used. */
-async function openRepository(bucket: GitObjectBucket, repoId: string) {
+/** The bare repository as stored, without writing anything to it. */
+export function readGitRepository(bucket: GitObjectBucket, repoId: string) {
   const store = new GitObjectStore(bucket);
   const prefix = `git/repos/${repoId}`;
   const fs = createGitFs(store, { prefix });
-  const repo = { fs, gitdir: GITDIR, cache: {} };
-  await ensureRepoInitialized(repo);
-  return { store, prefix, fs, repo };
+  return { store, prefix, fs, repo: { fs, gitdir: GITDIR, cache: {} } };
+}
+
+/** Opens the bare repository, writing HEAD/config the first time it is used. */
+async function openRepository(bucket: GitObjectBucket, repoId: string) {
+  const opened = readGitRepository(bucket, repoId);
+  await ensureRepoInitialized(opened.repo);
+  return opened;
 }
 
 export async function initializeGitRepository(bucket: GitObjectBucket, repoId: string): Promise<void> {

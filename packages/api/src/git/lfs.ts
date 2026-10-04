@@ -17,6 +17,8 @@ export const MIN_TUS_PART_BYTES = 5 * 1024 ** 2;
 export const UPLOAD_LIFETIME_MS = 24 * 60 * 60 * 1000;
 // Git LFS asks for a new batch when an action expires before its transfer starts.
 const UPLOAD_URL_LIFETIME_MS = 60 * 60_000;
+/** An upload batch rewrites `touchedAt` only when it is at least this old. */
+export const LFS_TOUCH_PRECISION_MS = 60 * 60_000;
 export interface GitDurableStorage {
   get<T>(key: string): Promise<T | undefined>;
   put<T>(key: string, value: T): Promise<void>;
@@ -31,6 +33,8 @@ export interface LfsRecord {
   offset: number; partCount: number;
   /** SHA-256 of the first `offset` bytes, and the digest once every byte arrived. */
   hash?: Sha256State; digest?: string;
+  /** When the object was last uploaded or offered to an upload batch; collection waits a grace period from it. */
+  touchedAt?: number;
   lease?: { id: string; until: number; offset: number; length: number };
 }
 export type LfsPart = { partNumber: number; etag: string };
@@ -107,7 +111,11 @@ export async function handleLfsBatch(
         : { oid, size, error: { code: 404, message: "LFS object is not verified" } });
       continue;
     }
-    if (record?.verified) { objects.push({ oid, size }); continue; }
+    if (record?.verified) {
+      // The client may be about to push a commit that points here.
+      if (Date.now() - (record.touchedAt ?? 0) > LFS_TOUCH_PRECISION_MS) await storage.put(`lfs:${oid}`, { ...record, touchedAt: Date.now() });
+      objects.push({ oid, size }); continue;
+    }
     // Objects already stored need no transfer, whatever their size.
     if (size > (transfer === "basic" ? MAX_BASIC_LFS_OBJECT_BYTES : MAX_LFS_OBJECT_BYTES)) {
       objects.push({ oid, size, error: { code: 422, message: size > MAX_LFS_OBJECT_BYTES

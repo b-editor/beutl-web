@@ -165,6 +165,18 @@ grace period covers in-flight parts. Repeated cleanup failures are logged with
 repository/OID and failure counts; investigate provider permissions or retention
 before manually changing accounting.
 
+The daily alarm also collects LFS objects that no branch or tag points to
+anywhere in its history, such as media of a deleted branch or an upload whose
+push never happened. An object becomes a candidate seven days after it was last
+uploaded or offered to an upload batch, because clients upload media before
+pushing the commits that point to it. The repository object walks every commit,
+tree, annotated tag and small blob reachable from its refs and treats any blob
+of at most 1 KiB with an `oid sha256:` line as a pointer. If any ref or object
+cannot be read, nothing is collected and the walk is retried an hour later.
+Collection unpublishes the record, deletes every B2 version and releases the
+account reservation, at most 100 objects per run. The walk is skipped while no
+push has happened and no new object has become a candidate since the last one.
+
 Validation uses mocked B2/CockroachDB interfaces, resumable SHA-256 vectors,
 streaming/range tests and native Git push/clone/pull. Stock Git LFS (basic) and
 tus-js-client (resumed tus) uploads have also run locally against the B2
