@@ -56,6 +56,22 @@ age-based lifecycle rule that deletes noncurrent versions in these prefixes:
 an LFS record can intentionally reference a noncurrent B2 `versionId`. Object
 Lock or retention that prevents deletion will also prevent quota release.
 
+## API routes
+
+All Hosted Git endpoints are Hono routes in the shared `v3` API, served by the
+Web Worker entry and by the Next.js `/api/v3` route alike:
+
+- `/api/v3/repos` lists and creates repositories; `/api/v3/repos/:id` reads,
+  renames and deletes one; `POST /api/v3/repos/:id/token` issues a one-hour Git
+  token with `read` or `write` scope. These use the desktop API JWT.
+- `/api/v3/git/:id.git/` serves Git smart HTTP (`info/refs`, `git-upload-pack`,
+  `git-receive-pack`) and Git LFS (`info/lfs/objects/batch`, object `download`
+  and `tus` uploads). These use the repository-scoped Git token, or the
+  OID-scoped upload token returned by an LFS upload batch.
+
+The Web dashboard calls the same repository functions directly with the
+signed-in account, without an API token.
+
 ## Transfers and limits
 
 The desktop's **Create Beutl remote** action creates a repository only when

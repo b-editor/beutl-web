@@ -14,6 +14,10 @@ Web とすべての公開 API は **単一の `beutl-web` Worker** に含める�
 `packages/api` はコード共有の単位であり、独立したデプロイ単位にはしない。
 
 - `apps/web/worker.js` が `/api/v1`, `/api/v2`, `/api/v3` を共通 API runtime に渡す。
+- API のルートはすべて `packages/api` の Hono アプリ (`v1`, `v2`, `v3`) に登録する。
+  Hosted Git も `v3` の `/repos` と `/git` に登録する。API runtime は bindings、
+  本文の上限、実行コンテキスト、cron だけを扱い、独自にパスを振り分けない。
+- Next.js の `/api/v3` route も同じ `v3` を、Worker と同じ bindings で動かす。
 - Git/LFS とストレージの本文は OpenNext のバッファリングより前に処理する。
 - その他の Web ページ、認証、コンテンツ、Stripe API は OpenNext が処理する。
 - 公開 API の bindings、Durable Objects、cron は `apps/web/wrangler.jsonc` に置く。
@@ -26,6 +30,8 @@ Web とすべての公開 API は **単一の `beutl-web` Worker** に含める�
 新しい公開 API は Web の入口を通して契約テストを行う。
 `tests/contract/web-api-entrypoint.test.ts` はリポジトリ作成、Git 転送、サイズ制限、
 Web へのフォールバック、cron 接続と実際のデプロイ設定を確認する。
+`tests/contract/hosted-git-routes.test.ts` は Worker 経由と Next.js route 経由で
+Hosted Git の応答が一致することを確認する。
 独立 API Worker の Wrangler 設定や deploy/upload コマンドを再導入しない。
 
 以前の分離構成を使用していた環境では、旧 `/api/v{1,2,3}/*` の Worker routes を
