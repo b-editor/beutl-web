@@ -31,6 +31,7 @@ import {
   Code2,
   CreditCard,
   Film,
+  GitBranch,
   HardDrive,
   History,
   Image as ImageIcon,
@@ -103,6 +104,12 @@ export function DashboardSidebar({
       href: `/${lang}/dashboard/storage`,
       label: t("dashboard:nav.storage"),
       icon: HardDrive,
+    },
+    {
+      section: "repositories",
+      href: `/${lang}/dashboard/repositories`,
+      label: t("dashboard:nav.repositories"),
+      icon: GitBranch,
     },
     {
       section: "library",

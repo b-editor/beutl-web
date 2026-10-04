@@ -3,12 +3,12 @@ import { S3GitObjectBucket, type GitS3Environment } from "./s3-object-store";
 import { getDb, createGitRepositoryForOwner } from "@beutl/db";
 import { listExpiredGitLfsReservations } from "@beutl/db";
 import { getUserIdFromHeaders } from "../api/auth";
+import { GIT_REPOSITORY_LIMIT, isValidGitRepositoryName } from "@beutl/core";
 import { gitTokenSecret, issueGitToken, verifyGitToken, verifyUploadToken, type GitScope } from "./tokens";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const REPO_PATH = /^\/api\/v3\/repos\/([0-9a-f-]{36})(?:\/(token))?$/u;
 const GIT_PATH = /^\/api\/v3\/git\/([0-9a-f-]{36})\.git\/(.+)$/u;
-const MAX_REPOSITORIES_PER_USER = 20;
 
 export interface GitRepositoryNamespace {
   idFromName(name: string): unknown;
@@ -223,7 +223,7 @@ async function routeGitRequestCore(request: Request, env: GitRouterEnvironment):
   if (isCollection && request.method === "GET") {
     const rows = await db.gitRepository.findMany({
       where: { ownerId: userId, deletedAt: null },
-      orderBy: { createdAt: "desc" }, take: MAX_REPOSITORIES_PER_USER,
+      orderBy: { createdAt: "desc" }, take: GIT_REPOSITORY_LIMIT,
     });
     return json({ repositories: rows.map((row) => view(row, repoUrl(env, request, row.id))) });
   }
@@ -236,8 +236,7 @@ async function routeGitRequestCore(request: Request, env: GitRouterEnvironment):
     const name = (input as { name?: unknown } | null)?.name;
     const creationId = (input as { creationId?: unknown } | null)?.creationId;
     const requestedOwner = (input as { ownerId?: unknown } | null)?.ownerId;
-    if (typeof name !== "string" || name.trim().length < 1 || name.length > 80 ||
-        /[\x00-\x1f\x7f/\\]/u.test(name)) {
+    if (!isValidGitRepositoryName(name)) {
       return json({ message: "Invalid repository name" }, 400);
     }
     if (creationId !== undefined && (typeof creationId !== "string" || !UUID.test(creationId) || creationId === "00000000-0000-0000-0000-000000000000")) {
@@ -247,7 +246,7 @@ async function routeGitRequestCore(request: Request, env: GitRouterEnvironment):
       return json({ message: "The authenticated account changed; retry with the original account" }, 409);
     }
     try {
-      const row = await createGitRepositoryForOwner(userId, name.trim(), MAX_REPOSITORIES_PER_USER, db, creationId);
+      const row = await createGitRepositoryForOwner(userId, name.trim(), GIT_REPOSITORY_LIMIT, db, creationId);
       if (!row) return json({ message: "Repository limit reached" }, 409);
       return json(view(row, repoUrl(env, request, row.id)), 201);
     } catch (error) {
@@ -263,6 +262,24 @@ async function routeGitRequestCore(request: Request, env: GitRouterEnvironment):
   const row = await db.gitRepository.findFirst({ where: { id: repoId, ownerId: userId, deletedAt: null } });
   if (!row) return new Response("Not found", { status: 404 });
   if (!repoMatch[2] && request.method === "GET") return json(view(row, repoUrl(env, request, repoId)));
+  if (!repoMatch[2] && request.method === "PATCH") {
+    let input: unknown;
+    try { input = await request.json(); } catch {
+      return json({ message: "Invalid JSON" }, 400);
+    }
+    const name = (input as { name?: unknown } | null)?.name;
+    if (!isValidGitRepositoryName(name)) return json({ message: "Invalid repository name" }, 400);
+    try {
+      const updated = await db.gitRepository.update({
+        where: { id: repoId, ownerId: userId, deletedAt: null }, data: { name: name.trim() },
+      });
+      return json(view(updated, repoUrl(env, request, repoId)));
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "P2025")
+        return new Response("Not found", { status: 404 });
+      throw error;
+    }
+  }
   if (repoMatch[2] === "token" && request.method === "POST") {
     let input: unknown;
     try { input = await request.json(); } catch {
