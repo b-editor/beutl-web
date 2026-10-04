@@ -12,12 +12,13 @@ declare namespace Cloudflare {
 		BEUTL_GIT_REPOSITORIES: DurableObjectNamespace;
 		BEUTL_GIT_ENABLED?: string;
 		BEUTL_GIT_TOKEN_SECRET?: string;
-		BEUTL_GIT_S3_ENDPOINT?: string;
-		BEUTL_GIT_S3_REGION?: string;
-		BEUTL_GIT_S3_BUCKET?: string;
-		BEUTL_GIT_S3_ACCESS_KEY_ID?: string;
-		BEUTL_GIT_S3_SECRET_ACCESS_KEY?: string;
-		BEUTL_GIT_S3_PATH_STYLE?: string;
+		BEUTL_S3_ENDPOINT?: string;
+		BEUTL_S3_REGION?: string;
+		BEUTL_S3_BUCKET?: string;
+		BEUTL_S3_ACCESS_KEY_ID?: string;
+		BEUTL_S3_SECRET_ACCESS_KEY?: string;
+		BEUTL_S3_SESSION_TOKEN?: string;
+		BEUTL_S3_FORCE_PATH_STYLE?: string;
 		ASSETS: Fetcher;
 	}
 }

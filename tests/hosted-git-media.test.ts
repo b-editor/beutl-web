@@ -175,8 +175,8 @@ describe("Worker media transfers and durable metadata", () => {
     const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString());
     expect(payload.exp * 1000).toBeLessThanOrEqual(now + 15_000);
     const env = { BEUTL_GIT_ENABLED: "true", BEUTL_GIT_TOKEN_SECRET: secret,
-      BEUTL_GIT_S3_ENDPOINT: "https://s3.us-east-005.backblazeb2.com/", BEUTL_GIT_S3_REGION: "us-east-005",
-      BEUTL_GIT_S3_BUCKET: "beutl-test", BEUTL_GIT_S3_ACCESS_KEY_ID: "test", BEUTL_GIT_S3_SECRET_ACCESS_KEY: "test",
+      BEUTL_S3_ENDPOINT: "https://s3.us-east-005.backblazeb2.com/", BEUTL_S3_REGION: "us-east-005",
+      BEUTL_S3_BUCKET: "beutl-test", BEUTL_S3_ACCESS_KEY_ID: "test", BEUTL_S3_SECRET_ACCESS_KEY: "test",
       BEUTL_GIT_REPOSITORIES: { idFromName: (v: string) => v, get: vi.fn() } };
     const read = (await issueGitToken(secret, "owner", repoId, "read")).token;
     const db = { gitRepository: { findFirst: async () => null } };

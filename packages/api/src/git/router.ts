@@ -1,5 +1,5 @@
 import { handleLfsDownload, handleTusWorker } from "./media-worker";
-import { S3GitObjectBucket } from "./s3-object-store";
+import { S3GitObjectBucket, type GitS3Environment } from "./s3-object-store";
 import { getDb, createGitRepositoryForOwner } from "@beutl/db";
 import { listExpiredGitLfsReservations } from "@beutl/db";
 import { getUserIdFromHeaders } from "../api/auth";
@@ -15,16 +15,10 @@ export interface GitRepositoryNamespace {
   get(id: unknown): { fetch(request: Request): Promise<Response> };
 }
 
-export interface GitRouterEnvironment {
+export interface GitRouterEnvironment extends GitS3Environment {
   BEUTL_GIT_ENABLED?: string;
   BEUTL_GIT_TOKEN_SECRET?: string;
   BEUTL_GIT_REPOSITORIES?: GitRepositoryNamespace;
-  BEUTL_GIT_S3_ENDPOINT?: string;
-  BEUTL_GIT_S3_REGION?: string;
-  BEUTL_GIT_S3_BUCKET?: string;
-  BEUTL_GIT_S3_ACCESS_KEY_ID?: string;
-  BEUTL_GIT_S3_SECRET_ACCESS_KEY?: string;
-  BEUTL_GIT_S3_PATH_STYLE?: string;
   PUBLIC_ORIGIN?: string;
 }
 
@@ -39,8 +33,8 @@ function enabled(env: GitRouterEnvironment): boolean {
 
 function storageUnavailable(env: GitRouterEnvironment): boolean {
   return !env.BEUTL_GIT_REPOSITORIES ||
-    !env.BEUTL_GIT_S3_ENDPOINT || !env.BEUTL_GIT_S3_REGION || !env.BEUTL_GIT_S3_BUCKET ||
-    !env.BEUTL_GIT_S3_ACCESS_KEY_ID || !env.BEUTL_GIT_S3_SECRET_ACCESS_KEY;
+    !env.BEUTL_S3_ENDPOINT || !env.BEUTL_S3_REGION || !env.BEUTL_S3_BUCKET ||
+    !env.BEUTL_S3_ACCESS_KEY_ID || !env.BEUTL_S3_SECRET_ACCESS_KEY;
 }
 
 function stub(env: GitRouterEnvironment, repoId: string) {
