@@ -67,7 +67,8 @@ export async function findGitAccess(authorization: string | null, repoId: string
     select: { id: true, repoId: true, ownerId: true, scope: true, revokedAt: true, lastUsedAt: true,
       repository: { select: { ownerId: true, deletedAt: true } } },
   });
-  if (!row || row.revokedAt || row.repoId !== repoId) return null;
+  // An unknown stored scope grants nothing rather than falling back to read.
+  if (!row || row.revokedAt || row.repoId !== repoId || (row.scope !== "read" && row.scope !== "write")) return null;
   const now = new Date();
   if (!row.lastUsedAt || now.getTime() - row.lastUsedAt.getTime() > LAST_USED_PRECISION_MS) {
     await db.gitAccessToken.updateMany({
@@ -76,7 +77,7 @@ export async function findGitAccess(authorization: string | null, repoId: string
     });
   }
   return {
-    ownerId: row.ownerId, scope: row.scope === "write" ? "write" : "read",
+    ownerId: row.ownerId, scope: row.scope,
     active: row.repository.deletedAt === null && row.repository.ownerId === row.ownerId,
   };
 }
