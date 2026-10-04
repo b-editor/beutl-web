@@ -335,27 +335,6 @@ export class S3GitObjectBucket implements GitObjectBucket {
         if (!etag || etag.length > 256) throw new Error("S3 returned no valid part ETag");
         return { partNumber, etag };
       },
-      listParts: async () => {
-        const parts: { partNumber: number; etag: string; size: number }[] = [];
-        let marker = 0;
-        while (true) {
-          const response = await this.send("GET", this.url(key, { uploadId,
-            "max-parts": "1000", ...(marker ? { "part-number-marker": String(marker) } : {}) }));
-          const result = (await xml(response)).ListPartsResult;
-          if (!result) throw new Error("Invalid S3 ListParts result");
-          const page = asArray<{ PartNumber: string; ETag: string; Size: string }>(result.Part)
-            .map((part) => ({ partNumber: Number(part.PartNumber), etag: part.ETag, size: Number(part.Size) }));
-          if (page.some((part) => !Number.isSafeInteger(part.partNumber) || !Number.isSafeInteger(part.size) || !part.etag)) {
-            throw new Error("Invalid S3 multipart part");
-          }
-          parts.push(...page);
-          if (result.IsTruncated !== "true") break;
-          const next = Number(result.NextPartNumberMarker);
-          if (!Number.isSafeInteger(next) || next <= marker) throw new Error("S3 ListParts did not advance");
-          marker = next;
-        }
-        return parts;
-      },
       complete: async (parts) => {
         const body = `<CompleteMultipartUpload>${parts.map(({ partNumber, etag }) =>
           `<Part><PartNumber>${partNumber}</PartNumber><ETag>${escapeXml(etag)}</ETag></Part>`).join("")}</CompleteMultipartUpload>`;

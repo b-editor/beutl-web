@@ -25,7 +25,10 @@ const VIEW_STORAGE_KEY = "beutl.repositories.view";
 
 function storedView(): ViewMode {
   try { return localStorage.getItem(VIEW_STORAGE_KEY) === "list" ? "list" : "grid"; }
-  catch { return "grid"; }
+  catch {
+    // Storage can be blocked by the browser; the default view still works.
+    return "grid";
+  }
 }
 
 function subscribeView(onChange: () => void) {
@@ -67,11 +70,17 @@ export function RepositoryManager({ lang, userId, initialResult }: {
       setAvailable(result.success);
       if (result.success) { setRepositories(result.data ?? []); setError(undefined); }
       else setError(result.message ?? failure());
-    } catch { setAvailable(false); setError(failure()); }
+    } catch {
+      // The action could not be reached; the server logs its own failures.
+      setAvailable(false); setError(failure());
+    }
   });
   const copy = async (value: string) => {
     try { await navigator.clipboard.writeText(value); setNotice(t("dashboard:repositories.copied")); setCopiedUrl(value); }
-    catch { setError(t("dashboard:repositories.copyFailed")); }
+    catch {
+      // Clipboard permission is the browser's decision; report that copying failed.
+      setError(t("dashboard:repositories.copyFailed"));
+    }
   };
   const remove = () => {
     if (!deleting || confirmation !== deleting.name || pending) return;
@@ -83,7 +92,10 @@ export function RepositoryManager({ lang, userId, initialResult }: {
         setRepositories((rows) => rows.filter((row) => row.id !== repository.id));
         setDeleting(undefined); setError(undefined);
         setNotice(t("dashboard:repositories.deleted"));
-      } catch { setDeleteError(failure()); }
+      } catch {
+        // The action could not be reached; the server logs its own failures.
+        setDeleteError(failure());
+      }
     });
   };
   const filtered = repositories.filter((row) => row.name.toLocaleLowerCase(lang).includes(query.trim().toLocaleLowerCase(lang))).sort((left, right) => {

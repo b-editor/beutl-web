@@ -1,4 +1,5 @@
-import { getDb, runWithDbProvider, type PrismaClient } from "./provider";
+import type { GitRepository } from "@prisma/client";
+import { getDb } from "./provider";
 import { resolveStorageQuota } from "./storage-quota";
 import { startRetryableTransaction, type PrismaTransaction } from "./transaction";
 
@@ -30,23 +31,26 @@ export async function lockStorageAccount(userId: string, tx: PrismaTransaction):
   await tx.user.update({ where: { id: userId }, data: { storageRevision: { increment: 1 } } });
 }
 
-export async function createGitRepositoryForOwner(ownerId: string, name: string, limit = 20, prisma?: PrismaClient, creationId?: string) {
-  const db = prisma ?? await getDb();
-  return runWithDbProvider(async () => db, () => startRetryableTransaction(async (tx) => {
-    await tx.user.update({ where: { id: ownerId }, data: { storageRevision: { increment: 1 } } });
+/** A retried creationId returns its repository; any other reuse is a conflict. */
+export async function createGitRepositoryForOwner(ownerId: string, name: string, limit: number, creationId?: string):
+  Promise<{ status: "created"; repository: GitRepository } | { status: "limitReached" } | { status: "conflict" }> {
+  return startRetryableTransaction(async (tx) => {
+    await lockStorageAccount(ownerId, tx);
     if (creationId) {
       const existing = await tx.gitRepository.findUnique({ where: { id: creationId } });
       if (existing) {
-        if (existing.ownerId !== ownerId || existing.name !== name || existing.deletedAt !== null) {
-          throw new Error("Repository creation identifier is already used");
-        }
-        return existing;
+        return existing.ownerId === ownerId && existing.name === name && existing.deletedAt === null
+          ? { status: "created", repository: existing }
+          : { status: "conflict" };
       }
     }
     const count = await tx.gitRepository.count({ where: { ownerId, deletedAt: null } });
-    if (count >= limit) return null;
-    return tx.gitRepository.create({ data: { ...(creationId ? { id: creationId } : {}), ownerId, name } });
-  }, { isolationLevel: "Serializable" }));
+    if (count >= limit) return { status: "limitReached" };
+    return {
+      status: "created",
+      repository: await tx.gitRepository.create({ data: { ...(creationId ? { id: creationId } : {}), ownerId, name } }),
+    };
+  }, { isolationLevel: "Serializable" });
 }
 
 async function accountReserved(tx: PrismaTransaction, userId: string): Promise<bigint> {
@@ -100,7 +104,7 @@ export async function commitGitLfs(repoId: string, oid: string): Promise<void> {
   }, { isolationLevel: "Serializable" });
 }
 
-export class GitLfsQuotaExceededError extends RangeError {
+class GitLfsQuotaExceededError extends RangeError {
   constructor() { super("Account storage quota exceeded at LFS completion"); }
 }
 

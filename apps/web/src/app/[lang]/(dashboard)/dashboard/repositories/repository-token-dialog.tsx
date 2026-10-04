@@ -27,11 +27,17 @@ export function RepositoryTokenDialog({ repository, lang, onClose }: {
       const result = await createRepositoryToken(repository.id, scope);
       if (result.success && result.data) setCredential(result.data);
       else setError(result.message ?? t("dashboard:repositories.errors.requestFailed"));
-    } catch { setError(t("dashboard:repositories.errors.requestFailed")); }
+    } catch {
+      // The action could not be reached; the server logs its own failures.
+      setError(t("dashboard:repositories.errors.requestFailed"));
+    }
   });
   const copy = async (value: string) => {
     try { await navigator.clipboard.writeText(value); setCopied(true); setError(undefined); }
-    catch { setError(t("dashboard:repositories.copyFailed")); }
+    catch {
+      // Clipboard permission is the browser's decision; report that copying failed.
+      setError(t("dashboard:repositories.copyFailed"));
+    }
   };
   return (
     <Dialog open onOpenChange={(open) => { if (!open && !pending) onClose(); }}>

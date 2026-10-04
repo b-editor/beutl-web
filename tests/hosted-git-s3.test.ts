@@ -102,7 +102,7 @@ describe("Backblaze B2 S3 storage adapter", () => {
     } finally { vi.unstubAllGlobals(); }
   });
 
-  it("uses B2 multipart UploadPart, ListParts, opaque ETags, Complete and Abort", async () => {
+  it("uses B2 multipart UploadPart, opaque ETags, Complete and Abort", async () => {
     const requests: { method: string; url: URL; body: string; length: string | null }[] = [];
     const fetcher = (async (request: Request) => {
       const url = new URL(request.url);
@@ -112,8 +112,6 @@ describe("Backblaze B2 S3 storage adapter", () => {
         return response("<InitiateMultipartUploadResult><UploadId>upload-1</UploadId></InitiateMultipartUploadResult>");
       if (url.searchParams.has("partNumber"))
         return response("", { ETag: '"opaque-etag"' });
-      if (url.searchParams.has("uploadId") && request.method === "GET")
-        return response('<ListPartsResult><Part><PartNumber>1</PartNumber><ETag>"opaque-etag"</ETag><Size>4</Size></Part><IsTruncated>false</IsTruncated></ListPartsResult>');
       if (url.searchParams.has("uploadId") && request.method === "POST")
         return response('<CompleteMultipartUploadResult><ETag>"not-a-sha256"</ETag></CompleteMultipartUploadResult>',
           { "x-amz-version-id": "version-1" });
@@ -130,7 +128,6 @@ describe("Backblaze B2 S3 storage adapter", () => {
       controller.enqueue(new TextEncoder().encode("data")); controller.close();
     } });
     expect(await upload.uploadPart(1, body, 4)).toEqual({ partNumber: 1, etag: '"opaque-etag"' });
-    expect(await upload.listParts()).toEqual([{ partNumber: 1, etag: '"opaque-etag"', size: 4 }]);
     expect(await upload.complete([{ partNumber: 1, etag: '"opaque-etag"' }]))
       .toEqual({ size: 4, versionId: "version-1" });
     await upload.abort();

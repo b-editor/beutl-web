@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./error": "./src/error.ts",
-    "./git/router": "./src/git/router.ts",
+    "./git/environment": "./src/git/environment.ts",
+    "./git/repositories": "./src/git/repositories.ts",
     "./ai/entitlements": "./src/ai/entitlements.ts",
     "./ai/image-model-capabilities": "./src/ai/image-model-capabilities.ts",
     "./ai/model-catalog": "./src/ai/model-catalog.ts",

@@ -1,35 +1,35 @@
+import { MAX_GIT_LFS_PART_BYTES } from "@beutl/core";
 import type { GitObjectBucket } from "./git-object-store";
+import type { GitAccess, GitMediaAction, GitRepositoryObject } from "./environment";
 import { CheckpointSha256 } from "./checkpoint-sha256";
-import { lfsKey, MAX_LFS_OBJECT_BYTES, MAX_TUS_PATCH_BYTES, MIN_TUS_PART_BYTES, type LfsRecord } from "./lfs";
+import { lfsKey, MAX_LFS_OBJECT_BYTES, MIN_TUS_PART_BYTES, type LfsRecord } from "./lfs";
 
-type Stub = { fetch(request: Request): Promise<Response> };
+// LFS bodies stream between the client and B2 in the ordinary Worker. The
+// repository object only records reservations, offsets and receipts.
+
+/** One LFS object of a repository whose access the route has already verified. */
+export type LfsObject = { bucket: GitObjectBucket; repository: GitRepositoryObject; access: GitAccess; oid: string };
+
 type Record = LfsRecord & { digest?: string };
 const HASH_STEP_BYTES = 32 * 1024 ** 2;
 const integer = (s: string | null) => s !== null && /^\d+$/u.test(s) && Number.isSafeInteger(Number(s)) ? Number(s) : -1;
+// The route adds Tus-Resumable to every response on tus paths.
 const tus = (status: number, headers: HeadersInit = {}, body?: string) => new Response(body ?? null, {
-  status, headers: { "Tus-Resumable": "1.0.0", "Cache-Control": "no-store", ...headers },
+  status, headers: { "Cache-Control": "no-store", ...headers },
 });
 
-async function metadata(stub: Stub, headers: Headers, oid: string, action: string, body?: unknown): Promise<Response> {
-  const forwarded = new Headers({ "Content-Type": "application/json" });
-  for (const name of ["x-beutl-repo-id", "x-beutl-git-owner-id", "x-beutl-git-scope", "authorization"])
-    if (headers.has(name)) forwarded.set(name, headers.get(name)!);
-  return stub.fetch(new Request(`https://git.internal/internal/git/media/${oid}/${action}`, {
-    method: body === undefined ? "GET" : "POST", headers: forwarded,
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }));
+function metadata(object: LfsObject, action: "status" | GitMediaAction, body?: unknown): Promise<Response> {
+  return object.repository.media(object.access, object.oid, action, body);
 }
 async function recordFrom(response: Response): Promise<Record> {
   if (!response.ok) throw new Error(`Git metadata request returned HTTP ${response.status}`);
   return response.json() as Promise<Record>;
 }
 
-export async function advanceVerification(
-  bucket: GitObjectBucket, stub: Stub, headers: Headers, repoId: string, oid: string,
-  record: Record, signal?: AbortSignal,
-): Promise<Response> {
+async function advanceVerification(object: LfsObject, record: Record, signal?: AbortSignal): Promise<Response> {
+  const { bucket, access: { repoId }, oid } = object;
   const expectedOffset = record.checkpoint?.offset ?? 0;
-  if (record.digest) return metadata(stub, headers, oid, "checkpoint", {
+  if (record.digest) return metadata(object, "checkpoint", {
     resourceId: record.resourceId, versionId: record.versionId, expectedOffset, digest: record.digest,
   });
   if (!record.versionId) throw new Error("LFS verification requires a pinned version");
@@ -53,7 +53,7 @@ export async function advanceVerification(
     finally { reader.releaseLock(); }
   }
   const complete = expectedOffset + length === record.size;
-  return metadata(stub, headers, oid, "checkpoint", {
+  return metadata(object, "checkpoint", {
     resourceId: record.resourceId, versionId: record.versionId, expectedOffset,
     ...(complete ? { digest: hash.digestHex() } : { checkpoint: {
       version: 1, oid, size: record.size, versionId: record.versionId, ...hash.snapshot(),
@@ -62,10 +62,9 @@ export async function advanceVerification(
 }
 
 async function uploadPart(
-  bucket: GitObjectBucket, stub: Stub, headers: Headers, repoId: string, oid: string,
-  record: Record, offset: number, length: number, body: ReadableStream<Uint8Array>,
+  object: LfsObject, record: Record, offset: number, length: number, body: ReadableStream<Uint8Array>,
 ): Promise<Response> {
-  const prepare = await metadata(stub, headers, oid, "part", { resourceId: record.resourceId, offset, length });
+  const prepare = await metadata(object, "part", { resourceId: record.resourceId, offset, length });
   if (!prepare.ok) return prepare;
   const lease = await prepare.json() as { uploadId: string; partNumber: number; leaseId: string };
   let received = 0;
@@ -78,94 +77,107 @@ async function uploadPart(
     flush() { if (received !== length) throw new Error("tus body is incomplete"); },
   }));
   try {
-    const part = await bucket.resumeMultipartUpload(lfsKey(repoId, oid), lease.uploadId)
+    const part = await object.bucket.resumeMultipartUpload(lfsKey(object.access.repoId, object.oid), lease.uploadId)
       .uploadPart(lease.partNumber, bounded, length);
-    return await metadata(stub, headers, oid, "accept", { resourceId: record.resourceId, leaseId: lease.leaseId, ...part });
+    return await metadata(object, "accept", { resourceId: record.resourceId, leaseId: lease.leaseId, ...part });
   } catch (error) {
-    await metadata(stub, headers, oid, "cancel", { resourceId: record.resourceId, leaseId: lease.leaseId })
+    // The part failure below is what the client must see. A lost cancel only
+    // leaves the lease to expire, after which the client can retry the part.
+    await metadata(object, "cancel", { resourceId: record.resourceId, leaseId: lease.leaseId })
       .catch(() => undefined);
     throw error;
   }
 }
 
-export async function handleTusWorker(
-  request: Request, bucket: GitObjectBucket, stub: Stub, headers: Headers,
-  repoId: string, oid: string, resourceId?: string,
-): Promise<Response> {
-  if (request.method === "OPTIONS") return tus(204, {
+export function tusOptions(): Response {
+  return tus(204, {
     "Tus-Version": "1.0.0", "Tus-Extension": "creation,expiration", "Tus-Max-Size": String(MAX_LFS_OBJECT_BYTES),
-    "Upload-Min-Part-Size": String(MIN_TUS_PART_BYTES), "Upload-Max-Part-Size": String(MAX_TUS_PATCH_BYTES),
+    "Upload-Min-Part-Size": String(MIN_TUS_PART_BYTES), "Upload-Max-Part-Size": String(MAX_GIT_LFS_PART_BYTES),
   });
-  if (request.headers.get("tus-resumable") !== "1.0.0") return tus(412, { "Tus-Version": "1.0.0" });
-  if (request.method === "POST" && !resourceId) {
-    if (request.headers.get("upload-defer-length")) return tus(400, {}, "Upload-Length is required");
-    const response = await metadata(stub, headers, oid, "create", { length: integer(request.headers.get("upload-length")) });
-    if (!response.ok) return tus(response.status, {}, await response.text());
-    const record = await recordFrom(response);
-    return tus(201, { Location: `${new URL(request.url).origin}${new URL(request.url).pathname}/${record.resourceId}`,
-      "Upload-Expires": new Date(record.expiresAt).toUTCString() });
-  }
-  if (!resourceId || !["HEAD", "PATCH"].includes(request.method)) return tus(405);
-  const status = await metadata(stub, headers, oid, "status");
+}
+
+export async function createTusUpload(request: Request, object: LfsObject): Promise<Response> {
+  if (request.headers.get("upload-defer-length")) return tus(400, {}, "Upload-Length is required");
+  const response = await metadata(object, "create", { length: integer(request.headers.get("upload-length")) });
+  if (!response.ok) return tus(response.status, {}, await response.text());
+  const record = await recordFrom(response);
+  const url = new URL(request.url);
+  return tus(201, { Location: `${url.origin}${url.pathname}/${record.resourceId}`,
+    "Upload-Expires": new Date(record.expiresAt).toUTCString() });
+}
+
+async function currentUpload(object: LfsObject, resourceId: string): Promise<Record | Response> {
+  const status = await metadata(object, "status");
   if (!status.ok) return tus(status.status);
-  let record = await recordFrom(status);
-  if (record.resourceId !== resourceId) return tus(404);
-  if (request.method === "PATCH") {
-    if (request.headers.get("content-type")?.toLowerCase() !== "application/offset+octet-stream") return tus(415);
-    const offset = integer(request.headers.get("upload-offset"));
-    const length = integer(request.headers.get("content-length"));
-    if (offset !== record.offset) return tus(409, { "Upload-Offset": String(record.offset) });
-    if (!request.body || length < 0 || length > MAX_TUS_PATCH_BYTES) return tus(400);
-    const receipt = await uploadPart(bucket, stub, headers, repoId, oid, record, offset, length, request.body);
-    if (!receipt.ok) return tus(receipt.status, {}, await receipt.text());
-    record = await recordFrom(receipt);
-  }
+  const record = await recordFrom(status);
+  return record.resourceId === resourceId ? record : tus(404);
+}
+
+/** HEAD reports the accepted offset and also recovers completion after a lost PATCH response. */
+export async function readTusUpload(request: Request, object: LfsObject, resourceId: string): Promise<Response> {
+  const record = await currentUpload(object, resourceId);
+  return record instanceof Response ? record : finishTusUpload(request, object, record, 200);
+}
+
+export async function appendTusUpload(request: Request, object: LfsObject, resourceId: string): Promise<Response> {
+  const record = await currentUpload(object, resourceId);
+  if (record instanceof Response) return record;
+  if (request.headers.get("content-type")?.toLowerCase() !== "application/offset+octet-stream") return tus(415);
+  const offset = integer(request.headers.get("upload-offset"));
+  const length = integer(request.headers.get("content-length"));
+  if (offset !== record.offset) return tus(409, { "Upload-Offset": String(record.offset) });
+  if (!request.body || length < 0 || length > MAX_GIT_LFS_PART_BYTES) return tus(400);
+  const receipt = await uploadPart(object, record, offset, length, request.body);
+  if (!receipt.ok) return tus(receipt.status, {}, await receipt.text());
+  return finishTusUpload(request, object, await recordFrom(receipt), 204);
+}
+
+async function finishTusUpload(request: Request, object: LfsObject, record: Record, status: number): Promise<Response> {
   // Empty files need an empty S3 part; HEAD can recover its lost response too.
   if (record.size === 0 && record.partCount === 0 && !record.verified) {
     const empty = new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
-    const receipt = await uploadPart(bucket, stub, headers, repoId, oid, record, 0, 0, empty);
+    const receipt = await uploadPart(object, record, 0, 0, empty);
     if (!receipt.ok) return tus(receipt.status);
     record = await recordFrom(receipt);
   }
   if (record.offset === record.size && !record.verified) {
-    const completed = await metadata(stub, headers, oid, "complete", { resourceId });
+    const completed = await metadata(object, "complete", { resourceId: record.resourceId });
     if (!completed.ok) return tus(completed.status);
     record = await recordFrom(completed);
-    const verified = await advanceVerification(bucket, stub, headers, repoId, oid, record, request.signal);
+    const verified = await advanceVerification(object, record, request.signal);
     if (!verified.ok) return tus(verified.status, {}, await verified.text());
     record = await recordFrom(verified);
   }
-  return tus(request.method === "PATCH" ? 204 : 200, {
+  return tus(status, {
     "Upload-Offset": String(record.offset), "Upload-Length": String(record.size),
     "Upload-Verified": String(record.verified),
     ...(record.verified ? {} : { "Upload-Expires": new Date(record.expiresAt).toUTCString() }),
   });
 }
 
-export async function handleLfsDownload(
-  request: Request, bucket: GitObjectBucket, stub: Stub, headers: Headers, repoId: string, oid: string,
-): Promise<Response> {
-  if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405 });
-  const status = await metadata(stub, headers, oid, "status");
+/** Streams the recorded B2 version for GET and HEAD, with single ranges and If-Range. */
+export async function downloadLfsObject(request: Request, object: LfsObject): Promise<Response> {
+  const method = request.method === "HEAD" ? "HEAD" : "GET";
+  const status = await metadata(object, "status");
   if (!status.ok) return new Response(null, { status: status.status });
   const record = await recordFrom(status);
   if (!record.verified || !record.versionId) return new Response(null, { status: 404 });
   let range = request.headers.get("range") ?? undefined;
   if (range && !/^bytes=(?:\d+-\d*|-\d+)$/u.test(range))
     return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${record.size}` } });
-  const key = lfsKey(repoId, oid);
+  const key = lfsKey(object.access.repoId, object.oid);
   const ifRange = request.headers.get("if-range");
   if (range && ifRange) {
-    const head = await bucket.download(key, record.versionId, "HEAD", undefined, request.signal);
+    const head = await object.bucket.download(key, record.versionId, "HEAD", undefined, request.signal);
     const modified = Date.parse(head.headers.get("last-modified") ?? "");
     if (!head.ok) return new Response(null, { status: head.status });
     if (ifRange !== head.headers.get("etag") && !(Number.isFinite(modified) && modified <= Date.parse(ifRange)))
       range = undefined;
   }
-  const upstream = await bucket.download(key, record.versionId, request.method, range, request.signal);
+  const upstream = await object.bucket.download(key, record.versionId, method, range, request.signal);
   const responseHeaders = new Headers({ "Cache-Control": "private, no-store", "Accept-Ranges": "bytes" });
   for (const name of ["content-type", "content-length", "content-range", "etag", "last-modified"])
     if (upstream.headers.has(name)) responseHeaders.set(name, upstream.headers.get(name)!);
   // No buffering or redirect: the ordinary Worker owns the B2 fetch and stream.
-  return new Response(request.method === "HEAD" ? null : upstream.body, { status: upstream.status, headers: responseHeaders });
+  return new Response(method === "HEAD" ? null : upstream.body, { status: upstream.status, headers: responseHeaders });
 }

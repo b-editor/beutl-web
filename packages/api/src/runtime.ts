@@ -1,7 +1,8 @@
-import { routeGitRequest, reconcileGitRepositoryDeletions, reconcileGitLfsReservations, reconcileGitHistoryReservations, withTusProtocolHeader, type GitRouterEnvironment } from "./git/router";
-export { GitRepositoryDurableObject } from "./git/repo-durable-object";
 // Shared API runtime embedded in apps/web/worker.js.
-// Public APIs and their scheduled work deploy together with beutl-web.
+// Public APIs and their scheduled work deploy together with beutl-web. This
+// entry owns bindings, body limits, the execution context and cron; Hono owns
+// every API route, including Hosted Git (v3/repos, v3/git).
+export { GitRepositoryDurableObject } from "./git/repo-durable-object";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { runWithDbProvider } from "@beutl/db";
@@ -28,8 +29,14 @@ import {
   reconcileStorageMultipartCleanups,
 } from "./storage-uploads";
 import { resolveStorageBucket } from "./storage/bucket-from-env";
+import type { GitEnvironment } from "./git/environment";
+import {
+  reconcileGitHistoryReservations,
+  reconcileGitLfsReservations,
+  reconcileGitRepositoryDeletions,
+} from "./git/maintenance";
 
-export interface Env extends GitRouterEnvironment {
+export interface Env extends GitEnvironment {
   BEUTL_DATABASE_HYPERDRIVE: {
     connectionString: string;
   };
@@ -138,6 +145,15 @@ export function isApiRequest(request: Request): boolean {
 // Only GET and HEAD are bodyless. Other methods may carry a body that the
 // downstream handler reads.
 const BODYLESS_METHODS = new Set(["GET", "HEAD"]);
+const STORAGE_PART_PATH = /^\/api\/v3\/storage\/uploads\/[^/]+\/parts\/\d+$/u;
+const TUS_UPLOAD_PATH = /^\/api\/v3\/git\/[^/]+\.git\/info\/lfs\/objects\/[0-9a-f]{64}\/tus(?:\/[^/]*)?$/u;
+
+/** tus clients require Tus-Resumable on every response, including this boundary's 413. */
+async function bodyTooLarge(request: Request): Promise<Response> {
+  const response = await fileTooLargeApiResponse();
+  if (TUS_UPLOAD_PATH.test(new URL(request.url).pathname)) response.headers.set("Tus-Resumable", "1.0.0");
+  return response;
+}
 /**
  * Keep the outer Worker cap aligned with the parser used by each route. The
  * outer cap is a memory guard, while the endpoint parser remains the source
@@ -172,10 +188,11 @@ export function withBoundedBody(
   }
 
   const headers = new Headers(request.headers);
-  const tusPatch = request.method === "PATCH" && /^\/api\/v3\/git\/[0-9a-f-]+\.git\/info\/lfs\/objects\/[0-9a-f]{64}\/tus\/[0-9a-f-]+$/u.test(new URL(request.url).pathname);
+  const pathname = new URL(request.url).pathname;
   // Multipart storage providers require the declared part length; the route
   // additionally bounds the stream to that length before handing it to storage.
-  if (!(request.method === "PUT" && /^\/api\/v3\/storage\/uploads\/[^/]+\/parts\/\d+$/u.test(new URL(request.url).pathname)) && !tusPatch)
+  if (!(request.method === "PUT" && STORAGE_PART_PATH.test(pathname)) &&
+      !(request.method === "PATCH" && TUS_UPLOAD_PATH.test(pathname)))
     headers.delete("content-length");
   return new Request(request.url, {
     method: request.method,
@@ -194,23 +211,17 @@ export default {
     const bounded = withBoundedBody(request, () => {
       bodyLimitExceeded = true;
     });
-    if (bounded === null) {
-      return withTusProtocolHeader(request, await fileTooLargeApiResponse());
-    }
+    if (bounded === null) return bodyTooLarge(request);
 
     return withApiBindings(env, async (scopedContext) => {
       try {
-        const git = await routeGitRequest(bounded, env);
-        if (git) return git;
         const response = await api.fetch(bounded, env, scopedContext);
         // Hono's JSON parser can turn a stream error into a generic 400 before
         // the endpoint sees it. The outer stream marker still gives the Worker
         // an unambiguous 413 response for chunked bodies.
-        return bodyLimitExceeded
-          ? withTusProtocolHeader(request, await fileTooLargeApiResponse())
-          : response;
+        return bodyLimitExceeded ? bodyTooLarge(request) : response;
       } catch (error) {
-        if (bodyLimitExceeded) return withTusProtocolHeader(request, await fileTooLargeApiResponse());
+        if (bodyLimitExceeded) return bodyTooLarge(request);
         throw error;
       }
     }, context);

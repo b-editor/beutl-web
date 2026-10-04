@@ -5,7 +5,6 @@ import { readBodyAtMost } from "./git-http";
 import { gitTokenSecret, issueUploadToken, type GitScope } from "./tokens";
 
 export const MAX_LFS_OBJECT_BYTES = 20 * 1024 ** 3;
-export const MAX_TUS_PATCH_BYTES = 32 * 1024 ** 2;
 export const MIN_TUS_PART_BYTES = 5 * 1024 ** 2;
 export const UPLOAD_LIFETIME_MS = 24 * 60 * 60 * 1000;
 export interface GitDurableStorage {
@@ -59,7 +58,10 @@ export async function handleLfsBatch(
   accounting?: GitStorageAccounting,
 ): Promise<Response> {
   let input: any;
-  try { input = await readJson(request); } catch { return json({ message: "Invalid LFS batch" }, 400); }
+  try { input = await readJson(request); } catch {
+    // Malformed batch JSON is the client's protocol error.
+    return json({ message: "Invalid LFS batch" }, 400);
+  }
   if (!input || !["upload", "download"].includes(input.operation) ||
       (input.transfers !== undefined && !Array.isArray(input.transfers)) ||
       !Array.isArray(input.objects) || input.objects.length > 100 ||

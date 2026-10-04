@@ -7,6 +7,8 @@ import packages from "./v3/packages";
 import users from "./v3/users";
 import user from "./v3/user";
 import app_ from "./v3/app";
+import repos from "./v3/repos";
+import git from "./v3/git";
 import aiCapabilities from "./v3/ai/capabilities";
 import aiImages from "./v3/ai/images";
 import aiJobs from "./v3/ai/jobs";
@@ -34,4 +36,6 @@ export const v3 = new Hono()
   .route("/ai/translations", aiTranslations)
   .route("/ai/videos", aiVideos)
   .route("/app", app_)
+  .route("/repos", repos)
+  .route("/git", git)
   .onError(apiOnErrorHandler);

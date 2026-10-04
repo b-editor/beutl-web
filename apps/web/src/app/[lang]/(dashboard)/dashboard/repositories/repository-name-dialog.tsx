@@ -26,7 +26,10 @@ export function RepositoryNameDialog({ lang, initialName, onClose, onSubmit }: {
     if (!valid || unchanged || pending) return;
     startTransition(async () => {
       try { setError(await onSubmit(name.trim())); }
-      catch { setError(t("dashboard:repositories.errors.requestFailed")); }
+      catch {
+        // The action could not be reached; the server logs its own failures.
+        setError(t("dashboard:repositories.errors.requestFailed"));
+      }
     });
   };
   return (
