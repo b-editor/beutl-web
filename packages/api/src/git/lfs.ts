@@ -17,6 +17,8 @@ export const MIN_TUS_PART_BYTES = 5 * 1024 ** 2;
 export const UPLOAD_LIFETIME_MS = 24 * 60 * 60 * 1000;
 // Git LFS asks for a new batch when an action expires before its transfer starts.
 const UPLOAD_URL_LIFETIME_MS = 60 * 60_000;
+/** An upload batch rewrites `touchedAt` only when it is at least this old. */
+export const LFS_TOUCH_PRECISION_MS = 60 * 60_000;
 export interface GitDurableStorage {
   get<T>(key: string): Promise<T | undefined>;
   put<T>(key: string, value: T): Promise<void>;
@@ -111,7 +113,7 @@ export async function handleLfsBatch(
     }
     if (record?.verified) {
       // The client may be about to push a commit that points here.
-      if (Date.now() - (record.touchedAt ?? 0) > 60 * 60_000) await storage.put(`lfs:${oid}`, { ...record, touchedAt: Date.now() });
+      if (Date.now() - (record.touchedAt ?? 0) > LFS_TOUCH_PRECISION_MS) await storage.put(`lfs:${oid}`, { ...record, touchedAt: Date.now() });
       objects.push({ oid, size }); continue;
     }
     // Objects already stored need no transfer, whatever their size.

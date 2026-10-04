@@ -224,6 +224,29 @@ describe("unreferenced LFS collection", () => {
     }
   }, 60_000);
 
+  it("collects nothing when packed-refs has a damaged line", async () => {
+    const r = repository(), oid = "e".repeat(64);
+    await r.storage.put("repoId", repoId);
+    await r.bucket.put(`git/repos/${repoId}/repo.git/packed-refs`, new TextEncoder().encode(`${"f".repeat(40)} refs/heads/main\n${"0".repeat(17)}\n`));
+    await r.store(oid, 8 * DAY);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await r.collect();
+    expect(error).toHaveBeenCalledWith("Git LFS collection failed", expect.objectContaining({ repoId }));
+    error.mockRestore();
+    expect(await r.stored(oid)).toBe(true);
+  });
+
+  it("keeps the full grace period even when an upload batch skipped rewriting the time", async () => {
+    const r = repository(), kept = "1".repeat(64), collected = "2".repeat(64);
+    await r.storage.put("repoId", repoId);
+    // Last written 7 days 30 minutes ago; a batch may have offered it within the following hour.
+    await r.store(kept, 7 * DAY + 30 * 60_000);
+    await r.store(collected, 7 * DAY + 2 * 60 * 60_000);
+    await r.collect();
+    expect(await r.stored(kept)).toBe(true);
+    expect(await r.storage.get(`lfs:${collected}`)).toBeUndefined();
+  });
+
   it("collects objects of a repository that was never pushed, without creating one", async () => {
     const r = repository(), oid = "9".repeat(64), fresh = "a".repeat(64);
     await r.storage.put("repoId", repoId);

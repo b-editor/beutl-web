@@ -60,9 +60,13 @@ async function refTips(store: GitObjectStore, gitdir: string): Promise<string[]>
   }
   const packed = await store.get(`${gitdir}packed-refs`);
   for (const line of packed ? new TextDecoder().decode(packed).split("\n") : []) {
-    const entry = /^([0-9a-f]{40}) (refs\/\S+)$/u.exec(line.trim());
+    // Comments, blank lines and peeled tag targets name no ref of their own.
+    if (line === "" || line.startsWith("#") || /^\^[0-9a-f]{40}$/u.test(line)) continue;
+    const entry = /^([0-9a-f]{40}) (refs\/\S+)$/u.exec(line);
+    // A damaged line could be the only ref to a pointer.
+    if (!entry) throw new Error("Git packed-refs has an unreadable line");
     // A loose ref supersedes its packed entry.
-    if (entry && !tips.has(entry[2])) tips.set(entry[2], entry[1]);
+    if (!tips.has(entry[2])) tips.set(entry[2], entry[1]);
   }
   return [...tips.values()];
 }

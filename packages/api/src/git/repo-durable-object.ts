@@ -5,7 +5,7 @@ import { advertiseGitRefs, initializeGitRepository, isGitService, receiveGitPack
 import { S3GitObjectBucket, sha256Base64, type GitS3Environment } from "./s3-object-store";
 import type { GitObjectBucket } from "./git-object-store";
 import { databaseGitStorageAccounting, withGitDatabase, type GitDatabaseEnvironment, type GitStorageAccounting } from "./accounting";
-import { cleanupLfs, handleLfsBatch, json, lfsKey, MAX_LFS_PARTS, MIN_TUS_PART_BYTES,
+import { cleanupLfs, handleLfsBatch, json, lfsKey, LFS_TOUCH_PRECISION_MS, MAX_LFS_PARTS, MIN_TUS_PART_BYTES,
   partKey, partPrefix, readJson, scheduleGitMaintenance, UPLOAD_LIFETIME_MS,
   type GitDurableStorage, type LfsPart, type LfsRecord } from "./lfs";
 import { referencedLfsOids } from "./lfs-references";
@@ -15,8 +15,9 @@ import type { GitScope } from "./tokens";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const MEDIA = "/internal/git/media/:oid{[0-9a-f]{64}}";
 const DELETION_GRACE_MS = 2 * 60 * 60 * 1000;
-// Clients upload media before pushing the commits that point to it.
-const LFS_COLLECTION_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+// Clients upload media before pushing the commits that point to it. The
+// touch precision keeps the full period after an offer whose write was skipped.
+const LFS_COLLECTION_GRACE_MS = 7 * 24 * 60 * 60 * 1000 + LFS_TOUCH_PRECISION_MS;
 const LFS_COLLECTION_BATCH = 100;
 type Environment = GitS3Environment & GitDatabaseEnvironment;
 type Record = LfsRecord & { gcComplete?: boolean };
