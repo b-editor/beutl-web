@@ -197,8 +197,7 @@ type BillingHistoryPackage = {
   name: string;
   displayName: string | null;
   user: {
-    name: string | null;
-    Profile: { displayName: string | null } | null;
+    Profile: { displayName: string | null; userName: string } | null;
   };
 };
 
@@ -226,10 +225,10 @@ export async function findPackagesForBillingHistory({
       displayName: true,
       user: {
         select: {
-          name: true,
           Profile: {
             select: {
               displayName: true,
+              userName: true,
             },
           },
         },

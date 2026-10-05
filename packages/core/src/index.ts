@@ -23,6 +23,7 @@ export { getRelativeTimeDifference } from "./relative-time";
 export { isValidNuGetVersionRange } from "./nuget-version-range";
 export { randomString, randomUuid, createHash } from "./create-hash";
 export { cn, formatBytes } from "./utils";
+export { profileDisplayName } from "./profile";
 export {
   STORAGE_FREE_FILE_COUNT_LIMIT,
   STORAGE_FREE_QUOTA_BYTES,

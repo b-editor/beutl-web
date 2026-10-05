@@ -1,4 +1,4 @@
-import { formatAmount, formatCount, formatDate } from "@beutl/core";
+import { formatAmount, formatCount, formatDate, profileDisplayName } from "@beutl/core";
 import { formatBillingProductLabel } from "./billing-product";
 import type {
   BillingDocumentLink,
@@ -51,8 +51,7 @@ type PackageSummary = {
   name: string;
   displayName: string | null;
   user: {
-    name: string | null;
-    Profile: { displayName: string | null } | null;
+    Profile: { displayName: string | null; userName: string } | null;
   };
 };
 
@@ -146,8 +145,7 @@ export function buildBillingHistory({
         ? pkg.displayName || pkg.name
         : t("account:billing.unknownPackage"),
       detail:
-        pkg?.user.Profile?.displayName ||
-        pkg?.user.name ||
+        profileDisplayName(pkg?.user.Profile) ||
         t("account:billing.unknownSeller"),
       amount:
         payment.stripePaymentAmount !== null && payment.stripeCurrency !== null

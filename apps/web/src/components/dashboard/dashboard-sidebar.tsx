@@ -192,7 +192,7 @@ export function DashboardSidebar({
     },
   ] as const;
 
-  const displayName = user.name ?? user.email ?? "";
+  const displayName = user.name || user.email || "";
 
   return (
     <Sidebar collapsible="icon">

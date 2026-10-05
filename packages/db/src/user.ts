@@ -1,4 +1,5 @@
 import { getDb } from "./provider";
+import { profileDisplayName } from "@beutl/core";
 import { startRetryableTransaction, type PrismaTransaction } from "./transaction";
 import { StorageCleanupBusyError } from "./ai-job";
 import { FILE_IN_USE_WHERE } from "./storage-folder";
@@ -160,9 +161,13 @@ export async function listUsers({
               },
             },
             {
-              name: {
-                contains: query,
-                mode: queryMode,
+              Profile: {
+                is: {
+                  OR: [
+                    { displayName: { contains: query, mode: queryMode } },
+                    { userName: { contains: query, mode: queryMode } },
+                  ],
+                },
               },
             },
           ],
@@ -173,9 +178,8 @@ export async function listUsers({
       where,
       select: {
         id: true,
-        name: true,
         email: true,
-        image: true,
+        Profile: { select: { displayName: true, userName: true } },
         createdAt: true,
         emailVerified: true,
       },
@@ -188,7 +192,10 @@ export async function listUsers({
       where,
     }),
   ]);
-  return { items, total };
+  return {
+    items: items.map((user) => ({ ...user, name: profileDisplayName(user.Profile) })),
+    total,
+  };
 }
 
 // 集計結果は userId しか持たないため、表示名を引くための最小限の読み取り。
@@ -203,7 +210,7 @@ export async function listUserLabels({
     return [];
   }
   const db = prisma ?? await getDb();
-  return db.user.findMany({
+  const users = await db.user.findMany({
     where: {
       id: {
         in: userIds,
@@ -211,10 +218,11 @@ export async function listUserLabels({
     },
     select: {
       id: true,
-      name: true,
       email: true,
+      Profile: { select: { displayName: true, userName: true } },
     },
   });
+  return users.map((user) => ({ ...user, name: profileDisplayName(user.Profile) }));
 }
 
 // 呼び出し側が「打ち切られたか」を判定できるよう、リレーションはこの上限より 1 件多く取得する。
@@ -222,14 +230,14 @@ export const USER_DETAIL_RELATION_LIMIT = 50;
 
 export async function getUserDetail({ userId }: { userId: string }) {
   const db = await getDb();
-  return db.user.findUnique({
+  const user = await db.user.findUnique({
     where: {
       id: userId,
     },
     select: {
       id: true,
-      name: true,
       email: true,
+      Profile: { select: { displayName: true, userName: true } },
       emailVerified: true,
       createdAt: true,
       Customer: {
@@ -276,6 +284,7 @@ export async function getUserDetail({ userId }: { userId: string }) {
       },
     },
   });
+  return user ? { ...user, name: profileDisplayName(user.Profile) } : null;
 }
 
 export async function countUsers({

@@ -1,8 +1,9 @@
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { passkey } from "@better-auth/passkey";
-import { magicLink } from "better-auth/plugins";
-import { getDb } from "@beutl/db";
+import { customSession, magicLink } from "better-auth/plugins";
+import { findProfileForDiscover, getDb } from "@beutl/db";
+import { profileDisplayName } from "@beutl/core";
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { onUserCreated } from "@beutl/next/auth-hooks";
 import { sendMagicLinkEmail } from "@beutl/next/magic-link-email";
@@ -47,6 +48,21 @@ async function createAuthWithPrisma() {
       }),
       magicLink({
         sendMagicLink: sendMagicLinkEmail,
+      }),
+      // Apply the saved identity after reading the auth session, including a
+      // cookie-cache hit. Provider fields never replace a profile setting.
+      customSession(async ({ user, session }) => {
+        const profile = await findProfileForDiscover({ userId: user.id, prisma });
+        return {
+          session,
+          user: {
+            ...user,
+            name: profileDisplayName(profile) ?? "",
+            image: profile?.iconFileId
+              ? `/api/contents/${encodeURIComponent(profile.iconFileId)}`
+              : null,
+          },
+        };
       }),
       nextCookies(),
     ],
