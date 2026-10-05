@@ -1,4 +1,5 @@
 import { getDb } from "./provider";
+import { profileDisplayName } from "@beutl/core";
 import type { PrismaTransaction } from "./transaction";
 
 // 管理者の対応待ちになっている行の件数。ダッシュボードで各キューを開かずに
@@ -75,7 +76,12 @@ export async function listSubscriptionsForAdmin({
         cancelAtPeriodEnd: true,
         cancelAt: true,
         updatedAt: true,
-        user: { select: { name: true, email: true } },
+        user: {
+          select: {
+            email: true,
+            Profile: { select: { displayName: true, userName: true } },
+          },
+        },
       },
       // 同時刻の行でページ境界が揺れないよう、主キーで順序を確定させる。
       orderBy: [{ updatedAt: "desc" }, { userId: "asc" }, { planId: "asc" }],
@@ -84,5 +90,11 @@ export async function listSubscriptionsForAdmin({
     }),
     db.subscription.count({ where }),
   ]);
-  return { items, total };
+  return {
+    items: items.map((row) => ({
+      ...row,
+      user: { ...row.user, name: profileDisplayName(row.user.Profile) },
+    })),
+    total,
+  };
 }

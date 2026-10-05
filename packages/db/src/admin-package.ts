@@ -1,4 +1,5 @@
 import { getDb } from "./provider";
+import { profileDisplayName } from "@beutl/core";
 import type { PrismaTransaction } from "./transaction";
 
 // 詳細画面で 1 ページに並べるリリースの件数。
@@ -46,7 +47,13 @@ export async function listPackagesForAdmin({
         published: true,
         createdAt: true,
         updatedAt: true,
-        user: { select: { id: true, name: true, email: true } },
+        user: {
+          select: {
+            id: true,
+            email: true,
+            Profile: { select: { displayName: true, userName: true } },
+          },
+        },
         _count: { select: { Release: true, UserPackage: true } },
       },
       // createdAt だけではページ境界で同時刻の行が重複・欠落するため id で確定させる。
@@ -56,7 +63,13 @@ export async function listPackagesForAdmin({
     }),
     db.package.count({ where }),
   ]);
-  return { items, total };
+  return {
+    items: items.map((pkg) => ({
+      ...pkg,
+      user: { ...pkg.user, name: profileDisplayName(pkg.user.Profile) },
+    })),
+    total,
+  };
 }
 
 // どのリリースも公開状態を変えられるよう、リリースはページ単位で取得する。
@@ -71,7 +84,7 @@ export async function getPackageDetailForAdmin({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
-  return db.package.findUnique({
+  const pkg = await db.package.findUnique({
     where: { id: packageId },
     select: {
       id: true,
@@ -85,7 +98,13 @@ export async function getPackageDetailForAdmin({
       interval: true,
       createdAt: true,
       updatedAt: true,
-      user: { select: { id: true, name: true, email: true } },
+      user: {
+        select: {
+          id: true,
+          email: true,
+          Profile: { select: { displayName: true, userName: true } },
+        },
+      },
       packagePricing: {
         select: { id: true, currency: true, price: true, fallback: true },
         orderBy: { currency: "asc" },
@@ -107,6 +126,9 @@ export async function getPackageDetailForAdmin({
       _count: { select: { UserPackage: true, Release: true } },
     },
   });
+  return pkg
+    ? { ...pkg, user: { ...pkg.user, name: profileDisplayName(pkg.user.Profile) } }
+    : null;
 }
 
 // 公開状態を目的の値へ揃える。changed は実際に書き換えたかどうかで、既にその状態

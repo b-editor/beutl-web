@@ -24,7 +24,7 @@ const t = (key: string, options?: Record<string, unknown>) =>
 const PACKAGE = {
   name: "package-x",
   displayName: "Package X",
-  user: { name: "seller", Profile: { displayName: "Seller Name" } },
+  user: { name: "seller", Profile: { displayName: "Seller Name", userName: "seller-profile" } },
 };
 
 function packagePayment(overrides: Record<string, unknown> = {}) {
@@ -209,7 +209,18 @@ describe("buildBillingHistory", () => {
     });
 
     expect(entry.product).toBe("package-x");
-    expect(entry.detail).toBe("seller");
+    expect(entry.detail).toBe("account:billing.unknownSeller");
+  });
+
+  it("uses the profile username for a seller whose display name is empty", () => {
+    const [entry] = build({
+      payments: [packagePayment()],
+      packages: [["package-1", {
+        ...PACKAGE,
+        user: { name: "Provider Name", Profile: { displayName: "", userName: "seller-profile" } },
+      }]],
+    });
+    expect(entry.detail).toBe("seller-profile");
   });
 
   it("marks a revoked package payment", () => {

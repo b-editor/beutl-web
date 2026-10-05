@@ -99,7 +99,9 @@ export async function updateProfile(
       const message = t("account:profile.userNameTaken");
       return { success: false, message, errors: { userName: [message] } };
     }
-    revalidatePath(`/${lang}/dashboard/account/profile`);
+    // The saved identity is also rendered by the shared dashboard layout and
+    // other pages. Refresh them without waiting for the auth cookie to expire.
+    revalidatePath("/", "layout");
     return {
       success: true,
       message: t("account:profile.profileUpdated"),

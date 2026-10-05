@@ -3,7 +3,8 @@ import { ProfileUserNameTakenError, setDbProvider, upsertProfile } from "@beutl/
 
 vi.mock("@/lib/auth-guard", () => ({ authenticated: async (fn: (session: unknown) => unknown) => fn({ user: { id: "owner" } }) }));
 vi.mock("@beutl/next/language", () => ({ getLanguage: async () => "en" }));
-vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
+vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+import { revalidatePath } from "next/cache";
 vi.mock("@beutl/next/audit-log", () => ({ addAuditLog: vi.fn(), auditLogActions: { authjs: { createUser: "createUser" } } }));
 import { updateProfile } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/account/profile/actions";
 import { onUserCreated } from "../../packages/next/src/auth-hooks";
@@ -70,6 +71,7 @@ describe("publisher identity", () => {
   });
   it("updates socials only after accepting the profile identity", async () => {
     expect((await updateProfile({}, form())).success).toBe(true);
+    expect(revalidatePath).toHaveBeenCalledWith("/", "layout");
     expect(socialProfile.upsert).toHaveBeenCalledWith({
       where: { userId_providerId: { userId: "owner", providerId: "github" } },
       update: { value: "new-social-value" },
