@@ -10,7 +10,7 @@ root [README](../README.md#deployment).
 Cloudflare bindings are declared alongside each deployable application:
 
 - Web and public API: [`apps/web/wrangler.jsonc`](../apps/web/wrangler.jsonc)
-- Private image edit: [`packages/api/wrangler-ai-images.jsonc`](../packages/api/wrangler-ai-images.jsonc)
+- Private image edit: [`apps/image-worker/wrangler.jsonc`](../apps/image-worker/wrangler.jsonc)
 - Admin: [`apps/admin/wrangler.jsonc`](../apps/admin/wrangler.jsonc)
 
 Local environment placeholders are documented in

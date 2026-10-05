@@ -149,6 +149,37 @@ importers:
         specifier: ^4.147.0
         version: 4.147.0(@types/node@22.20.5)
 
+  apps/image-worker:
+    dependencies:
+      '@beutl/api':
+        specifier: workspace:*
+        version: link:../../packages/api
+      '@beutl/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@beutl/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@prisma/adapter-pg':
+        specifier: ^7.10.0
+        version: 7.10.0
+      '@prisma/client':
+        specifier: ^7.10.0
+        version: 7.10.0(prisma@7.10.0(@types/node@22.20.5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3))(typescript@5.9.3)
+      hono:
+        specifier: ^4.13.12
+        version: 4.13.12
+    devDependencies:
+      '@types/node':
+        specifier: ^22.20.5
+        version: 22.20.5
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      wrangler:
+        specifier: ^4.147.0
+        version: 4.147.0(@types/node@22.20.5)
+
   apps/web:
     dependencies:
       '@better-auth/passkey':
@@ -351,9 +382,6 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
-      wrangler:
-        specifier: ^4.147.0
-        version: 4.147.0(@types/node@22.20.5)
 
   packages/core:
     dependencies:

@@ -68,7 +68,7 @@ jobs:
       - name: Install dependencies
         run: vp install --frozen-lockfile
       - name: Deploy private image Worker
-        run: vp run --filter @beutl/api deploy:image-worker
+        run: vp run deploy:image-worker
       - name: Deploy Web and public API Worker
         run: vp run deploy:web
         env:

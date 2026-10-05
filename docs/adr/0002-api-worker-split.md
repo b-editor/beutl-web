@@ -24,6 +24,8 @@ Web とすべての公開 API は **単一の `beutl-web` Worker** に含める�
 - API runtime は呼び出しごとの DB/ストレージ provider を使い、並行する Web 処理の
   provider を置き換えない。背景処理が終わってから DB 接続を閉じる。
 - Admin と非公開の画像処理 service Worker はそれぞれの用途のまま維持する。
+  画像 Worker の入口・デプロイ設定は `apps/image-worker` に置き、画像 API の処理は
+  `packages/api` から共有する。
 
 ## 再発防止
 

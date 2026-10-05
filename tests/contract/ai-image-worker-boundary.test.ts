@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { sign } from "hono/jwt";
-import { fetchImageEdit, type ImageWorkerEnv } from "../../packages/api/src/image-worker";
+import { fetchImageEdit, type ImageWorkerEnv } from "../../apps/image-worker/src/index";
 
 const ENV: ImageWorkerEnv = {
   BEUTL_DATABASE_HYPERDRIVE: { connectionString: "postgresql://unused:unused@localhost:5432/unused" },

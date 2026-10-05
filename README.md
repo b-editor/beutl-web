@@ -13,6 +13,7 @@ Cloudflare Workers.
 | --- | --- | --- |
 | `apps/web` | `@beutl/web` | Public site, account and developer dashboards, authentication, and checkout |
 | `apps/admin` | `@beutl/admin` | Administrative console |
+| `apps/image-worker` | `@beutl/image-worker` | Private Cloudflare Worker for AI image editing |
 | `packages/api` | `@beutl/api` | Hono APIs for desktop clients (`v1`, `v2`, and `v3`) |
 | `packages/core` | `@beutl/core` | Framework-independent domain logic |
 | `packages/db` | `@beutl/db` | Prisma client and data-access helpers |
@@ -59,7 +60,7 @@ and leaves `apps/web/prisma/schema.prisma` unchanged.
 | --- | --- |
 | `pnpm dev` | Start the public Web app |
 | `pnpm dev:admin` | Start the admin console |
-| `pnpm build` | Build both Next.js apps and type-check the desktop API |
+| `pnpm build` | Build both Next.js apps and the image Worker, and type-check the shared API |
 | `pnpm lint` | Lint both Next.js apps |
 | `pnpm typecheck` | Type-check every workspace that defines a type-check script |
 | `pnpm test` | Run the Vitest contract and integration suites |
@@ -98,7 +99,7 @@ entrypoint dispatches `/api/v{1,2,3}/*` before OpenNext so uploads remain stream
 | --- | --- | --- |
 | `beutl-web` | `beutl.beditor.net/*`, including all public APIs | `vp run deploy:web` |
 | `beutl-admin` | `admin.beutl.beditor.net/*` | `vp run deploy:admin` |
-| `beutl-ai-images` | Service binding only; no public route | `vp run --filter @beutl/api deploy:image-worker` |
+| `beutl-ai-images` | Service binding only; no public route | `vp run deploy:image-worker` |
 
 The `vp` commands require the [Vite+ CLI](https://viteplus.dev/guide/).
 The workspace also supports the pnpm runner configured in `package.json`: use
