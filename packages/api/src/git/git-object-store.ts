@@ -2,7 +2,7 @@ import type { ListOptions, ListResult, ObjectStore } from "git-fs-s3";
 
 // git-fs-s3 reads packs into memory. Keep each stored Git object well below the
 // Worker memory limit; media belongs in LFS, not in ordinary Git history.
-const MAX_GIT_OBJECT_BYTES = 16 * 1024 * 1024;
+export const MAX_GIT_OBJECT_BYTES = 16 * 1024 * 1024;
 const MAX_LIST_ENTRIES = 10_000;
 
 export interface GitObjectBucket {

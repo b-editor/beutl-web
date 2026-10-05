@@ -1,11 +1,13 @@
 import { Hono, type Context } from "hono";
 import { createMiddleware } from "hono/factory";
+import { createCachedStore, type CachedObjectStore } from "git-fs-s3";
 import { MAX_GIT_LFS_PART_BYTES } from "@beutl/core";
-import { advertiseGitRefs, initializeGitRepository, isGitService, readGitRepository, receiveGitPack, uploadGitPack, type GitService } from "./git-http";
+import { advertiseGitRefs, initializeGitRepository, isGitService, MAX_GIT_REPOSITORY_BYTES, readGitRepository, receiveGitPack,
+  uploadGitPack, type GitService } from "./git-http";
 import { isGitRevision, isGitTreePath } from "@beutl/core";
 import { browseFile, browseLog, browsePath, browseRefs, GitBrowseNotFoundError, MAX_COMMIT_PAGE } from "./browse";
 import { S3GitObjectBucket, sha256Base64, type GitS3Environment } from "./s3-object-store";
-import type { GitObjectBucket } from "./git-object-store";
+import { GitObjectStore, MAX_GIT_OBJECT_BYTES, type GitObjectBucket } from "./git-object-store";
 import { databaseGitStorageAccounting, withGitDatabase, type GitDatabaseEnvironment, type GitStorageAccounting } from "./accounting";
 import { cleanupLfs, handleLfsBatch, json, lfsKey, LFS_TOUCH_PRECISION_MS, MAX_LFS_PARTS, MIN_TUS_PART_BYTES,
   partKey, partPrefix, readJson, scheduleGitMaintenance, UPLOAD_LIFETIME_MS,
@@ -18,6 +20,10 @@ import type { GitScope } from "./tokens";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const MEDIA = "/internal/git/media/:oid{[0-9a-f]{64}}";
 const DELETION_GRACE_MS = 2 * 60 * 60 * 1000;
+const BROWSE = "/internal/git/browse/";
+// Only this object writes the stored repository, and it drops what the
+// dashboard read before anything else runs; the lifetime bounds the rest.
+const BROWSE_CACHE_TTL_MS = 5 * 60_000;
 // Clients upload media before pushing the commits that point to it. The
 // touch precision keeps the full period after an offer whose write was skipped.
 const LFS_COLLECTION_GRACE_MS = 7 * 24 * 60 * 60 * 1000 + LFS_TOUCH_PRECISION_MS;
@@ -47,6 +53,8 @@ const sameHashState = (a: Sha256State | undefined, b: Sha256State | undefined) =
 export class GitRepositoryDurableObject {
   private tail: Promise<unknown> = Promise.resolve();
   private bucket?: GitObjectBucket;
+  /** What the dashboard's views read, so browsing folder after folder reads the bucket once. */
+  private browseCache?: { repoId: string; store: CachedObjectStore };
   private readonly accounting?: GitStorageAccounting;
   private readonly app: Hono<Routes>;
   constructor(private readonly state: { storage: GitDurableStorage }, private readonly env: Environment,
@@ -56,13 +64,20 @@ export class GitRepositoryDurableObject {
     this.app = this.routes();
   }
   private objectBucket(): GitObjectBucket { return this.bucket ??= new S3GitObjectBucket(this.env); }
-  private enqueue<T>(work: () => Promise<T>): Promise<T> {
-    const run = () => this.accounting === databaseGitStorageAccounting ? withGitDatabase(this.env, work) : work();
+  private enqueue<T>(work: () => Promise<T>, { browse = false } = {}): Promise<T> {
+    const run = () => {
+      // Anything but a dashboard view may change the stored repository.
+      if (!browse) this.browseCache = undefined;
+      return this.accounting === databaseGitStorageAccounting ? withGitDatabase(this.env, work) : work();
+    };
     const result = this.tail.then(run);
     this.tail = result.then(() => undefined, () => undefined);
     return result;
   }
-  fetch(request: Request): Promise<Response> { return this.enqueue(async () => this.app.fetch(request)); }
+  fetch(request: Request): Promise<Response> {
+    const browse = new URL(request.url).pathname.startsWith(BROWSE);
+    return this.enqueue(async () => this.app.fetch(request), { browse });
+  }
 
   private routes(): Hono<Routes> {
     const storage = this.state.storage;
@@ -138,21 +153,21 @@ export class GitRepositoryDurableObject {
         return c.body(null, 204);
       })
       // Read-only views for the dashboard, whose Worker already checked the owner.
-      .use("/internal/git/browse/*", active, scope("read", "write"))
+      .use(`${BROWSE}*`, active, scope("read", "write"))
       // Refs and HEAD are small files of their own; no pack needs loading.
-      .get("/internal/git/browse/refs", async (c) => json(await browseRefs(readGitRepository(this.objectBucket(), c.get("repoId")))))
-      .get("/internal/git/browse/path", async (c) => {
+      .get(`${BROWSE}refs`, async (c) => json(await browseRefs(this.browseRepository(c.get("repoId")))))
+      .get(`${BROWSE}path`, async (c) => {
         const ref = c.req.query("ref") ?? "", path = c.req.query("path") ?? "";
         if (!isGitRevision(ref) || !isGitTreePath(path)) return c.text("Invalid ref or path", 400);
         return json(await browsePath(await this.browsable(c.get("repoId")), ref, path));
       })
-      .get("/internal/git/browse/log", async (c) => {
+      .get(`${BROWSE}log`, async (c) => {
         const ref = c.req.query("ref") ?? "", cursor = c.req.query("cursor");
         if (!isGitRevision(ref) || (cursor !== undefined && !/^[0-9a-f]{40}$/u.test(cursor)))
           return c.text("Invalid ref or cursor", 400);
         return json(await browseLog(await this.browsable(c.get("repoId")), ref, cursor, MAX_COMMIT_PAGE));
       })
-      .get("/internal/git/browse/file", async (c) => {
+      .get(`${BROWSE}file`, async (c) => {
         const ref = c.req.query("ref") ?? "", path = c.req.query("path") ?? "";
         if (!isGitRevision(ref) || !isGitTreePath(path) || path === "") return c.text("Invalid ref or path", 400);
         const { entry, bytes } = await browseFile(await this.browsable(c.get("repoId")), ref, path);
@@ -196,10 +211,22 @@ export class GitRepositoryDurableObject {
       });
   }
 
+  /** The stored repository as the dashboard reads it, through the browse cache. */
+  private browseRepository(repoId: string) {
+    if (this.browseCache?.repoId !== repoId) {
+      this.browseCache = { repoId, store: createCachedStore(new GitObjectStore(this.objectBucket()), {
+        // The whole history fits, so a later view reads nothing from the bucket.
+        maxBytes: 2 * MAX_GIT_REPOSITORY_BYTES, maxEntryBytes: MAX_GIT_OBJECT_BYTES, ttlMs: BROWSE_CACHE_TTL_MS,
+        cacheLists: true, cacheMisses: true,
+      }) };
+    }
+    return readGitRepository(this.objectBucket(), repoId, { store: this.browseCache.store, looseObjectHints: true });
+  }
+
   /** The stored repository with its packs in memory, for reads that touch many objects. */
   private async browsable(repoId: string) {
-    const opened = readGitRepository(this.objectBucket(), repoId);
-    await opened.fs.detectLooseObjects(opened.repo.gitdir);
+    const opened = this.browseRepository(repoId);
+    // Also learns whether any loose objects exist, so reads stop looking for them.
     await opened.fs.prefetchPacks(opened.repo.gitdir);
     return opened;
   }
