@@ -879,10 +879,10 @@ describe("legacy storage cleanup contracts", () => {
       () => null,
       (error: unknown) => error,
     );
-    for (let tick = 0; tick < 20 && bucket.put.mock.calls.length === 0; tick++) {
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-    }
+    // File hashing is asynchronous; start the put before advancing its deadline.
+    await vi.waitFor(() => expect(bucket.put).toHaveBeenCalledTimes(1), {
+      timeout: 5_000,
+    });
 
     const backgroundBefore = background.length;
     await vi.advanceTimersByTimeAsync(30 * 1000);
