@@ -54,6 +54,7 @@ export async function findFileForContentAccess({
       visibility: true,
       userId: true,
       mimeType: true,
+      size: true,
       Package: {
         select: {
           userId: true,

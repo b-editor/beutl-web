@@ -3,6 +3,7 @@
 import {
   Download,
   ExternalLink,
+  Eye,
   FolderInput,
   FolderOpen,
   Globe,
@@ -59,6 +60,7 @@ export type FileListHandlers = {
     visibility: FileVisibilityChange,
   ) => Promise<boolean>;
   showDetails: (file: StorageFile) => void;
+  requestPreview: (file: StorageFile) => void;
   // Whether the details pane exists at this viewport.
   detailsAvailable: boolean;
 };
@@ -92,6 +94,13 @@ export function useFileActions(
   const actions: ItemAction[] = [];
 
   if (single) {
+    actions.push({
+      id: "preview",
+      label: t("storage:preview"),
+      icon: Eye,
+      group: 0,
+      run: () => handlers.requestPreview(single),
+    });
     actions.push({
       id: "open",
       label: t("storage:open"),

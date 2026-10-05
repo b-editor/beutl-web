@@ -45,6 +45,7 @@ function publicFile(mimeType: string) {
     visibility: "PUBLIC" as const,
     userId: "owner",
     mimeType,
+    size: BigInt(CONTENT_BYTES.byteLength),
     Package: [],
     Profile: [],
     PackageScreenshot: [],
@@ -52,9 +53,9 @@ function publicFile(mimeType: string) {
   };
 }
 
-async function requestContent() {
+async function requestContent(headers?: HeadersInit) {
   return await GET(
-    new Request("http://localhost/api/contents/file-1") as Parameters<
+    new Request("http://localhost/api/contents/file-1", { headers }) as Parameters<
       typeof GET
     >[0],
     { params: Promise.resolve({ fileId: "file-1" }) },
@@ -180,4 +181,51 @@ describe("content route security", () => {
     );
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(CONTENT_BYTES);
   });
+
+  it.each([
+    ["bytes=1-2", 1, 2],
+    ["bytes=2-", 2, 3],
+    ["bytes=-3", 1, 3],
+    ["bytes=1-99", 1, 3],
+  ])("serves the single range %s so media players can seek", async (header, start, end) => {
+    dbMocks.findFileForContentAccess.mockResolvedValue(publicFile("video/mp4"));
+    const slice = CONTENT_BYTES.slice(start, end + 1);
+    bucketMocks.get.mockResolvedValue({ body: slice, size: CONTENT_BYTES.byteLength });
+
+    const response = await requestContent({ Range: header });
+
+    expect(response.status).toBe(206);
+    expect(bucketMocks.get).toHaveBeenCalledWith("public/file-1", { range: { offset: start, length: end - start + 1 } });
+    expect(response.headers.get("Content-Range")).toBe(`bytes ${start}-${end}/4`);
+    expect(response.headers.get("Content-Length")).toBe(String(end - start + 1));
+    expect(response.headers.get("Accept-Ranges")).toBe("bytes");
+    expect(response.headers.get("Content-Type")).toBe("video/mp4");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(slice);
+  });
+
+  it("answers a range past the end with 416 and reads nothing", async () => {
+    dbMocks.findFileForContentAccess.mockResolvedValue(publicFile("video/mp4"));
+
+    const response = await requestContent({ Range: "bytes=4-" });
+
+    expect(response.status).toBe(416);
+    expect(response.headers.get("Content-Range")).toBe("bytes */4");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(bucketMocks.get).not.toHaveBeenCalled();
+  });
+
+  it.each(["bytes=0-0,2-3", "items=0-1", "bytes=3-1"])(
+    "sends the whole file for the range %s it does not serve",
+    async (header) => {
+      dbMocks.findFileForContentAccess.mockResolvedValue(publicFile("video/mp4"));
+      bucketMocks.get.mockResolvedValue({ body: CONTENT_BYTES, size: CONTENT_BYTES.byteLength });
+
+      const response = await requestContent({ Range: header });
+
+      expect(response.status).toBe(200);
+      expect(bucketMocks.get).toHaveBeenCalledWith("public/file-1", undefined);
+      expect(response.headers.get("Accept-Ranges")).toBe("bytes");
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(CONTENT_BYTES);
+    },
+  );
 });

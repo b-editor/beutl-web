@@ -41,15 +41,20 @@ export function contentCacheHeaders(
       };
 }
 
+/** Whether the content routes serve this type inline, so an element can render it. */
+export function servedInline(storedMimeType: string | null | undefined): boolean {
+  const mimeType = storedMimeType?.split(";", 1)[0].trim().toLowerCase();
+  return mimeType !== undefined && INLINE_MEDIA_TYPES.has(mimeType);
+}
+
 export function contentDeliveryHeaders(
   storedMimeType: string | null | undefined,
 ): Record<string, string> {
   const mimeType = storedMimeType?.split(";", 1)[0].trim().toLowerCase();
-  const canRenderInline =
-    mimeType !== undefined && INLINE_MEDIA_TYPES.has(mimeType);
+  const canRenderInline = servedInline(mimeType);
 
   return {
-    "Content-Type": canRenderInline ? mimeType : DOWNLOAD_CONTENT_TYPE,
+    "Content-Type": canRenderInline ? mimeType! : DOWNLOAD_CONTENT_TYPE,
     "Content-Disposition": canRenderInline ? "inline" : "attachment",
   };
 }

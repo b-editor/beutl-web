@@ -91,7 +91,7 @@ describe("choosing the storage provider from the environment", () => {
     const bucket = createStorageBucket(env);
     expect(await bucket.get!("old-key")).toEqual({ size: 5 });
     expect((fetchMock.mock.calls[0][0] as unknown as Request).url).toBe("https://s3.example.test/beutl/old-key");
-    expect(binding.get).toHaveBeenCalledWith("old-key");
+    expect(binding.get).toHaveBeenCalledWith("old-key", undefined);
 
     await bucket.put("new-key", "v");
     expect(binding.put).not.toHaveBeenCalled();
