@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { ArrowLeft, Check, ChevronDown, GitBranch, GitCommitHorizontal, Tag } from "lucide-react";
 import type { GitRefList, GitRepositorySummary } from "@beutl/core";
 import { cn } from "@beutl/core";
@@ -16,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from "@beutl/ui/ui/dropdown-menu";
 import { repositoryHref, shortOid } from "./links";
+import { PendingLink, useRepositoryNavigation } from "./navigation";
 
 /**
  * What a revision names. `refs/heads/…` and `refs/tags/…` are exact; a short
@@ -49,10 +49,10 @@ export function RepositoryHeader({
   tab: "files" | "commits";
 }) {
   const { t } = useTranslation(lang);
-  const router = useRouter();
+  const { navigate } = useRepositoryNavigation();
   const shown = describeRevision(current, refs);
   const CurrentIcon = shown?.kind === "tag" ? Tag : shown?.kind === "commit" ? GitCommitHorizontal : GitBranch;
-  const switchTo = (ref: string) => router.push(repositoryHref(lang, repository.id, tab, { ref }));
+  const switchTo = (ref: string) => navigate(repositoryHref(lang, repository.id, tab, { ref }));
   const tabLink = (target: "files" | "commits") => repositoryHref(lang, repository.id, target, { ref: current ?? undefined });
 
   return (
@@ -106,7 +106,7 @@ export function RepositoryHeader({
         )}
         <nav className="ml-auto flex rounded-md border p-0.5" aria-label={t("dashboard:repositories.browser.views")}>
           {(["files", "commits"] as const).map((target) => (
-            <Link prefetch={false}
+            <PendingLink
               key={target}
               href={tabLink(target)}
               aria-current={tab === target ? "page" : undefined}
@@ -116,7 +116,7 @@ export function RepositoryHeader({
               )}
             >
               {t(`dashboard:repositories.browser.${target}`)}
-            </Link>
+            </PendingLink>
           ))}
         </nav>
       </div>
