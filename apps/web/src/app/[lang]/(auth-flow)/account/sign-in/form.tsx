@@ -45,7 +45,8 @@ export default function Form({
         throw new Error(result.error.message);
       }
       router.push(
-        resolveSafeRedirectPath(returnUrl, window.location.origin) ?? "/",
+        resolveSafeRedirectPath(returnUrl, window.location.origin) ??
+          `/${lang}/dashboard`,
       );
     } catch (error) {
       console.error("Passkey sign-in failed", error);

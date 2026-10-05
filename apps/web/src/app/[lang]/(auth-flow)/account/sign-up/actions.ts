@@ -45,7 +45,7 @@ export async function signUpWithEmailAction(
   const response = await auth.api.signInMagicLink({
       body: {
         email: email,
-        callbackURL: safeReturnUrl || `/${lang}`,
+        callbackURL: safeReturnUrl || `/${lang}/dashboard`,
         errorCallbackURL: "/account/error",
       },
       headers: await headers(),

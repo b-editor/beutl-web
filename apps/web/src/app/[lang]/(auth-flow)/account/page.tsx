@@ -11,10 +11,12 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
 
   const headersList = await headers();
   const session = await auth.api.getSession({ headers: headersList });
-  const url = headersList.get("x-url") || `/${lang}`;
+  const dashboardUrl = `/${lang}/dashboard`;
   if (!session?.user) {
-    redirect(`/${lang}/account/sign-in?returnUrl=${encodeURIComponent(url)}`);
+    redirect(
+      `/${lang}/account/sign-in?returnUrl=${encodeURIComponent(dashboardUrl)}`,
+    );
   }
 
-  redirect(`/${lang}/dashboard/account/profile`);
+  redirect(dashboardUrl);
 }
