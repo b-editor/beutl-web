@@ -70,6 +70,24 @@ CockroachDB integration tests require `TEST_DATABASE_URL`. The live OpenRouter
 pricing test is opt-in through `TEST_OPENROUTER_PRICING=1`; these tests are
 skipped when their respective variables are absent.
 
+## Continuous integration and deployment
+
+[GitHub Actions](.github/workflows/ci.yml) runs the Vitest suite on pull requests
+and pushes to `main`. After tests pass on `main`, it deploys `beutl-ai-images`,
+`beutl-web` (including public APIs), and `beutl-admin` in that order using the
+existing deploy scripts. A manual run on `main` also tests and deploys.
+DB and live-provider tests remain opt-in and are skipped in this workflow.
+
+Set these repository secrets under **Settings → Secrets and variables → Actions**:
+
+- `CLOUDFLARE_API_TOKEN`: a token authorized to deploy Workers and access the
+  configured R2, Hyperdrive, and Durable Object resources in the target account.
+- `CLOUDFLARE_ACCOUNT_ID`: the target Cloudflare account ID.
+
+Keep application secrets and runtime variables configured in Cloudflare as
+described in [Deployment configuration](docs/deployment.md). Database migrations
+are separate release steps and are not run by this workflow.
+
 ## Deployment
 
 The public Web app and all desktop APIs deploy together as `beutl-web`.
