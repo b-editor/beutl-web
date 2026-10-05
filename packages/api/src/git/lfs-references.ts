@@ -1,5 +1,6 @@
 import git from "isomorphic-git";
-import type { GitObjectBucket, GitObjectStore } from "./git-object-store";
+import type { ObjectStore } from "git-fs-s3";
+import type { GitObjectBucket } from "./git-object-store";
 import { readGitRepository } from "./git-http";
 
 /**
@@ -57,18 +58,21 @@ export async function reachableHistory(
  * isomorphic-git reports a ref listing failure as an empty list, so refs are
  * read from the store, which throws instead.
  */
-export async function readRefs(store: GitObjectStore, gitdir: string): Promise<Map<string, string>> {
+export async function readRefs(store: Pick<ObjectStore, "get" | "list">, gitdir: string): Promise<Map<string, string>> {
   const refs = new Map<string, string>();
-  for (const { key } of (await store.list(`${gitdir}refs/`)).objects) {
+  // Each read is a round trip to the bucket, so they all go out at once.
+  const [listing, packed] = await Promise.all([store.list(`${gitdir}refs/`), store.get(`${gitdir}packed-refs`)]);
+  const loose = await Promise.all(listing.objects.map(async ({ key }) => {
     const content = await store.get(key);
     if (!content) throw new Error(`Git ref ${key} disappeared while it was read`);
-    const value = new TextDecoder().decode(content).trim();
+    return [key, new TextDecoder().decode(content).trim()] as const;
+  }));
+  for (const [key, value] of loose) {
     // A symbolic ref names another ref, which the listing includes too.
     if (value.startsWith("ref: ")) continue;
     if (!/^[0-9a-f]{40}$/u.test(value)) throw new Error(`Git ref ${key} is not an object ID`);
     refs.set(key.slice(gitdir.length), value);
   }
-  const packed = await store.get(`${gitdir}packed-refs`);
   for (const line of packed ? new TextDecoder().decode(packed).split("\n") : []) {
     // Comments, blank lines and peeled tag targets name no ref of their own.
     if (line === "" || line.startsWith("#") || /^\^[0-9a-f]{40}$/u.test(line)) continue;
@@ -82,6 +86,6 @@ export async function readRefs(store: GitObjectStore, gitdir: string): Promise<M
 }
 
 /** The objects every loose and packed ref names. */
-async function refTips(store: GitObjectStore, gitdir: string): Promise<string[]> {
+async function refTips(store: Pick<ObjectStore, "get" | "list">, gitdir: string): Promise<string[]> {
   return [...(await readRefs(store, gitdir)).values()];
 }

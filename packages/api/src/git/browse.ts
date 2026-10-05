@@ -15,8 +15,7 @@ export class GitBrowseNotFoundError extends Error {}
 
 export async function browseRefs({ store, prefix, repo }: Repository): Promise<GitRefList> {
   const gitdir = `${prefix}${repo.gitdir}/`;
-  const refs = await readRefs(store, gitdir);
-  const head = await store.get(`${gitdir}HEAD`);
+  const [refs, head] = await Promise.all([readRefs(store, gitdir), store.get(`${gitdir}HEAD`)]);
   const target = head ? /^ref: refs\/heads\/(.+)$/u.exec(new TextDecoder().decode(head).trim())?.[1] : undefined;
   const named = (kind: string) => [...refs].filter(([name]) => name.startsWith(kind))
     .map(([name, oid]) => ({ name: name.slice(kind.length), oid }))

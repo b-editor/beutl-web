@@ -1,5 +1,5 @@
 import git from "isomorphic-git";
-import { concat, createGitFs } from "git-fs-s3";
+import { concat, createGitFs, type ObjectStore } from "git-fs-s3";
 import {
   applyReceivePack,
   ensureRepoInitialized,
@@ -16,7 +16,7 @@ import { GitObjectStore, type GitObjectBucket } from "./git-object-store";
 
 // git-fs-s3's HTTP handlers and isomorphic-git build full packs in memory.
 // Keep the Git history small; media must go through LFS.
-const MAX_GIT_REPOSITORY_BYTES = 16 * 1024 * 1024;
+export const MAX_GIT_REPOSITORY_BYTES = 16 * 1024 * 1024;
 // Leave room below the object adapter's 10,000-entry listing ceiling, including
 // directories. Rejected pushes must leave the repository readable and deletable.
 const MAX_GIT_REPOSITORY_OBJECTS = 9_000;
@@ -72,11 +72,14 @@ function response(result: { status: number; headers: Record<string, string>; bod
   });
 }
 
-/** The bare repository as stored, without writing anything to it. */
-export function readGitRepository(bucket: GitObjectBucket, repoId: string) {
-  const store = new GitObjectStore(bucket);
+/**
+ * The bare repository as stored, without writing anything to it. With loose
+ * object hints, reads skip looking for loose objects once a listing shows none.
+ */
+export function readGitRepository(bucket: GitObjectBucket, repoId: string,
+  { store = new GitObjectStore(bucket), looseObjectHints = false }: { store?: ObjectStore; looseObjectHints?: boolean } = {}) {
   const prefix = `git/repos/${repoId}`;
-  const fs = createGitFs(store, { prefix });
+  const fs = createGitFs(store, { prefix, looseObjectHints });
   return { store, prefix, fs, repo: { fs, gitdir: GITDIR, cache: {} } };
 }
 

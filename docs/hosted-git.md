@@ -175,6 +175,14 @@ string. The repository object reads refs, trees, blobs and commits in its queue,
 so a push or a history collection never replaces a pack while it is read.
 Directories list folders first; a Git LFS pointer is shown with its media size.
 
+Each bucket request is a round trip from the repository object to B2, so the
+views share what they read: the refs, the pack listing and the packs stay in the
+object's memory (up to twice the history limit, for five minutes) and later views
+read nothing from the bucket. Every other request to the object, such as a push,
+a fetch, a media upload or the maintenance alarm, drops that cache before it runs.
+Only the repository object writes the stored repository, so a view never shows
+a state older than the last write it queued behind.
+
 Files open in the same preview as the storage screen: images, video, audio and
 the start of text files. `/api/repositories/{id}/content?ref=&path=` streams a
 file to the signed-in owner and answers anyone else, and any missing ref or path,

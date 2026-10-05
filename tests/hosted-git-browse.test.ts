@@ -74,6 +74,8 @@ const durable = new GitRepositoryDurableObject({ storage }, {}, bucket as never,
 const env = { BEUTL_GIT_REPOSITORIES: { idFromName: (name: string) => name, get: () => ({ fetch: (r: Request) => durable.fetch(r) }) } };
 const commits: Record<string, string> = {};
 let root: string, server: Server;
+let git: (...args: string[]) => Promise<string>;
+let commit: (files: Record<string, string | Uint8Array>, message: string) => Promise<string>;
 
 beforeAll(async () => {
   root = mkdtempSync(join(tmpdir(), "beutl-git-browse-"));
@@ -94,8 +96,8 @@ beforeAll(async () => {
   const gitEnv = { PATH: process.env.PATH!, HOME: home, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(home, ".gitconfig"),
     GIT_TERMINAL_PROMPT: "0", GIT_AUTHOR_NAME: "Author", GIT_AUTHOR_EMAIL: "author@example.com",
     GIT_COMMITTER_NAME: "Author", GIT_COMMITTER_EMAIL: "author@example.com" };
-  const git = async (...args: string[]) => (await execute("git", args, { cwd: work, env: gitEnv })).stdout.trim();
-  const commit = async (files: Record<string, string | Uint8Array>, message: string) => {
+  git = async (...args: string[]) => (await execute("git", args, { cwd: work, env: gitEnv })).stdout.trim();
+  commit = async (files: Record<string, string | Uint8Array>, message: string) => {
     for (const [name, content] of Object.entries(files)) {
       mkdirSync(join(work, name, ".."), { recursive: true });
       writeFileSync(join(work, name), content);
@@ -202,5 +204,37 @@ describe("browsing a hosted repository", () => {
     expect(clip?.entry.lfs).toEqual(media);
     expect(clip?.response.status).toBe(206);
     expect(bucket.downloads.at(-1)).toEqual({ key: lfsKey(repoId, media.oid), versionId: "version-1", range: "bytes=0-4" });
+  });
+
+  it("reads each stored file once while someone browses, and reads again after a push", async () => {
+    // Each bucket request is a round trip from the repository object to B2.
+    const requests = () => [
+      ...vi.mocked(bucket.get).mock.calls.map(([key]) => `get ${key}`),
+      ...vi.mocked(bucket.list).mock.calls.map(([options]) => `list ${JSON.stringify(options)}`),
+      ...vi.mocked(bucket.head).mock.calls.map(([key]) => `head ${key}`),
+    ];
+    vi.spyOn(bucket, "get"); vi.spyOn(bucket, "list"); vi.spyOn(bucket, "head");
+    const browse = async () => {
+      const refs = await listRepositoryRefs(env, access);
+      return { refs, top: await readRepositoryPath(env, access, "later", "") };
+    };
+    expect((await listRepositoryRefs(env, access)).branches.map((branch) => branch.name)).toEqual(["feature", "main"]);
+
+    await git("switch", "-q", "-c", "later");
+    commits.later = await commit({ "later.txt": "later\n" }, "later");
+    await git("push", "-q", "origin", "refs/heads/later");
+    vi.clearAllMocks();
+    // The push dropped what the dashboard had read, so the new branch shows.
+    const { refs, top } = await browse();
+    expect(refs.branches.map((branch) => branch.name)).toEqual(["feature", "later", "main"]);
+    expect(top?.kind === "tree" && top.entries.map((entry) => entry.name)).toContain("later.txt");
+    const first = requests();
+    expect(first.length).toBeGreaterThan(0);
+    expect(new Set(first).size).toBe(first.length);
+
+    vi.clearAllMocks();
+    expect(await browse()).toEqual({ refs, top });
+    expect(requests()).toEqual([]);
+    vi.restoreAllMocks();
   });
 });
