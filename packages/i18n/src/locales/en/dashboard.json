@@ -334,6 +334,7 @@
     "cloneUrl": "Clone URL",
     "copyUrl": "Copy URL",
     "connect": "Connection details",
+    "browse": "Browse files",
     "copied": "Copied.",
     "copyFailed": "Could not copy. Please try again.",
     "created": "Repository created.",
@@ -378,6 +379,26 @@
     "noTokens": "No access tokens yet.",
     "tokenCreatedAt": "Created {{date}}",
     "tokenLastUsed": "Last used {{date}}",
-    "tokenNeverUsed": "Never used"
+    "tokenNeverUsed": "Never used",
+    "browser": {
+      "switchRef": "Switch branch or tag",
+      "branches": "Branches",
+      "tags": "Tags",
+      "views": "Repository views",
+      "files": "Files",
+      "commits": "Commits",
+      "location": "Location",
+      "parent": "Parent folder",
+      "submodule": "Submodule",
+      "emptyDirectory": "This folder is empty.",
+      "emptyTitle": "Nothing has been pushed yet",
+      "emptyDescription": "Push a Beutl project from the desktop app, or with Git and this URL, to see its files here.",
+      "notFoundTitle": "This version or path does not exist",
+      "backToRoot": "Go to the latest files",
+      "committedBy": "{{name}} committed on {{date}}",
+      "browseCommit": "Browse the files of this commit",
+      "newestCommits": "Newest commits",
+      "olderCommits": "Older commits"
+    }
   }
 }

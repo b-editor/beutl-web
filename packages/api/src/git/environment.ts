@@ -60,6 +60,11 @@ export function gitRepositoryObject(env: GitEnvironment, repoId: string) {
     /** Git smart HTTP and LFS batch keep their public URL, body stream and abort signal. */
     forward: (request: Request, access: GitAccess) =>
       stub.fetch(new Request(request, { headers: accessHeaders(request.headers, access) })),
+    /** Read-only history views; 404 when the ref, path or object does not exist. */
+    browse: (access: GitAccess, view: "refs" | "path" | "log" | "file", params: Record<string, string> = {}) =>
+      stub.fetch(new Request(`${INTERNAL_ORIGIN}/internal/git/browse/${view}?${new URLSearchParams(params)}`, {
+        headers: accessHeaders(undefined, access),
+      })),
     /** LFS bodies stay in the Worker; the object only records reservations and receipts. */
     media: (access: GitAccess, oid: string, action: "status" | GitMediaAction, body?: unknown) =>
       stub.fetch(new Request(`${INTERNAL_ORIGIN}/internal/git/media/${oid}/${action}`, {

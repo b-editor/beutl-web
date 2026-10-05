@@ -10,14 +10,8 @@ import { auth } from "@/lib/better-auth";
 import {
   contentCacheHeaders,
   contentDeliveryHeaders,
+  contentDisposition,
 } from "@/lib/content-cache";
-
-function contentDisposition(disposition: string, fileName: string): string {
-  const fallback = fileName
-    .replace(/[^\x20-\x7e]/gu, "_")
-    .replace(/["\\]/gu, "_");
-  return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
-}
 
 export async function GET(
   request: NextRequest,

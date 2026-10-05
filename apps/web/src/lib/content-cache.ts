@@ -58,3 +58,11 @@ export function contentDeliveryHeaders(
     "Content-Disposition": canRenderInline ? "inline" : "attachment",
   };
 }
+
+/** An RFC 6266 disposition naming the file, with an ASCII fallback for old clients. */
+export function contentDisposition(disposition: string, fileName: string): string {
+  const fallback = fileName
+    .replace(/[^\x20-\x7e]/gu, "_")
+    .replace(/["\\]/gu, "_");
+  return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+}

@@ -40,6 +40,7 @@ export {
   FILE_KINDS,
   fileKind,
   isFileKind,
+  mimeTypeFromFileName,
   normalizeMimeType,
 } from "./storage-file-kind";
 export type { FileKind } from "./storage-file-kind";

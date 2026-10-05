@@ -61,3 +61,29 @@ export function fileKind(mimeType: string): FileKind {
   if (type.startsWith("text/") || DOCUMENT_TYPES.has(type)) return "document";
   return "other";
 }
+
+// Repository files carry no stored type; their name decides it, the way the
+// desktop and browsers treat them. Anything unknown is plain bytes.
+// A Map, so a name like `x.constructor` never reads an inherited property.
+const MIME_TYPES_BY_EXTENSION = new Map<string, string>(Object.entries({
+  apng: "image/apng", avif: "image/avif", bmp: "image/bmp", gif: "image/gif", ico: "image/x-icon",
+  jpeg: "image/jpeg", jpg: "image/jpeg", png: "image/png", svg: "image/svg+xml", tif: "image/tiff",
+  tiff: "image/tiff", webp: "image/webp",
+  m4v: "video/mp4", mkv: "video/x-matroska", mov: "video/quicktime", mp4: "video/mp4", ogv: "video/ogg",
+  webm: "video/webm", avi: "video/x-msvideo",
+  aac: "audio/aac", flac: "audio/flac", m4a: "audio/mp4", mp3: "audio/mpeg", oga: "audio/ogg",
+  ogg: "audio/ogg", opus: "audio/ogg", wav: "audio/wav", weba: "audio/webm",
+  // Beutl projects, scenes and elements are JSON documents.
+  bep: "application/json", scene: "application/json", belm: "application/json",
+  json: "application/json", xml: "application/xml", yaml: "application/yaml", yml: "application/yaml",
+  csv: "text/csv", md: "text/markdown", txt: "text/plain", html: "text/html", htm: "text/html",
+  css: "text/css", js: "application/javascript", cs: "text/plain", ts: "text/plain",
+  gitattributes: "text/plain", gitignore: "text/plain",
+  pdf: "application/pdf", zip: "application/zip", gz: "application/gzip", tar: "application/x-tar",
+  "7z": "application/x-7z-compressed",
+}));
+
+export function mimeTypeFromFileName(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return MIME_TYPES_BY_EXTENSION.get(dot < 0 ? "" : name.slice(dot + 1).toLowerCase()) ?? "application/octet-stream";
+}

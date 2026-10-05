@@ -53,12 +53,12 @@ export async function reachableHistory(
 }
 
 /**
- * The objects every loose and packed ref names. isomorphic-git reports a ref
- * listing failure as an empty list, so refs are read from the store, which
- * throws instead.
+ * Every loose and packed ref, by full name, with the object it names.
+ * isomorphic-git reports a ref listing failure as an empty list, so refs are
+ * read from the store, which throws instead.
  */
-async function refTips(store: GitObjectStore, gitdir: string): Promise<string[]> {
-  const tips = new Map<string, string>();
+export async function readRefs(store: GitObjectStore, gitdir: string): Promise<Map<string, string>> {
+  const refs = new Map<string, string>();
   for (const { key } of (await store.list(`${gitdir}refs/`)).objects) {
     const content = await store.get(key);
     if (!content) throw new Error(`Git ref ${key} disappeared while it was read`);
@@ -66,7 +66,7 @@ async function refTips(store: GitObjectStore, gitdir: string): Promise<string[]>
     // A symbolic ref names another ref, which the listing includes too.
     if (value.startsWith("ref: ")) continue;
     if (!/^[0-9a-f]{40}$/u.test(value)) throw new Error(`Git ref ${key} is not an object ID`);
-    tips.set(key.slice(gitdir.length), value);
+    refs.set(key.slice(gitdir.length), value);
   }
   const packed = await store.get(`${gitdir}packed-refs`);
   for (const line of packed ? new TextDecoder().decode(packed).split("\n") : []) {
@@ -76,7 +76,12 @@ async function refTips(store: GitObjectStore, gitdir: string): Promise<string[]>
     // A damaged line could be the only ref to a pointer.
     if (!entry) throw new Error("Git packed-refs has an unreadable line");
     // A loose ref supersedes its packed entry.
-    if (!tips.has(entry[2])) tips.set(entry[2], entry[1]);
+    if (!refs.has(entry[2])) refs.set(entry[2], entry[1]);
   }
-  return [...tips.values()];
+  return refs;
+}
+
+/** The objects every loose and packed ref names. */
+async function refTips(store: GitObjectStore, gitdir: string): Promise<string[]> {
+  return [...(await readRefs(store, gitdir)).values()];
 }

@@ -9,6 +9,7 @@
     "./git/access-tokens": "./src/git/access-tokens.ts",
     "./git/environment": "./src/git/environment.ts",
     "./git/repositories": "./src/git/repositories.ts",
+    "./git/repository-browser": "./src/git/repository-browser.ts",
     "./ai/entitlements": "./src/ai/entitlements.ts",
     "./ai/image-model-capabilities": "./src/ai/image-model-capabilities.ts",
     "./ai/model-catalog": "./src/ai/model-catalog.ts",
