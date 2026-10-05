@@ -74,6 +74,11 @@ function TextPreview({ file, lang }: { file: PreviewFile; lang: string }) {
   const [state, setState] = useState<TextState>({ status: "loading" });
   useEffect(() => {
     const controller = new AbortController();
+    // Any byte range of an empty file is unsatisfiable, so there is nothing to ask for.
+    if (file.size === 0) {
+      setState({ status: "loaded", text: "", truncated: false });
+      return;
+    }
     setState({ status: "loading" });
     (async () => {
       const response = await fetch(file.url, {
@@ -84,10 +89,12 @@ function TextPreview({ file, lang }: { file: PreviewFile; lang: string }) {
       const bytes = new Uint8Array(await response.arrayBuffer()).subarray(0, MAX_TEXT_BYTES);
       // A NUL byte means the file is not text, whatever its name says.
       if (bytes.includes(0)) return setState({ status: "binary" });
+      const truncated = file.size > bytes.byteLength;
       setState({
         status: "loaded",
-        text: new TextDecoder().decode(bytes),
-        truncated: file.size > bytes.byteLength,
+        // Streaming holds back a character the cut split instead of showing U+FFFD.
+        text: new TextDecoder().decode(bytes, { stream: truncated }),
+        truncated,
       });
     })().catch((error: unknown) => {
       if (controller.signal.aborted) return;
