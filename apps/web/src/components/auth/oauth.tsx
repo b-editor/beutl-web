@@ -25,7 +25,8 @@ export function useOAuthSignIn({
       const result = await authClient.signIn.social({
         provider,
         callbackURL:
-          resolveSafeRedirectPath(returnUrl, window.location.origin) ?? "/",
+          resolveSafeRedirectPath(returnUrl, window.location.origin) ??
+          `/${lang}/dashboard`,
       });
       // signIn.social は失敗しても throw せず error を返すため、明示的に確認する。
       if (result?.error) {

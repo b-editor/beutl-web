@@ -26,7 +26,7 @@ export default async function Page(
 
   const session = await auth.api.getSession({ headers: await headers() });
   if (session) {
-    await localRedirect(returnUrl || `/${lang}`);
+    await localRedirect(returnUrl || `/${lang}/dashboard`);
   }
 
   return (
