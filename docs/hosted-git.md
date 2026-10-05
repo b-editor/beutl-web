@@ -166,6 +166,25 @@ This follows Backblaze's documented
 for free B2-to-Cloudflare transfer; storage, B2 API operations and Worker compute
 still have their provider charges. Production billing has not been measured.
 
+## Browsing on the web
+
+The dashboard shows a repository's files and first-parent history to its owner
+only, at `/dashboard/repositories/{id}` and `/dashboard/repositories/{id}/commits`.
+Any branch, tag or commit can be chosen; the ref and path live in the query
+string. The repository object reads refs, trees, blobs and commits in its queue,
+so a push or a history collection never replaces a pack while it is read.
+Directories list folders first; a Git LFS pointer is shown with its media size.
+
+Files open in the same preview as the storage screen: images, video, audio and
+the start of text files. `/api/repositories/{id}/content?ref=&path=` streams a
+file to the signed-in owner and answers anyone else, and any missing ref or path,
+with the same 404. LFS media streams from its pinned B2 version through the LFS
+download path, ordinary blobs from the repository object, and both honor one
+byte range so players can seek. The type and disposition come from the file
+name with the storage content route's rules: only safe image, video and audio
+types render inline, everything else downloads, and responses are private and
+sandboxed.
+
 ## Storage accounting and cleanup
 
 The existing account storage API/UI meter adds ordinary File bytes, current Git

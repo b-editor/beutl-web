@@ -1,7 +1,9 @@
 import { Hono, type Context } from "hono";
 import { createMiddleware } from "hono/factory";
 import { MAX_GIT_LFS_PART_BYTES } from "@beutl/core";
-import { advertiseGitRefs, initializeGitRepository, isGitService, receiveGitPack, uploadGitPack, type GitService } from "./git-http";
+import { advertiseGitRefs, initializeGitRepository, isGitService, readGitRepository, receiveGitPack, uploadGitPack, type GitService } from "./git-http";
+import { isGitRevision, isGitTreePath } from "@beutl/core";
+import { browseBlob, browseLog, browsePath, browseRefs, GitBrowseNotFoundError, MAX_COMMIT_PAGE } from "./browse";
 import { S3GitObjectBucket, sha256Base64, type GitS3Environment } from "./s3-object-store";
 import type { GitObjectBucket } from "./git-object-store";
 import { databaseGitStorageAccounting, withGitDatabase, type GitDatabaseEnvironment, type GitStorageAccounting } from "./accounting";
@@ -135,6 +137,26 @@ export class GitRepositoryDurableObject {
         else if (!r || r.expiresAt <= Date.now()) await cleanupLfs(storage, this.objectBucket(), this.accounting, repoId, oid, r);
         return c.body(null, 204);
       })
+      // Read-only views for the dashboard, whose Worker already checked the owner.
+      .use("/internal/git/browse/*", active, scope("read", "write"))
+      .get("/internal/git/browse/refs", async (c) => json(await browseRefs(await this.browsable(c.get("repoId")))))
+      .get("/internal/git/browse/path", async (c) => {
+        const ref = c.req.query("ref") ?? "", path = c.req.query("path") ?? "";
+        if (!isGitRevision(ref) || !isGitTreePath(path)) return c.text("Invalid ref or path", 400);
+        return json(await browsePath(await this.browsable(c.get("repoId")), ref, path));
+      })
+      .get("/internal/git/browse/log", async (c) => {
+        const ref = c.req.query("ref") ?? "", cursor = c.req.query("cursor");
+        if (!isGitRevision(ref) || (cursor !== undefined && !/^[0-9a-f]{40}$/u.test(cursor)))
+          return c.text("Invalid ref or cursor", 400);
+        return json(await browseLog(await this.browsable(c.get("repoId")), ref, cursor, MAX_COMMIT_PAGE));
+      })
+      .get("/internal/git/browse/blob/:oid{[0-9a-f]{40}}", async (c) => {
+        const bytes = await browseBlob(await this.browsable(c.get("repoId")), c.req.param("oid"));
+        return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: {
+          "Content-Type": "application/octet-stream", "Content-Length": String(bytes.byteLength), "Cache-Control": "no-store",
+        } });
+      })
       .use("/internal/git/media/*", active, scope("read", "write"))
       .get(`${MEDIA}/status`, async (c) => {
         const record = await reservation(c);
@@ -161,10 +183,19 @@ export class GitRepositoryDurableObject {
         uploadGitPack(c.req.raw, this.objectBucket(), c.get("repoId")))
       .post("/api/v3/git/:repo/git-receive-pack", scope("write"), initialized, (c) => this.receivePack(c))
       .onError((error, c) => {
+        if (error instanceof GitBrowseNotFoundError) return c.text("Not found", 404);
         // Git pack and object limits surface as RangeError from the storage adapters.
         if (error instanceof RangeError) return c.text(error.message, 413);
         throw error;
       });
+  }
+
+  /** The stored repository with its packs in memory, for reads that touch many objects. */
+  private async browsable(repoId: string) {
+    const opened = readGitRepository(this.objectBucket(), repoId);
+    await opened.fs.detectLooseObjects(opened.repo.gitdir);
+    await opened.fs.prefetchPacks(opened.repo.gitdir);
+    return opened;
   }
 
   private async gitBytes(repoId: string): Promise<number> {

@@ -17,7 +17,8 @@ import { RepositoryNameDialog } from "./repository-name-dialog";
 import { RepositoryTokenDialog } from "./repository-token-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@beutl/ui/ui/toggle-group";
-import { RepositoryActions, RepositoryContextMenu, RepositoryDate, RepositoryGridCard, RepositoryVisibility, type RepositoryHandlers } from "./repository-items";
+import { RepositoryActions, RepositoryContextMenu, RepositoryDate, RepositoryGridCard, RepositoryVisibility, repositoryPageHref, type RepositoryHandlers } from "./repository-items";
+import Link from "next/link";
 
 type ViewMode = "grid" | "list";
 type SortField = "name" | "createdAt";
@@ -183,7 +184,7 @@ export function RepositoryManager({ lang, userId, initialResult }: {
             <TableRow>
               <TableCell className="w-full min-w-40 max-w-0 py-2">
                 <div className="flex min-w-0 items-center gap-2"><GitBranch className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-                  <div className="min-w-0 flex-1"><h2 className="truncate text-sm font-medium" title={repository.name}><button className="block w-full truncate text-left outline-none focus-visible:underline disabled:opacity-50" disabled={pending || !available} onClick={() => setConnecting(repository)}>{repository.name}</button></h2>
+                  <div className="min-w-0 flex-1"><h2 className="truncate text-sm font-medium" title={repository.name}><Link prefetch={false} className="block w-full truncate text-left outline-none hover:underline focus-visible:underline aria-disabled:pointer-events-none aria-disabled:opacity-50" aria-disabled={pending || !available} tabIndex={pending || !available ? -1 : undefined} href={repositoryPageHref(lang, repository)}>{repository.name}</Link></h2>
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 sm:hidden"><RepositoryVisibility lang={lang} /><RepositoryDate repository={repository} lang={lang} /></div>
                   </div>
                 </div>

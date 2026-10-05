@@ -334,6 +334,7 @@
     "cloneUrl": "クローンURL",
     "copyUrl": "URLをコピー",
     "connect": "接続情報",
+    "browse": "ファイルを見る",
     "copied": "コピーしました。",
     "copyFailed": "コピーできませんでした。もう一度お試しください。",
     "created": "リポジトリを作成しました。",
@@ -378,6 +379,26 @@
     "noTokens": "アクセストークンはまだありません。",
     "tokenCreatedAt": "作成: {{date}}",
     "tokenLastUsed": "最終使用: {{date}}",
-    "tokenNeverUsed": "未使用"
+    "tokenNeverUsed": "未使用",
+    "browser": {
+      "switchRef": "ブランチまたはタグを切り替え",
+      "branches": "ブランチ",
+      "tags": "タグ",
+      "views": "表示の切り替え",
+      "files": "ファイル",
+      "commits": "コミット履歴",
+      "location": "場所",
+      "parent": "親フォルダ",
+      "submodule": "サブモジュール",
+      "emptyDirectory": "このフォルダは空です。",
+      "emptyTitle": "まだ何も push されていません",
+      "emptyDescription": "デスクトップアプリから、または Git でこの URL に Beutl プロジェクトを push すると、ここにファイルが表示されます。",
+      "notFoundTitle": "このバージョンまたはパスは見つかりません",
+      "backToRoot": "最新のファイルを表示",
+      "committedBy": "{{name}} が {{date}} にコミット",
+      "browseCommit": "このコミットのファイルを見る",
+      "newestCommits": "最新のコミット",
+      "olderCommits": "古いコミット"
+    }
   }
 }
