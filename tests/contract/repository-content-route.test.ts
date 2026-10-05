@@ -94,4 +94,11 @@ describe("repository content route", () => {
     expect(response.headers.get("Content-Type")).toBe("application/octet-stream");
     expect(response.headers.get("Content-Disposition")).toMatch(/^attachment; filename="Project.bep"/u);
   });
+
+  it.each(["x.constructor", "x.__proto__", "x.toString"])("treats the unusual extension of %s as plain bytes", async (name) => {
+    mocks.readRepositoryFile.mockResolvedValue(file(name, new Response("x", { headers: { "Content-Length": "1" } })));
+    const response = await request(`ref=main&path=assets/${name}`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("application/octet-stream");
+  });
 });

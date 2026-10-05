@@ -1,7 +1,7 @@
 import git from "isomorphic-git";
 import type { GitCommitPage, GitCommitSummary, GitPathView, GitRefList, GitTreeEntry } from "@beutl/core";
 import { readGitRepository } from "./git-http";
-import { lfsPointerOid, readRefs } from "./lfs-references";
+import { readRefs } from "./lfs-references";
 
 // Read-only views of a repository's history for the dashboard. The repository
 // object runs them in its queue, so a push or a collection never replaces a
@@ -30,13 +30,18 @@ export async function browseRefs({ store, prefix, repo }: Repository): Promise<G
   };
 }
 
-/** The commit a branch, tag or full commit ID names; annotated tags are peeled. */
+/**
+ * The commit a revision names; annotated tags are peeled. A short name means
+ * a branch before a tag; `refs/tags/…` and `refs/heads/…` name one exactly.
+ */
 async function resolveCommit(repository: Repository, revision: string): Promise<string> {
   const { store, prefix, repo } = repository;
   let oid = /^[0-9a-f]{40}$/u.test(revision) ? revision : undefined;
   if (!oid) {
     const refs = await readRefs(store, `${prefix}${repo.gitdir}/`);
-    oid = refs.get(`refs/heads/${revision}`) ?? refs.get(`refs/tags/${revision}`);
+    oid = /^refs\/(heads|tags)\//u.test(revision)
+      ? refs.get(revision)
+      : refs.get(`refs/heads/${revision}`) ?? refs.get(`refs/tags/${revision}`);
   }
   for (let depth = 0; oid && depth < 8; depth++) {
     const object = await readObject(repository, oid);
@@ -55,10 +60,19 @@ async function readObject({ repo }: Repository, oid: string) {
   }
 }
 
-/** A Git LFS pointer's object and size; any blob larger than a pointer is content. */
+/**
+ * A Git LFS pointer's object and size, read as the specification writes one:
+ * the version line first, then `oid` and `size`. Collection matches pointers
+ * more loosely so it never deletes media; here a text file that only quotes
+ * a pointer must still show as text.
+ */
 function lfsPointer(blob: Uint8Array): GitTreeEntry["lfs"] {
-  const oid = lfsPointerOid(blob);
-  const size = oid ? /^size (\d+)\r?$/mu.exec(new TextDecoder().decode(blob))?.[1] : undefined;
+  // Git LFS never reads a blob larger than this as a pointer.
+  if (blob.byteLength > 1024) return undefined;
+  const lines = new TextDecoder().decode(blob).split("\n").map((line) => line.replace(/\r$/u, ""));
+  if (lines[0] !== "version https://git-lfs.github.com/spec/v1") return undefined;
+  const oid = lines.find((line) => line.startsWith("oid "))?.match(/^oid sha256:([0-9a-f]{64})$/u)?.[1];
+  const size = lines.find((line) => line.startsWith("size "))?.match(/^size (\d+)$/u)?.[1];
   return oid && size && Number.isSafeInteger(Number(size)) ? { oid, size: Number(size) } : undefined;
 }
 
@@ -113,9 +127,15 @@ export async function browseLog(repository: Repository, revision: string, cursor
   return { commits, next: oid ?? null };
 }
 
-/** The bytes of one blob; history objects stay well below the Worker memory limit. */
-export async function browseBlob(repository: Repository, oid: string): Promise<Uint8Array> {
-  const object = await readObject(repository, oid);
-  if (object.type !== "blob") throw new GitBrowseNotFoundError(`No blob ${oid}`);
-  return object.object as Uint8Array;
+/**
+ * One file at a commit and, unless it is an LFS pointer, its bytes, found and
+ * read in one queued request so a collection cannot remove the blob between.
+ */
+export async function browseFile(repository: Repository, revision: string, path: string):
+  Promise<{ entry: GitTreeEntry; bytes?: Uint8Array }> {
+  const view = await browsePath(repository, revision, path);
+  if (view.kind !== "blob" || view.entry.type !== "blob") throw new GitBrowseNotFoundError(`No file ${path}`);
+  if (view.entry.lfs) return { entry: view.entry };
+  // History objects stay well below the Worker memory limit.
+  return { entry: view.entry, bytes: (await readObject(repository, view.entry.oid)).object as Uint8Array };
 }

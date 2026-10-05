@@ -5,7 +5,7 @@ import { formatDateTime } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 import { RepositoryNotice } from "../repository-notice";
 import { RepositoryHeader } from "../repository-header";
-import { loadRepository, requestedLocation } from "../repository-data";
+import { defaultRevision, loadRepository, requestedLocation } from "../repository-data";
 import { repositoryHref, shortOid } from "../links";
 
 export default async function Page(props: {
@@ -19,7 +19,7 @@ export default async function Page(props: {
   const { repository, env, access } = loaded;
   const refs = await listRepositoryRefs(env, access);
   const requested = requestedLocation(query);
-  const ref = requested.ref ?? refs.defaultBranch;
+  const ref = requested.ref ?? defaultRevision(refs);
   const header = <RepositoryHeader lang={lang} repository={repository} refs={refs} current={ref} tab="commits" />;
   if (!ref) {
     return <div className="flex flex-col gap-6">{header}<RepositoryNotice lang={lang} kind="empty" cloneUrl={repository.url} /></div>;

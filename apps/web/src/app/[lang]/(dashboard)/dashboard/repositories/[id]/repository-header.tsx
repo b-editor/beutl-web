@@ -17,6 +17,19 @@ import {
 } from "@beutl/ui/ui/dropdown-menu";
 import { repositoryHref, shortOid } from "./links";
 
+/**
+ * What a revision names. `refs/heads/…` and `refs/tags/…` are exact; a short
+ * name is a branch before a tag, as the repository resolves it.
+ */
+function describeRevision(revision: string | null, refs: GitRefList): { kind: "branch" | "tag" | "commit"; name: string } | null {
+  if (revision === null) return null;
+  if (revision.startsWith("refs/heads/")) return { kind: "branch", name: revision.slice("refs/heads/".length) };
+  if (revision.startsWith("refs/tags/")) return { kind: "tag", name: revision.slice("refs/tags/".length) };
+  if (refs.branches.some((ref) => ref.name === revision)) return { kind: "branch", name: revision };
+  if (refs.tags.some((ref) => ref.name === revision)) return { kind: "tag", name: revision };
+  return { kind: "commit", name: revision };
+}
+
 /** The repository's name, the version it shows, and its Files / Commits tabs. */
 export function RepositoryHeader({
   lang,
@@ -37,9 +50,8 @@ export function RepositoryHeader({
 }) {
   const { t } = useTranslation(lang);
   const router = useRouter();
-  const isTag = current !== null && !refs.branches.some((ref) => ref.name === current) && refs.tags.some((ref) => ref.name === current);
-  const isCommit = current !== null && !isTag && !refs.branches.some((ref) => ref.name === current);
-  const CurrentIcon = isTag ? Tag : isCommit ? GitCommitHorizontal : GitBranch;
+  const shown = describeRevision(current, refs);
+  const CurrentIcon = shown?.kind === "tag" ? Tag : shown?.kind === "commit" ? GitCommitHorizontal : GitBranch;
   const switchTo = (ref: string) => router.push(repositoryHref(lang, repository.id, tab, { ref }));
   const tabLink = (target: "files" | "commits") => repositoryHref(lang, repository.id, target, { ref: current ?? undefined });
 
@@ -62,7 +74,7 @@ export function RepositoryHeader({
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm" className="max-w-64 gap-2" aria-label={t("dashboard:repositories.browser.switchRef")}>
                 <CurrentIcon className="size-4 shrink-0" aria-hidden />
-                <span className="truncate">{isCommit ? shortOid(current) : current}</span>
+                <span className="truncate">{shown?.kind === "commit" ? shortOid(shown.name) : shown?.name}</span>
                 <ChevronDown className="size-4 shrink-0 text-muted-foreground" aria-hidden />
               </Button>
             </DropdownMenuTrigger>
@@ -70,7 +82,7 @@ export function RepositoryHeader({
               <DropdownMenuLabel>{t("dashboard:repositories.browser.branches")}</DropdownMenuLabel>
               {refs.branches.map((ref) => (
                 <DropdownMenuItem key={ref.name} onSelect={() => switchTo(ref.name)}>
-                  <Check className={cn("mr-2 size-4", ref.name !== current && "invisible")} aria-hidden />
+                  <Check className={cn("mr-2 size-4", !(shown?.kind === "branch" && shown.name === ref.name) && "invisible")} aria-hidden />
                   <span className="truncate">{ref.name}</span>
                 </DropdownMenuItem>
               ))}
@@ -79,8 +91,8 @@ export function RepositoryHeader({
                   <DropdownMenuSeparator />
                   <DropdownMenuLabel>{t("dashboard:repositories.browser.tags")}</DropdownMenuLabel>
                   {refs.tags.map((ref) => (
-                    <DropdownMenuItem key={ref.name} onSelect={() => switchTo(ref.name)}>
-                      <Check className={cn("mr-2 size-4", ref.name !== current && "invisible")} aria-hidden />
+                    <DropdownMenuItem key={ref.name} onSelect={() => switchTo(`refs/tags/${ref.name}`)}>
+                      <Check className={cn("mr-2 size-4", !(shown?.kind === "tag" && shown.name === ref.name) && "invisible")} aria-hidden />
                       <span className="truncate">{ref.name}</span>
                     </DropdownMenuItem>
                   ))}
@@ -89,7 +101,7 @@ export function RepositoryHeader({
             </DropdownMenuContent>
           </DropdownMenu>
         )}
-        {commit && !isCommit && (
+        {commit && shown?.kind !== "commit" && (
           <span className="font-mono text-xs text-muted-foreground" title={commit}>{shortOid(commit)}</span>
         )}
         <nav className="ml-auto flex rounded-md border p-0.5" aria-label={t("dashboard:repositories.browser.views")}>

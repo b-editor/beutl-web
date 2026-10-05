@@ -2,7 +2,7 @@ import { listRepositoryRefs, readRepositoryPath } from "@beutl/api/git/repositor
 import { RepositoryNotice } from "./repository-notice";
 import { RepositoryHeader } from "./repository-header";
 import { FileBrowser } from "./file-browser";
-import { loadRepository, requestedLocation } from "./repository-data";
+import { defaultRevision, loadRepository, requestedLocation } from "./repository-data";
 import { repositoryHref } from "./links";
 
 export default async function Page(props: {
@@ -15,7 +15,7 @@ export default async function Page(props: {
   const { repository, env, access } = loaded;
   const refs = await listRepositoryRefs(env, access);
   const requested = requestedLocation(query);
-  const ref = requested.ref ?? refs.defaultBranch;
+  const ref = requested.ref ?? defaultRevision(refs);
   const header = (commit?: string) => (
     <RepositoryHeader lang={lang} repository={repository} refs={refs} current={ref} commit={commit} tab="files" />
   );

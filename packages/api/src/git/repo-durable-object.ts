@@ -3,7 +3,7 @@ import { createMiddleware } from "hono/factory";
 import { MAX_GIT_LFS_PART_BYTES } from "@beutl/core";
 import { advertiseGitRefs, initializeGitRepository, isGitService, readGitRepository, receiveGitPack, uploadGitPack, type GitService } from "./git-http";
 import { isGitRevision, isGitTreePath } from "@beutl/core";
-import { browseBlob, browseLog, browsePath, browseRefs, GitBrowseNotFoundError, MAX_COMMIT_PAGE } from "./browse";
+import { browseFile, browseLog, browsePath, browseRefs, GitBrowseNotFoundError, MAX_COMMIT_PAGE } from "./browse";
 import { S3GitObjectBucket, sha256Base64, type GitS3Environment } from "./s3-object-store";
 import type { GitObjectBucket } from "./git-object-store";
 import { databaseGitStorageAccounting, withGitDatabase, type GitDatabaseEnvironment, type GitStorageAccounting } from "./accounting";
@@ -139,7 +139,8 @@ export class GitRepositoryDurableObject {
       })
       // Read-only views for the dashboard, whose Worker already checked the owner.
       .use("/internal/git/browse/*", active, scope("read", "write"))
-      .get("/internal/git/browse/refs", async (c) => json(await browseRefs(await this.browsable(c.get("repoId")))))
+      // Refs and HEAD are small files of their own; no pack needs loading.
+      .get("/internal/git/browse/refs", async (c) => json(await browseRefs(readGitRepository(this.objectBucket(), c.get("repoId")))))
       .get("/internal/git/browse/path", async (c) => {
         const ref = c.req.query("ref") ?? "", path = c.req.query("path") ?? "";
         if (!isGitRevision(ref) || !isGitTreePath(path)) return c.text("Invalid ref or path", 400);
@@ -151,10 +152,15 @@ export class GitRepositoryDurableObject {
           return c.text("Invalid ref or cursor", 400);
         return json(await browseLog(await this.browsable(c.get("repoId")), ref, cursor, MAX_COMMIT_PAGE));
       })
-      .get("/internal/git/browse/blob/:oid{[0-9a-f]{40}}", async (c) => {
-        const bytes = await browseBlob(await this.browsable(c.get("repoId")), c.req.param("oid"));
-        return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: {
-          "Content-Type": "application/octet-stream", "Content-Length": String(bytes.byteLength), "Cache-Control": "no-store",
+      .get("/internal/git/browse/file", async (c) => {
+        const ref = c.req.query("ref") ?? "", path = c.req.query("path") ?? "";
+        if (!isGitRevision(ref) || !isGitTreePath(path) || path === "") return c.text("Invalid ref or path", 400);
+        const { entry, bytes } = await browseFile(await this.browsable(c.get("repoId")), ref, path);
+        // The entry rides along so the Worker needs no second lookup; names may be any Unicode.
+        return new Response((bytes ?? null) as Uint8Array<ArrayBuffer> | null, { headers: {
+          "Content-Type": "application/octet-stream", "Cache-Control": "no-store",
+          "x-beutl-git-entry": encodeURIComponent(JSON.stringify(entry)),
+          ...(bytes ? { "Content-Length": String(bytes.byteLength) } : {}),
         } });
       })
       .use("/internal/git/media/*", active, scope("read", "write"))

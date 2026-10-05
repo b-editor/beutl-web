@@ -41,30 +41,29 @@ export async function listRepositoryCommits(env: GitEnvironment, access: GitAcce
 }
 
 /**
- * A file's bytes at `ref` for GET or HEAD, honoring one byte range. Git LFS
- * media streams from its pinned B2 version; other blobs come from the
- * repository object. Null when there is no such file; the caller adds the
- * type and disposition the dashboard serves it with.
+ * A file's bytes at `ref` for GET or HEAD, honoring one byte range. The
+ * repository object finds the file and reads an ordinary blob in one request;
+ * Git LFS media then streams from its pinned B2 version. Null when there is no
+ * such file; the caller adds the type and disposition the dashboard serves it with.
  */
 export async function readRepositoryFile(
   env: GitEnvironment, access: GitAccess, request: Request, ref: string, path: string,
   bucket: GitObjectBucket = new S3GitObjectBucket(env),
 ): Promise<{ entry: GitTreeEntry; response: Response } | null> {
-  const view = await readRepositoryPath(env, access, ref, path);
-  if (view?.kind !== "blob") return null;
-  const { entry } = view;
   const repository = gitRepositoryObject(env, access.repoId);
+  const file = await repository.browse(access, "file", { ref, path });
+  if (!file.ok) {
+    await file.body?.cancel();
+    if (file.status === 404) return null;
+    throw new Error(`Git file request returned HTTP ${file.status}`);
+  }
+  const entry = JSON.parse(decodeURIComponent(file.headers.get("x-beutl-git-entry") ?? "")) as GitTreeEntry;
   if (entry.lfs) {
+    await file.body?.cancel();
     const response = await downloadLfsObject(request, { bucket, repository, access, oid: entry.lfs.oid });
     return { entry, response };
   }
-  const blob = await repository.browse(access, `blob/${entry.oid}`);
-  if (!blob.ok) {
-    await blob.body?.cancel();
-    if (blob.status === 404) return null;
-    throw new Error(`Git blob request returned HTTP ${blob.status}`);
-  }
-  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const bytes = new Uint8Array(await file.arrayBuffer());
   const range = parseByteRange(request.headers.get("range"), bytes.byteLength);
   if (range === "unsatisfiable") {
     return { entry, response: new Response(null, { status: 416, headers: byteRangeHeaders(null, bytes.byteLength) }) };

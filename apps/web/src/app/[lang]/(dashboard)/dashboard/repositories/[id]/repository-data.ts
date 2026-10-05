@@ -2,7 +2,7 @@ import "server-only";
 import { notFound } from "next/navigation";
 import type { GitAccess, GitEnvironment } from "@beutl/api/git/environment";
 import { findGitRepository } from "@beutl/api/git/repositories";
-import { isGitRepositoryId, isGitRevision, isGitTreePath, type GitRepositorySummary } from "@beutl/core";
+import { isGitRepositoryId, isGitRevision, isGitTreePath, type GitRefList, type GitRepositorySummary } from "@beutl/core";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { GitRepositoryError, hostedGit } from "@/lib/git-repositories";
 
@@ -24,6 +24,15 @@ export async function loadRepository(id: string): Promise<LoadedRepository> {
   const repository = await findGitRepository(session.user.id, id, hosted.origin);
   if (!repository) notFound();
   return { status: "ready", repository, env: hosted.env, access: { repoId: id, ownerId: session.user.id, scope: "read" } };
+}
+
+/**
+ * The version to show when the URL names none: the branch HEAD names, or the
+ * first tag of a repository that was pushed only tags. Tags are named in full,
+ * so a branch of the same name never stands in for one.
+ */
+export function defaultRevision(refs: GitRefList): string | null {
+  return refs.defaultBranch ?? (refs.tags[0] ? `refs/tags/${refs.tags[0].name}` : null);
 }
 
 /** The ref and path a URL asks for; anything malformed reads as not asked. */

@@ -22,6 +22,8 @@ const access = { repoId, ownerId: "owner", scope: "read" as const };
 const media = { oid: "a".repeat(64), size: 123_456_789 };
 const pointer = `version https://git-lfs.github.com/spec/v1\noid sha256:${media.oid}\nsize ${media.size}\n`;
 const still = randomBytes(300);
+// Text that quotes a pointer without the version line is not one.
+const quoted = `see oid sha256:${media.oid}\nsize ${media.size}\n`;
 
 class Bucket {
   objects = new Map<string, Uint8Array>();
@@ -105,13 +107,16 @@ beforeAll(async () => {
   await git("init", "-q", "-b", "main");
   commits.first = await commit({ "README.md": "# Project\n" }, "first");
   await git("tag", "-a", "v1", "-m", "release");
-  commits.second = await commit({ "assets/clip.mp4": pointer, "assets/still.png": still, "project/Project.bep": "{}\n" }, "add media\n\nbody");
+  commits.second = await commit({ "assets/clip.mp4": pointer, "assets/still.png": still, "project/Project.bep": "{}\n",
+    "project/notes.txt": quoted }, "add media\n\nbody");
   commits.third = await commit({ "README.md": "# Project\n\nUpdated\n" }, "update readme");
   await git("switch", "-q", "-c", "feature");
   commits.feature = await commit({ "notes.txt": "feature\n" }, "feature");
   await git("switch", "-q", "main");
+  // A tag that shares the branch's name points elsewhere.
+  await git("tag", "feature", commits.first);
   await git("remote", "add", "origin", `http://127.0.0.1:${(server.address() as { port: number }).port}/api/v3/git/${repoId}.git`);
-  await git("push", "-q", "origin", "main", "feature", "v1");
+  await git("push", "-q", "origin", "refs/heads/main", "refs/heads/feature", "refs/tags/v1", "refs/tags/feature");
 }, 60_000);
 
 afterAll(async () => {
@@ -125,7 +130,7 @@ describe("browsing a hosted repository", () => {
     expect(await listRepositoryRefs(env, access)).toEqual({
       defaultBranch: "main",
       branches: [{ name: "feature", oid: commits.feature }, { name: "main", oid: commits.third }],
-      tags: [{ name: "v1", oid: expect.stringMatching(/^[0-9a-f]{40}$/u) }],
+      tags: [{ name: "feature", oid: commits.first }, { name: "v1", oid: expect.stringMatching(/^[0-9a-f]{40}$/u) }],
     });
   });
 
@@ -149,6 +154,15 @@ describe("browsing a hosted repository", () => {
     expect(tagged?.commit).toBe(commits.first);
     expect(tagged?.kind === "tree" && tagged.entries.map((entry) => entry.name)).toEqual(["README.md"]);
     expect((await readRepositoryPath(env, access, commits.second, "assets"))?.commit).toBe(commits.second);
+    // A short name is the branch; the full name picks the tag that shares it.
+    expect((await readRepositoryPath(env, access, "feature", ""))?.commit).toBe(commits.feature);
+    expect((await readRepositoryPath(env, access, "refs/tags/feature", ""))?.commit).toBe(commits.first);
+    expect((await readRepositoryPath(env, access, "refs/heads/feature", ""))?.commit).toBe(commits.feature);
+    expect(await readRepositoryPath(env, access, "refs/tags/missing", "")).toBeNull();
+    // Only a pointer as Git LFS writes it counts; quoting one leaves text.
+    const notes = await readRepositoryPath(env, access, "main", "project/notes.txt");
+    expect(notes).toMatchObject({ kind: "blob", entry: { name: "notes.txt", size: quoted.length } });
+    expect(notes?.kind === "blob" && "lfs" in notes.entry).toBe(false);
     expect(await readRepositoryPath(env, access, "main", "missing.txt")).toBeNull();
     expect(await readRepositoryPath(env, access, "main", "README.md/inside")).toBeNull();
     expect(await readRepositoryPath(env, access, "nothing", "")).toBeNull();
@@ -178,6 +192,7 @@ describe("browsing a hosted repository", () => {
     expect(new Uint8Array(await part!.response.arrayBuffer())).toEqual(new Uint8Array(still.subarray(10, 20)));
     expect((await file("assets/still.png", { Range: "bytes=999-" }))?.response.status).toBe(416);
     expect(await file("assets")).toBeNull();
+    expect(await (await file("project/notes.txt"))!.response.text()).toBe(quoted);
 
     // The media object is served only once its upload was verified.
     expect((await file("assets/clip.mp4"))?.response.status).toBe(404);
