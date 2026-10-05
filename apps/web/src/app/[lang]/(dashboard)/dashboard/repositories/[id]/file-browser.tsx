@@ -115,10 +115,20 @@ function ActionsContextMenu({ actions, children }: { actions: ItemAction[]; chil
   );
 }
 
+function sortOrder(sorting: Sorting, field: Sorting["field"]): "asc" | "desc" | false {
+  return sorting.field === field ? (sorting.descending ? "desc" : "asc") : false;
+}
+
+/** The header cell's `aria-sort`, which tells assistive technology the column and direction. */
+function ariaSort(sorting: Sorting, field: Sorting["field"]) {
+  const sorted = sortOrder(sorting, field);
+  return sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : undefined;
+}
+
 function SortHeader({ field, label, sorting, onSort, align = "left" }: {
   field: Sorting["field"]; label: string; sorting: Sorting; onSort: (sorting: Sorting) => void; align?: "left" | "right";
 }) {
-  const sorted = sorting.field === field ? (sorting.descending ? "desc" : "asc") : false;
+  const sorted = sortOrder(sorting, field);
   const Icon = sorted === "asc" ? ArrowUp : sorted === "desc" ? ArrowDown : ArrowUpDown;
   return (
     <Button
@@ -137,11 +147,13 @@ function SortHeader({ field, label, sorting, onSort, align = "left" }: {
 const FolderCard = forwardRef<HTMLDivElement, { entry: GitTreeEntry; actions: ItemAction[]; lang: string } & HTMLAttributes<HTMLDivElement>>(
   function FolderCard({ entry, actions, lang, className, ...rest }, ref) {
     const Icon = entryIcon(entry);
+    // A submodule's card opens nothing, so it is not announced as a button.
+    const opens = entry.type === "tree";
     return (
       <div
         ref={ref}
-        role="button"
-        tabIndex={0}
+        role={opens ? "button" : undefined}
+        tabIndex={opens ? 0 : undefined}
         className={cn(
           "group flex select-none items-center gap-2 rounded-lg border bg-card px-3 py-2.5 text-card-foreground outline-none transition-colors hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring",
           className,
@@ -407,10 +419,10 @@ export function FileBrowser({
         <Table aria-label={t("storage:files")}>
           <TableHeader>
             <TableRow>
-              <TableHead className={cn(HEAD_CLASS, COLUMN_CLASS.name)}>
+              <TableHead className={cn(HEAD_CLASS, COLUMN_CLASS.name)} aria-sort={ariaSort(sorting, "name")}>
                 <SortHeader field="name" label={t("storage:sortName")} sorting={sorting} onSort={setSorting} />
               </TableHead>
-              <TableHead className={cn(HEAD_CLASS, COLUMN_CLASS.size)}>
+              <TableHead className={cn(HEAD_CLASS, COLUMN_CLASS.size)} aria-sort={ariaSort(sorting, "size")}>
                 <SortHeader field="size" label={t("storage:size")} sorting={sorting} onSort={setSorting} align="right" />
               </TableHead>
               <TableHead className={cn(HEAD_CLASS, COLUMN_CLASS.actions)}>

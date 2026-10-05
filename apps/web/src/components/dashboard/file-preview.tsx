@@ -152,21 +152,21 @@ function MediaLoading({ lang }: { lang: string }) {
 }
 
 function PreviewBody({ file, lang }: { file: PreviewFile; lang: string }) {
-  const [failed, setFailed] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  useEffect(() => {
-    setFailed(false);
-    setLoaded(false);
-  }, [file.url]);
+  // Each state names the URL it belongs to, so another file starts out loading
+  // and an event from the last one cannot reach it.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  const failed = failedUrl === file.url;
+  const loaded = loadedUrl === file.url;
   const kind = previewKind(file.mimeType);
   if (failed) return <Unavailable file={file} lang={lang} reason="failed" />;
-  const media = { onError: () => setFailed(true), className: cn("transition-opacity", !loaded && "opacity-0") };
+  const media = { onError: () => setFailedUrl(file.url), className: cn("transition-opacity", !loaded && "opacity-0") };
   switch (kind) {
     case "image":
       return (
         <>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img key={file.url} src={file.url} alt={file.name} onLoad={() => setLoaded(true)} {...media}
+          <img key={file.url} src={file.url} alt={file.name} onLoad={() => setLoadedUrl(file.url)} {...media}
             className={cn(media.className, "max-h-full max-w-full object-contain")} />
           {!loaded && <MediaLoading lang={lang} />}
         </>
@@ -174,7 +174,7 @@ function PreviewBody({ file, lang }: { file: PreviewFile; lang: string }) {
     case "video":
       return (
         <>
-          <video key={file.url} src={file.url} controls preload="metadata" onLoadedMetadata={() => setLoaded(true)} {...media}
+          <video key={file.url} src={file.url} controls preload="metadata" onLoadedMetadata={() => setLoadedUrl(file.url)} {...media}
             className={cn(media.className, "max-h-full max-w-full")} />
           {!loaded && <MediaLoading lang={lang} />}
         </>
@@ -182,7 +182,7 @@ function PreviewBody({ file, lang }: { file: PreviewFile; lang: string }) {
     case "audio":
       return (
         <>
-          <audio key={file.url} src={file.url} controls preload="metadata" onLoadedMetadata={() => setLoaded(true)} {...media}
+          <audio key={file.url} src={file.url} controls preload="metadata" onLoadedMetadata={() => setLoadedUrl(file.url)} {...media}
             className={cn(media.className, "w-full max-w-xl")} />
           {!loaded && <MediaLoading lang={lang} />}
         </>
