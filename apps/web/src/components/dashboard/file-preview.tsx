@@ -140,30 +140,53 @@ function Unavailable({ file, lang, reason }: { file: PreviewFile; lang: string; 
   );
 }
 
+/** A spinner over media until the element can show something; LFS media can take a moment. */
+function MediaLoading({ lang }: { lang: string }) {
+  const { t } = useTranslation(lang);
+  return (
+    <span role="status" className="pointer-events-none absolute inset-0 flex items-center justify-center">
+      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" aria-hidden />
+      <span className="sr-only">{t("storage:previewLoading")}</span>
+    </span>
+  );
+}
+
 function PreviewBody({ file, lang }: { file: PreviewFile; lang: string }) {
   const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [file.url]);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+    setLoaded(false);
+  }, [file.url]);
   const kind = previewKind(file.mimeType);
   if (failed) return <Unavailable file={file} lang={lang} reason="failed" />;
+  const media = { onError: () => setFailed(true), className: cn("transition-opacity", !loaded && "opacity-0") };
   switch (kind) {
     case "image":
       return (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={file.url} alt={file.name} onError={() => setFailed(true)} className="max-h-full max-w-full object-contain" />
+        <>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img key={file.url} src={file.url} alt={file.name} onLoad={() => setLoaded(true)} {...media}
+            className={cn(media.className, "max-h-full max-w-full object-contain")} />
+          {!loaded && <MediaLoading lang={lang} />}
+        </>
       );
     case "video":
       return (
-        <video
-          key={file.url}
-          src={file.url}
-          controls
-          preload="metadata"
-          onError={() => setFailed(true)}
-          className="max-h-full max-w-full"
-        />
+        <>
+          <video key={file.url} src={file.url} controls preload="metadata" onLoadedMetadata={() => setLoaded(true)} {...media}
+            className={cn(media.className, "max-h-full max-w-full")} />
+          {!loaded && <MediaLoading lang={lang} />}
+        </>
       );
     case "audio":
-      return <audio key={file.url} src={file.url} controls preload="metadata" onError={() => setFailed(true)} className="w-full max-w-xl" />;
+      return (
+        <>
+          <audio key={file.url} src={file.url} controls preload="metadata" onLoadedMetadata={() => setLoaded(true)} {...media}
+            className={cn(media.className, "w-full max-w-xl")} />
+          {!loaded && <MediaLoading lang={lang} />}
+        </>
+      );
     case "text":
       return <TextPreview key={file.url} file={file} lang={lang} />;
     default:
