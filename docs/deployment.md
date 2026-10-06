@@ -34,6 +34,51 @@ configuration, and `OPENROUTER_API_KEY` / `VERCEL_AI_GATEWAY_API_KEY` secrets
 must address the same production resources as Web before the Web service
 binding is deployed. Other Web/API routes retain their existing behavior.
 
+## PR previews
+
+CI deploys separate Workers named `beutl-web-pr-<number>`,
+`beutl-admin-pr-<number>`, and `beutl-ai-images-pr-<number>`. Web and Admin use
+`https://<worker-name>.<account-subdomain>.workers.dev`; the image Worker stays
+private and is bound to the matching PR's Web Worker. Production Worker names,
+routes, and disabled version-preview URLs are preserved.
+
+Create a preview database with the required schema, a Hyperdrive configuration
+for it, and an R2 bucket for preview files. Set the repository secret
+`CLOUDFLARE_PREVIEW_CONFIG` to this structure, using your own values:
+
+```json
+{
+  "hyperdriveId": "your-preview-hyperdrive-id",
+  "r2Bucket": "beutl-preview-data",
+  "secrets": {
+    "web": {
+      "BETTER_AUTH_SECRET": "preview-auth-secret",
+      "JWT_SECRET": "preview-api-secret",
+      "AI_IMAGE_WORKER_JWT_SECRET": "preview-image-secret"
+    },
+    "admin": {
+      "BETTER_AUTH_SECRET": "preview-auth-secret",
+      "ADMIN_USER_IDS": "your-preview-admin-user-id"
+    },
+    "image-worker": {}
+  }
+}
+```
+
+The image Worker's JWT key defaults to Web's `AI_IMAGE_WORKER_JWT_SECRET`.
+Add the runtime secrets needed for the flows under test to each app's map,
+including OAuth, email, provider credentials, and Stripe **test-mode** keys.
+OAuth callback URLs must be registered for each PR's preview hostname.
+Preview origins, passkey RP IDs, and host-only cookies are set by CI.
+Previews use R2 storage and disable scheduled work and the OpenNext incremental
+cache so different PRs cannot overwrite each other's cached pages.
+
+Production database and R2 bindings are rejected by default. Set
+`"allowProductionData": true` only when deliberately sharing production data;
+interactions with such a preview can modify that data.
+Closing a PR deletes its Workers, while the configured database and R2 data
+remain. Cleanup checks out the default branch, never PR code.
+
 ## First hosted Git deployment
 
 The `hosted-git-v1` Durable Object migration creates a new namespace in the

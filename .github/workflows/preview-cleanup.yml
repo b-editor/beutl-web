@@ -1,0 +1,37 @@
+name: Remove PR previews
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: read
+
+# Wait for the matching CI run so it cannot recreate Workers after cleanup.
+concurrency:
+  group: CI-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Remove PR Workers
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      # Never execute pull-request code in a pull_request_target workflow.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        with:
+          version: "0.3.2"
+          node-version-file: .nvmrc
+          run-install: false
+      - name: Remove this PR's Workers
+        run: vp exec node scripts/cloudflare-preview.mjs cleanup
