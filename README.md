@@ -77,8 +77,8 @@ skipped when their respective variables are absent.
 and pushes to `main`. After tests pass on `main`, it deploys `beutl-ai-images`,
 `beutl-web` (including public APIs), and `beutl-admin` in that order using the
 existing deployment tooling. Web and Admin are built without Cloudflare
-credentials. Immediately before deployment, the run's commit must still match
-the head of `main`. A manual run on `main` also tests and deploys.
+credentials. Immediately before each Worker deployment, the run's commit must
+still match the head of `main`. A manual run on `main` also tests and deploys.
 DB and live-provider tests remain opt-in and are skipped in this workflow.
 
 Set these repository secrets under **Settings → Secrets and variables → Actions**:

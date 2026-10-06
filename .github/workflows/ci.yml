@@ -91,14 +91,28 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Deploy Web and public API Worker
-        run: vp exec --filter @beutl/web opennextjs-cloudflare deploy
+        shell: bash
+        run: |
+          current_main_sha=$(git ls-remote --exit-code origin refs/heads/main | cut -f1)
+          if [[ "$GITHUB_SHA" != "$current_main_sha" ]]; then
+            echo "::error::Refusing to deploy $GITHUB_SHA because main is now at $current_main_sha."
+            exit 1
+          fi
+          vp exec --filter @beutl/web opennextjs-cloudflare deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           BETTER_AUTH_URL: https://beutl.beditor.net
           METADATA_BASE_URL: https://beutl.beditor.net
       - name: Deploy Admin Worker
-        run: vp exec --filter @beutl/admin opennextjs-cloudflare deploy
+        shell: bash
+        run: |
+          current_main_sha=$(git ls-remote --exit-code origin refs/heads/main | cut -f1)
+          if [[ "$GITHUB_SHA" != "$current_main_sha" ]]; then
+            echo "::error::Refusing to deploy $GITHUB_SHA because main is now at $current_main_sha."
+            exit 1
+          fi
+          vp exec --filter @beutl/admin opennextjs-cloudflare deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
