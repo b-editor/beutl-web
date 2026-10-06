@@ -45,8 +45,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       # Next loads local Worker bindings during build; no database is started.
       CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_BEUTL_DATABASE_HYPERDRIVE: postgresql://root@127.0.0.1:26257/beutl_ci?sslmode=disable
     steps:
@@ -54,6 +52,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Check deployment credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           if [[ -z "$CLOUDFLARE_API_TOKEN" || -z "$CLOUDFLARE_ACCOUNT_ID" ]]; then
             echo "::error::Set the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID repository secrets."
@@ -67,14 +68,38 @@ jobs:
           run-install: false
       - name: Install dependencies
         run: vp install --frozen-lockfile
-      - name: Deploy private image Worker
-        run: vp run deploy:image-worker
-      - name: Deploy Web and public API Worker
-        run: vp run deploy:web
+      - name: Build Web and public API Worker
+        run: vp exec --filter @beutl/web opennextjs-cloudflare build
         env:
           BETTER_AUTH_URL: https://beutl.beditor.net
           METADATA_BASE_URL: https://beutl.beditor.net
-      - name: Deploy Admin Worker
-        run: vp run deploy:admin
+      - name: Build Admin Worker
+        run: vp exec --filter @beutl/admin opennextjs-cloudflare build
         env:
+          BETTER_AUTH_URL: https://admin.beutl.beditor.net
+      - name: Verify current main revision
+        shell: bash
+        run: |
+          current_main_sha=$(git ls-remote --exit-code origin refs/heads/main | cut -f1)
+          if [[ "$GITHUB_SHA" != "$current_main_sha" ]]; then
+            echo "::error::Refusing to deploy $GITHUB_SHA because main is now at $current_main_sha."
+            exit 1
+          fi
+      - name: Deploy private image Worker
+        run: vp run deploy:image-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Deploy Web and public API Worker
+        run: vp exec --filter @beutl/web opennextjs-cloudflare deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BETTER_AUTH_URL: https://beutl.beditor.net
+          METADATA_BASE_URL: https://beutl.beditor.net
+      - name: Deploy Admin Worker
+        run: vp exec --filter @beutl/admin opennextjs-cloudflare deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           BETTER_AUTH_URL: https://admin.beutl.beditor.net
