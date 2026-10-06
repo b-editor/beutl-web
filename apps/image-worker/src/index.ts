@@ -6,11 +6,11 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { Hono } from "hono";
 import { boundedBody, apiRequestBodyLimit } from "@beutl/core";
 import { runWithDbProvider } from "@beutl/db";
-import { apiErrorResponse, apiOnErrorHandler, fileTooLargeApiResponse } from "./api/error";
-import { getUserIdFromHeaders } from "./api/auth";
-import { setR2BucketProvider, type R2BucketLike } from "./ai/r2-provider";
-import { resolveStorageBucket } from "./storage/bucket-from-env";
-import aiImages from "./v3/ai/images";
+import { apiErrorResponse, apiOnErrorHandler, fileTooLargeApiResponse } from "@beutl/api/api/error";
+import { getUserIdFromHeaders } from "@beutl/api/api/auth";
+import { setR2BucketProvider, type R2BucketLike } from "@beutl/api/ai/r2-provider";
+import { resolveStorageBucket } from "@beutl/api/storage/bucket-from-env";
+import aiImages from "@beutl/api/v3/ai/images";
 
 export interface ImageWorkerEnv {
   BEUTL_DATABASE_HYPERDRIVE: { connectionString: string };

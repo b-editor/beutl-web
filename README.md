@@ -13,6 +13,7 @@ Cloudflare Workers.
 | --- | --- | --- |
 | `apps/web` | `@beutl/web` | Public site, account and developer dashboards, authentication, and checkout |
 | `apps/admin` | `@beutl/admin` | Administrative console |
+| `apps/image-worker` | `@beutl/image-worker` | Private Cloudflare Worker for AI image editing |
 | `packages/api` | `@beutl/api` | Hono APIs for desktop clients (`v1`, `v2`, and `v3`) |
 | `packages/core` | `@beutl/core` | Framework-independent domain logic |
 | `packages/db` | `@beutl/db` | Prisma client and data-access helpers |
@@ -59,7 +60,7 @@ and leaves `apps/web/prisma/schema.prisma` unchanged.
 | --- | --- |
 | `pnpm dev` | Start the public Web app |
 | `pnpm dev:admin` | Start the admin console |
-| `pnpm build` | Build both Next.js apps and type-check the desktop API |
+| `pnpm build` | Build both Next.js apps and the image Worker, and type-check the shared API |
 | `pnpm lint` | Lint both Next.js apps |
 | `pnpm typecheck` | Type-check every workspace that defines a type-check script |
 | `pnpm test` | Run the Vitest contract and integration suites |
@@ -69,6 +70,26 @@ and leaves `apps/web/prisma/schema.prisma` unchanged.
 CockroachDB integration tests require `TEST_DATABASE_URL`. The live OpenRouter
 pricing test is opt-in through `TEST_OPENROUTER_PRICING=1`; these tests are
 skipped when their respective variables are absent.
+
+## Continuous integration and deployment
+
+[GitHub Actions](.github/workflows/ci.yml) runs the Vitest suite on pull requests
+and pushes to `main`. After tests pass on `main`, it deploys `beutl-ai-images`,
+`beutl-web` (including public APIs), and `beutl-admin` in that order using the
+existing deployment tooling. Web and Admin are built without Cloudflare
+credentials. Immediately before each Worker deployment, the run's commit must
+still match the head of `main`. A manual run on `main` also tests and deploys.
+DB and live-provider tests remain opt-in and are skipped in this workflow.
+
+Set these repository secrets under **Settings → Secrets and variables → Actions**:
+
+- `CLOUDFLARE_API_TOKEN`: a token authorized to deploy Workers and access the
+  configured R2, Hyperdrive, and Durable Object resources in the target account.
+- `CLOUDFLARE_ACCOUNT_ID`: the target Cloudflare account ID.
+
+Keep application secrets and runtime variables configured in Cloudflare as
+described in [Deployment configuration](docs/deployment.md). Database migrations
+are separate release steps and are not run by this workflow.
 
 ## Deployment
 
@@ -80,7 +101,7 @@ entrypoint dispatches `/api/v{1,2,3}/*` before OpenNext so uploads remain stream
 | --- | --- | --- |
 | `beutl-web` | `beutl.beditor.net/*`, including all public APIs | `vp run deploy:web` |
 | `beutl-admin` | `admin.beutl.beditor.net/*` | `vp run deploy:admin` |
-| `beutl-ai-images` | Service binding only; no public route | `vp run --filter @beutl/api deploy:image-worker` |
+| `beutl-ai-images` | Service binding only; no public route | `vp run deploy:image-worker` |
 
 The `vp` commands require the [Vite+ CLI](https://viteplus.dev/guide/).
 The workspace also supports the pnpm runner configured in `package.json`: use

@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "main": "src/image-worker.ts",
+  "main": "src/index.ts",
   "name": "beutl-ai-images",
   "compatibility_date": "2025-04-04",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public", "enable_request_signal"],

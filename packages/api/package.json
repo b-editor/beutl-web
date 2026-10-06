@@ -6,6 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./error": "./src/error.ts",
+    "./api/auth": "./src/api/auth.ts",
+    "./api/error": "./src/api/error.ts",
     "./git/access-tokens": "./src/git/access-tokens.ts",
     "./git/environment": "./src/git/environment.ts",
     "./git/repositories": "./src/git/repositories.ts",
@@ -21,7 +23,8 @@
     "./storage/management": "./src/storage/management.ts",
     "./storage/uploads": "./src/storage/uploads.ts",
     "./storage/files": "./src/storage/files.ts",
-    "./runtime": "./src/runtime.ts"
+    "./runtime": "./src/runtime.ts",
+    "./v3/ai/images": "./src/v3/ai/images.ts"
   },
   "dependencies": {
     "@ai-sdk/gateway": "^4.0.103",
@@ -46,13 +49,11 @@
     "zod": "^4.6.5"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "deploy:image-worker": "wrangler deploy --config wrangler-ai-images.jsonc"
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
     "@types/semver": "^7.8.0",
-    "typescript": "^5.9.3",
-    "wrangler": "^4.147.0"
+    "typescript": "^5.9.3"
   }
 }
