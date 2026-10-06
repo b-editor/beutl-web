@@ -77,10 +77,6 @@ skipped when their respective variables are absent.
 and pushes to `main`. After tests pass on `main`, it deploys `beutl-ai-images`,
 `beutl-web` (including public APIs), and `beutl-admin` in that order using the
 existing deploy scripts. A manual run on `main` also tests and deploys.
-Same-repository pull requests also publish Web and Admin previews after tests
-pass. Their URLs appear in the **Deploy PR previews** job summary. Each PR has
-its own Web, Admin, and private image Workers; closing the PR removes them.
-Fork pull requests run tests without deploying previews.
 DB and live-provider tests remain opt-in and are skipped in this workflow.
 
 Set these repository secrets under **Settings → Secrets and variables → Actions**:
@@ -88,8 +84,6 @@ Set these repository secrets under **Settings → Secrets and variables → Acti
 - `CLOUDFLARE_API_TOKEN`: a token authorized to deploy Workers and access the
   configured R2, Hyperdrive, and Durable Object resources in the target account.
 - `CLOUDFLARE_ACCOUNT_ID`: the target Cloudflare account ID.
-- `CLOUDFLARE_PREVIEW_CONFIG`: preview data bindings and runtime secrets; see
-  [PR previews](docs/deployment.md#pr-previews) for its JSON format.
 
 Keep application secrets and runtime variables configured in Cloudflare as
 described in [Deployment configuration](docs/deployment.md). Database migrations

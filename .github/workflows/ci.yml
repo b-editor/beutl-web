@@ -38,56 +38,6 @@ jobs:
       - name: Run tests
         run: vp run test --maxWorkers=2 --testTimeout=60000 --hookTimeout=120000
 
-  preview:
-    name: Deploy PR previews
-    needs: test
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    env:
-      PR_NUMBER: ${{ github.event.pull_request.number }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_PREVIEW_CONFIG: ${{ secrets.CLOUDFLARE_PREVIEW_CONFIG }}
-      BEUTL_PR_PREVIEW: "1"
-      CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_BEUTL_DATABASE_HYPERDRIVE: postgresql://root@127.0.0.1:26257/beutl_ci?sslmode=disable
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Check preview configuration
-        run: |
-          if [[ -z "$CLOUDFLARE_API_TOKEN" || -z "$CLOUDFLARE_ACCOUNT_ID" || -z "$CLOUDFLARE_PREVIEW_CONFIG" ]]; then
-            echo "::error::Set CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, and CLOUDFLARE_PREVIEW_CONFIG repository secrets."
-            exit 1
-          fi
-      - uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
-        with:
-          version: "0.3.2"
-          node-version-file: .nvmrc
-          cache: true
-          run-install: false
-      - name: Install dependencies
-        run: vp install --frozen-lockfile
-      - name: Prepare PR Workers
-        run: vp exec node scripts/cloudflare-preview.mjs prepare
-      - name: Build Web preview
-        run: |
-          BETTER_AUTH_URL="$PREVIEW_WEB_URL" METADATA_BASE_URL="$PREVIEW_WEB_URL" \
-            vp exec --filter @beutl/web opennextjs-cloudflare build --config .wrangler/ci-preview.json
-      - name: Build Admin preview
-        run: |
-          BETTER_AUTH_URL="$PREVIEW_ADMIN_URL" \
-            vp exec --filter @beutl/admin opennextjs-cloudflare build --config .wrangler/ci-preview.json
-      - name: Deploy private PR image Worker
-        run: vp exec --filter @beutl/image-worker wrangler deploy --config .wrangler/ci-preview.json --secrets-file .wrangler/ci-preview-secrets.json
-      - name: Deploy Web preview
-        run: vp exec --filter @beutl/web opennextjs-cloudflare deploy --config .wrangler/ci-preview.json --secrets-file .wrangler/ci-preview-secrets.json
-      - name: Deploy Admin preview
-        run: vp exec --filter @beutl/admin opennextjs-cloudflare deploy --config .wrangler/ci-preview.json --secrets-file .wrangler/ci-preview-secrets.json
-      - name: Publish preview URLs
-        run: vp exec node scripts/cloudflare-preview.mjs summary
-
   deploy:
     name: Deploy Cloudflare Workers
     needs: test
