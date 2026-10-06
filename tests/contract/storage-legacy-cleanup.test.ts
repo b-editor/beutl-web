@@ -829,11 +829,9 @@ describe("legacy storage cleanup contracts", () => {
       () => null,
       (error: unknown) => error,
     );
-    for (let tick = 0; tick < 20 && bucket.put.mock.calls.length === 0; tick++) {
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-    }
-    expect(bucket.put).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(bucket.put).toHaveBeenCalledTimes(1), {
+      timeout: 5_000,
+    });
     await vi.advanceTimersByTimeAsync(30 * 1000);
     await expect(rejection).resolves.toMatchObject({
       message: expect.stringContaining("exceeded its local deadline"),
