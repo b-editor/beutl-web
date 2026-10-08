@@ -32,5 +32,6 @@
   "somethingWentWrong": "問題が発生しました",
   "somethingWentWrongDescription": "予期しないエラーが発生しました。もう一度お試しください。",
   "tryAgain": "再試行",
+  "pageOutdated": "このページは古いバージョンです。ページを再読み込みしてからもう一度お試しください。",
   "openMenu": "メニューを開く"
 }

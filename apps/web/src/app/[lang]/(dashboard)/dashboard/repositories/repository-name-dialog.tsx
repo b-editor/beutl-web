@@ -8,6 +8,7 @@ import { Button } from "@beutl/ui/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@beutl/ui/ui/dialog";
 import { Input } from "@beutl/ui/ui/input";
 import { Label } from "@beutl/ui/ui/label";
+import { actionFailureKey } from "@/lib/action-error";
 
 export function RepositoryNameDialog({ lang, initialName, onClose, onSubmit }: {
   lang: string;
@@ -26,9 +27,9 @@ export function RepositoryNameDialog({ lang, initialName, onClose, onSubmit }: {
     if (!valid || unchanged || pending) return;
     startTransition(async () => {
       try { setError(await onSubmit(name.trim())); }
-      catch {
+      catch (error) {
         // The action could not be reached; the server logs its own failures.
-        setError(t("dashboard:repositories.errors.requestFailed"));
+        setError(t(actionFailureKey(error, "dashboard:repositories.errors.requestFailed")));
       }
     });
   };

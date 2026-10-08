@@ -86,6 +86,12 @@ Set these repository secrets under **Settings → Secrets and variables → Acti
 - `CLOUDFLARE_API_TOKEN`: a token authorized to deploy Workers and access the
   configured R2, Hyperdrive, and Durable Object resources in the target account.
 - `CLOUDFLARE_ACCOUNT_ID`: the target Cloudflare account ID.
+- `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`: a fixed base64 AES key for the Web and
+  Admin builds, created once with `openssl rand -base64 32`. Next derives
+  Server Action IDs from it and from each file's path in the CI checkout, so
+  an unchanged action keeps its ID across deployments and a page opened before
+  a deploy can still call it. Changing the key invalidates every open page's
+  actions once.
 
 Keep application secrets and runtime variables configured in Cloudflare as
 described in [Deployment configuration](docs/deployment.md). Database migrations

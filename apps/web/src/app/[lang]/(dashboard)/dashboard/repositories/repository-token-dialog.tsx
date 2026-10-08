@@ -17,6 +17,7 @@ import { Label } from "@beutl/ui/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@beutl/ui/ui/select";
 import { createRepositoryToken, listRepositoryTokens, revokeRepositoryToken } from "./actions";
 import { authenticatedCloneUrl, repositoryCloneCommand } from "./connection";
+import { actionFailureKey } from "@/lib/action-error";
 
 export function RepositoryTokenDialog({ repository, lang, onClose }: {
   repository: GitRepositorySummary; lang: string; onClose: () => void;
@@ -30,16 +31,16 @@ export function RepositoryTokenDialog({ repository, lang, onClose }: {
   const [notice, setNotice] = useState<string>();
   const [error, setError] = useState<string>();
   const [pending, startTransition] = useTransition();
-  const failure = () => t("dashboard:repositories.errors.requestFailed");
+  const failure = (error?: unknown) => t(actionFailureKey(error, "dashboard:repositories.errors.requestFailed"));
   const date = (value: string) =>
     new Intl.DateTimeFormat(lang, { dateStyle: "medium", timeZone: "UTC" }).format(new Date(value));
 
   const run = (work: () => Promise<void>) => startTransition(async () => {
     setError(undefined); setNotice(undefined);
     try { await work(); }
-    catch {
+    catch (error) {
       // The action could not be reached; the server logs its own failures.
-      setError(failure());
+      setError(failure(error));
     }
   });
   useEffect(() => {

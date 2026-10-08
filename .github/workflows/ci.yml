@@ -55,9 +55,14 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${{ secrets.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY }}
         run: |
           if [[ -z "$CLOUDFLARE_API_TOKEN" || -z "$CLOUDFLARE_ACCOUNT_ID" ]]; then
             echo "::error::Set the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID repository secrets."
+            exit 1
+          fi
+          if [[ -z "$NEXT_SERVER_ACTIONS_ENCRYPTION_KEY" ]]; then
+            echo "::error::Set the NEXT_SERVER_ACTIONS_ENCRYPTION_KEY repository secret."
             exit 1
           fi
       - uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
@@ -68,15 +73,20 @@ jobs:
           run-install: false
       - name: Install dependencies
         run: vp install --frozen-lockfile
+      # Next derives Server Action IDs from this key. Without it every build
+      # picks a random one, so pages opened before a deploy call IDs the new
+      # Worker no longer has ("Failed to find Server Action").
       - name: Build Web and public API Worker
         run: vp exec --filter @beutl/web opennextjs-cloudflare build
         env:
           BETTER_AUTH_URL: https://beutl.beditor.net
           METADATA_BASE_URL: https://beutl.beditor.net
+          NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${{ secrets.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY }}
       - name: Build Admin Worker
         run: vp exec --filter @beutl/admin opennextjs-cloudflare build
         env:
           BETTER_AUTH_URL: https://admin.beutl.beditor.net
+          NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${{ secrets.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY }}
       - name: Verify current main revision
         shell: bash
         run: |
