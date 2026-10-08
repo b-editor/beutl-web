@@ -61,8 +61,11 @@ export async function keepRenderingAfterDisconnect(
     return response;
   }
 
-  // Read the render as it arrives, whatever the client does; OpenNext's own
-  // stream already buffers without limit.
+  // Read the render as it arrives, whatever the client does. The client queue
+  // is unbounded on purpose: OpenNext's stream already queued the whole render
+  // for a slow reader, so this holds no more than before. Truncating at a cap
+  // would cut a page for a visitor who is still there, and waiting on
+  // `desiredSize` brings the hang back for a body the runtime never reads.
   const reader = response.body.getReader();
   let client!: ReadableStreamDefaultController<Uint8Array>;
   let forwarding = true;
