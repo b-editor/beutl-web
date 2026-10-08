@@ -21,9 +21,11 @@ function isPageRender(response: Response): boolean {
  * and OpenNext then closes the Next response. Next keeps rendering anyway, but
  * a closed response runs `after()` callbacks — the Prisma `$disconnect` — and
  * rejects every later `headers()` / `cookies()` call in that render. So an
- * HTML or RSC response never hears about the disconnect: when the client
- * cancels the body, the rest is read into nothing and Next closes the response
- * itself once the render is done.
+ * HTML or RSC response never hears about the disconnect: once the visitor
+ * leaves or the client cancels the body, the rest is read into nothing and
+ * Next closes the response itself when the render is done. Waiting for the
+ * client instead would hold `waitUntil` forever when the runtime drops a late
+ * response unread, and the runtime cancels that as a hung Worker.
  *
  * `/api/*` keeps the original signal from the start, so file contents stop
  * even before their headers; other GET responses that turn out not to be a
@@ -59,14 +61,36 @@ export async function keepRenderingAfterDisconnect(
     return response;
   }
 
-  const body = response.body;
-  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-  void body.pipeTo(writable, { preventCancel: true })
-    .catch(() =>
-      body.pipeTo(new WritableStream()).catch(() => {
-        // The body itself failed, not the client; the client already saw it.
-      }),
-    )
-    .finally(settle);
+  // Read the render as it arrives, whatever the client does; OpenNext's own
+  // stream already buffers without limit.
+  const reader = response.body.getReader();
+  let client!: ReadableStreamDefaultController<Uint8Array>;
+  let forwarding = true;
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) { client = controller; },
+    cancel() { forwarding = false; },
+  });
+  const closeClient = () => {
+    if (!forwarding) return;
+    forwarding = false;
+    client.close();
+  };
+  if (request.signal.aborted) closeClient();
+  else request.signal.addEventListener("abort", closeClient, { once: true });
+
+  void (async () => {
+    try {
+      for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
+        if (forwarding) client.enqueue(chunk.value);
+      }
+      closeClient();
+    } catch (error) {
+      // The body itself failed, not the client; pass that on if anyone listens.
+      if (forwarding) {
+        forwarding = false;
+        client.error(error);
+      }
+    }
+  })().finally(settle);
   return new Response(readable, response);
 }

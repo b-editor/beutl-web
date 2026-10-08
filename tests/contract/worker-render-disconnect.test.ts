@@ -80,6 +80,34 @@ describe("page renders after a client disconnect", () => {
     },
   );
 
+  it.each([["before", true], ["after", false]])(
+    "finishes a render whose body nobody reads or cancels once the visitor left %s it began",
+    async (_when, leftFirst) => {
+      // A navigation the client router aborted: the runtime may drop the
+      // response without reading or cancelling it. Nothing else can make
+      // progress then, so a held waitUntil would be reported as a hang.
+      const visitor = new AbortController();
+      if (leftFirst) visitor.abort();
+      const ctx = context();
+      const body = controllableBody();
+      await keepRenderingAfterDisconnect(
+        new Request(`${ORIGIN}/ja/dashboard/account/billing`, { signal: visitor.signal }),
+        ctx,
+        async () => new Response(body.stream, { headers: { "content-type": "text/x-component" } }),
+      );
+      if (!leftFirst) visitor.abort();
+      for (const chunk of ["0:", "1:", "2:", "3:"]) body.push(chunk);
+      body.close();
+
+      const finished = await Promise.race([
+        Promise.all(ctx.pending).then(() => true),
+        new Promise((resolve) => setTimeout(() => resolve(false), 200)),
+      ]);
+      expect(finished).toBe(true);
+      expect(body.state.cancelled).toBe(false);
+    },
+  );
+
   it("streams a render unchanged while the visitor stays", async () => {
     const { response, ctx } = await respond("text/html; charset=utf-8", "<html>page</html>");
     expect(response.status).toBe(200);
