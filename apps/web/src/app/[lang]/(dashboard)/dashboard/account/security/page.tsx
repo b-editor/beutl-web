@@ -33,16 +33,30 @@ export default async function Page(
       }
       if (!emailOrUserName && account.providerId === "github") {
         try {
+          // Workers の fetch は User-Agent を付けないため明示する。
+          // 無いと GitHub は JSON ではなくテキストの 403 を返す。
           const res = await fetch(
             `https://api.github.com/user/${account.accountId}`,
             {
               headers: {
-                Authorization: `Bearer ${process.env.GITHUB_PAT}`,
+                Accept: "application/vnd.github+json",
+                "User-Agent": "beutl-web",
+                ...(process.env.GITHUB_PAT
+                  ? { Authorization: `Bearer ${process.env.GITHUB_PAT}` }
+                  : {}),
               },
             },
           );
 
-          emailOrUserName = (await res.json()).login;
+          if (res.ok) {
+            emailOrUserName = (await res.json()).login;
+          } else {
+            console.error(
+              "Failed to fetch GitHub username",
+              res.status,
+              (await res.text()).slice(0, 200),
+            );
+          }
         } catch (err) {
           console.error("Failed to fetch GitHub username", err);
         }
