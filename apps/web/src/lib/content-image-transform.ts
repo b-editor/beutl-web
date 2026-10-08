@@ -3,6 +3,7 @@ import { contentEntityTag } from "./content-cache";
 import { MAX_CACHED_IMAGE_BYTES } from "./image-content-cache";
 import { CONTENT_IMAGE_VARIANTS, type ContentImageVariant } from "./content-image";
 import { freeImageTransformsEnabled } from "./image-transform-policy";
+import { withImageTransformQuota } from "./image-transform-quota";
 
 const TRANSFORMABLE_TYPES = new Set([
   "image/jpeg", "image/png", "image/webp", "image/avif",
@@ -42,20 +43,24 @@ export function getContentImageVariant(request: Request, file: {
     key,
     etag,
     async transform(source: Response): Promise<Uint8Array<ArrayBuffer> | null> {
-      const input = source.clone();
       try {
-        const result = await images.input(input.body!)
-          .transform({ ...CONTENT_IMAGE_VARIANTS[name as ContentImageVariant], fit: "scale-down" })
-          .output({ format: "image/webp", quality: 85 });
-        const response = result.response();
-        if (!response.ok || !response.body) return null;
-        return await boundedImageBytes(response.body);
+        return await withImageTransformQuota(images, async () => {
+          const input = source.clone();
+          try {
+            const result = await images.input(input.body!)
+              .transform({ ...CONTENT_IMAGE_VARIANTS[name as ContentImageVariant], fit: "scale-down" })
+              .output({ format: "image/webp", quality: 85 });
+            const response = result.response();
+            if (!response.ok || !response.body) return null;
+            return await boundedImageBytes(response.body);
+          } finally {
+            // Do not wait for cancellation of a tee while the fallback is unread.
+            void input.body?.cancel().catch(() => {});
+          }
+        });
       } catch (error) {
         console.error("Failed to transform a content image", error);
         return null;
-      } finally {
-        // Do not wait for cancellation of a tee while the fallback is unread.
-        void input.body?.cancel().catch(() => {});
       }
     },
   };

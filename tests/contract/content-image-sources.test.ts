@@ -28,4 +28,12 @@ describe("stored image preview URLs", () => {
     expect(preview.src).toBe(`${src}?image=preview-1024`);
     expect(preview.srcSet).toBe(`${src}?image=preview-1024 1x, ${src}?image=preview-2048 2x`);
   });
+
+  it("preserves natural dimensions when a high density rendition is capped or falls back", () => {
+    const preview = contentImageSources("/api/contents/small-or-fallback", "preview", { intrinsicSizing: true });
+    expect(preview.src).toBe("/api/contents/small-or-fallback?image=preview-2048");
+    // A 1200px response labeled 2x would become 600 CSS pixels. Natural-size
+    // viewers select the large source without making a density assertion.
+    expect(preview.srcSet).toBeUndefined();
+  });
 });

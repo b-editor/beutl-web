@@ -173,13 +173,15 @@ for setup and billing.
 
 ### Free-only activation
 
-On 2026-10-09, the operator confirmed that this deployment uses **Images Free**.
+The operator confirmed that this deployment uses **Images Free**.
 The checked-in `apps/web/wrangler.jsonc` therefore sets
 `BEUTL_IMAGE_FREE_TRANSFORMS_ENABLED=true`, enabling transformations on the
 next deployment. The application still disables transformations whenever the
-variable is absent or not exactly `true`: both the custom content route and
-OpenNext's `/_next/image` receive no active Images binding, and original image
-delivery and the byte cache remain available.
+variable is absent or not exactly `true`. When enabled, only GET requests to
+the content route receive the Images binding. OpenNext's generic `/_next/image`
+optimizer always receives no binding, so arbitrary Next.js width and quality
+combinations cannot consume the shared quota. Original image delivery and the
+byte cache remain available.
 
 To disable transformations, set the variable to `false` in the Wrangler
 configuration. This flag is now managed in source and applied by deployment;
@@ -192,10 +194,15 @@ Paid or legacy paid image resizing when the budget for transformations is zero.
 The variable records the operator's confirmation; it cannot switch plans or
 enforce a free limit on a Paid account.
 
-As of 2026-10-09, Images Free includes 5,000 unique transformations per calendar
+Images Free includes 5,000 unique transformations per calendar
 month. The same source and parameters count once within that month. Once the
 free limit is reached, new transformations fail with error `9422`; the content
-route catches the failure and serves the original image. Already cached
+route catches the failure and serves the original image. The Worker isolate
+then pauses transformations across files and presets for five minutes, without
+repeated calls or error logs. The next request after that interval permits one
+recovery probe; concurrent requests use originals until it finishes. A quota
+failure pauses for another five minutes, and other recovery failures delay the
+next probe for 30 seconds. Cold isolates probe independently. Already cached
 variants remain available after the file's live access check. Images Free
 does not charge for overages. On Images Paid, the first 5,000 are included and
 the excess costs $0.50 per 1,000 unique transformations. See
@@ -213,7 +220,10 @@ Image elements request `/api/contents/<fileId>?image=<preset>`. Eight fixed
 presets are accepted: `icon-64`, `icon-128`, `screenshot-320`,
 `screenshot-640`, `thumbnail-320`, `thumbnail-640`, `preview-1024`, and
 `preview-2048`. They produce WebP at quality 85, preserve the aspect ratio,
-and do not upscale. The browser selects a 1x or 2x version through `srcset`.
+and do not upscale. Consumers with a fixed CSS size select a 1x or 2x version
+through `srcset`. The storage preview dialog requests the largest preview
+preset without a density descriptor, preserving intrinsic dimensions when
+the source is smaller than that preset or a transformation falls back.
 The first screenshot loads immediately; the remaining screenshots and list
 icons use lazy loading. Storage cards and the details pane use thumbnails;
 the preview dialog and AI generation/edit results use previews. AI history

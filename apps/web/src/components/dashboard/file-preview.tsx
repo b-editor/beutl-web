@@ -167,7 +167,7 @@ function PreviewBody({ file, lang }: { file: PreviewFile; lang: string }) {
       return (
         <>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img key={file.url} {...contentImageSources(file.url, "preview")} alt={file.name} onLoad={() => setLoadedUrl(file.url)} {...media}
+          <img key={file.url} {...contentImageSources(file.url, "preview", { intrinsicSizing: true })} alt={file.name} onLoad={() => setLoadedUrl(file.url)} {...media}
             decoding="async"
             className={cn(media.className, "max-h-full max-w-full object-contain")} />
           {!loaded && <MediaLoading lang={lang} />}

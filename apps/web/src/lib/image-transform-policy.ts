@@ -5,3 +5,8 @@ export function freeImageTransformsEnabled(env: {
 }): boolean {
   return env.BEUTL_IMAGE_FREE_TRANSFORMS_ENABLED === "true";
 }
+
+/** Expose the binding only to the content route with bounded presets. */
+export function isContentImageTransformRequest(request: Request): boolean {
+  return request.method === "GET" && /^\/api\/contents\/[a-z\d_-]+\/?$/iu.test(new URL(request.url).pathname);
+}

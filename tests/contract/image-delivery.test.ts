@@ -94,6 +94,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await Promise.all(pending);
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -114,6 +115,7 @@ describe("image delivery", () => {
 
   it("serves the authenticated original when the Images Free quota is exhausted", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     mocks.findFileForContentAccess.mockResolvedValue({ ...file(), visibility: "PRIVATE" });
     mocks.getSession.mockResolvedValue({ user: { id: "owner" } });
     mocks.output.mockRejectedValue(new Error("ERROR 9422: Image transformation usage limit reached"));
@@ -129,6 +131,100 @@ describe("image delivery", () => {
     mocks.getSession.mockResolvedValue({ user: { id: "other-user" } });
     expect((await request(undefined, "?image=preview-1024")).status).toBe(404);
     expect(mocks.input).toHaveBeenCalledTimes(1);
+  });
+
+  it("backs off quota failures across sources and presets, then recovers after five minutes", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-09T00:00:00Z"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.output.mockRejectedValue(new Error("IMAGES_TRANSFORM_ERROR: ERROR 9422: usage limit reached"));
+    expect(new Uint8Array(await (await request(undefined, "?image=preview-1024")).arrayBuffer())).toEqual(BYTES);
+    await Promise.all(pending);
+    expect(new Uint8Array(await (await request(undefined, "?image=thumbnail-320")).arrayBuffer())).toEqual(BYTES);
+    mocks.findFileForContentAccess.mockResolvedValue({ ...file(), objectKey: "objects/other-image", sha256: "b".repeat(64) });
+    vi.setSystemTime(new Date("2026-10-09T00:04:59Z"));
+    expect(new Uint8Array(await (await request(undefined, "?image=icon-64")).arrayBuffer())).toEqual(BYTES);
+    expect(mocks.output).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(new Date("2026-10-09T00:05:00Z"));
+    mocks.output.mockImplementation(async () => ({ response: () => new Response(WEBP_BYTES) }));
+    const recovered = await request(undefined, "?image=preview-2048");
+    expect(recovered.headers.get("Content-Type")).toBe("image/webp");
+    expect(new Uint8Array(await recovered.arrayBuffer())).toEqual(WEBP_BYTES);
+    expect(mocks.output).toHaveBeenCalledTimes(2);
+    await Promise.all(pending);
+    expect(new Uint8Array(await (await request(undefined, "?image=thumbnail-640")).arrayBuffer())).toEqual(WEBP_BYTES);
+    expect(mocks.output).toHaveBeenCalledTimes(3);
+  });
+
+  it("permits only one recovery probe while concurrent previews use originals", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-09T00:00:00Z"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.output.mockRejectedValue({ code: 9422 });
+    await (await request(undefined, "?image=preview-1024")).arrayBuffer();
+    await Promise.all(pending);
+    vi.setSystemTime(new Date("2026-10-09T00:05:00Z"));
+    let complete!: (result: { response(): Response }) => void;
+    mocks.output.mockImplementation(() => new Promise((resolve) => { complete = resolve; }));
+    const probe = request(undefined, "?image=preview-1024");
+    await vi.waitFor(() => expect(mocks.output).toHaveBeenCalledTimes(2));
+    const concurrent = await request(undefined, "?image=thumbnail-320");
+    expect(new Uint8Array(await concurrent.arrayBuffer())).toEqual(BYTES);
+    expect(mocks.output).toHaveBeenCalledTimes(2);
+    complete({ response: () => new Response(WEBP_BYTES) });
+    expect(new Uint8Array(await (await probe).arrayBuffer())).toEqual(WEBP_BYTES);
+  });
+
+  it("keeps serving cached variants during the quota backoff", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await (await request(undefined, "?image=icon-64")).arrayBuffer();
+    await Promise.all(pending);
+    mocks.output.mockRejectedValue(new Error("ERROR 9422: usage limit reached"));
+    await (await request(undefined, "?image=icon-128")).arrayBuffer();
+    const cached = await request(undefined, "?image=icon-64");
+    expect(new Uint8Array(await cached.arrayBuffer())).toEqual(WEBP_BYTES);
+    expect(cached.headers.get("Content-Type")).toBe("image/webp");
+    expect(mocks.output).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { code: "9422" },
+    new Error("binding request failed", { cause: { code: 9422 } }),
+  ])("recognizes structured and wrapped quota errors", async (error) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.output.mockRejectedValue(error);
+    await (await request(undefined, "?image=preview-1024")).arrayBuffer();
+    await Promise.all(pending);
+    await (await request(undefined, "?image=thumbnail-320")).arrayBuffer();
+    expect(mocks.output).toHaveBeenCalledTimes(1);
+  });
+
+  it("renews the pause when a recovery probe still reaches the quota", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-09T00:00:00Z"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.output.mockRejectedValue({ code: 9422 });
+    await (await request(undefined, "?image=preview-1024")).arrayBuffer();
+    await Promise.all(pending);
+    vi.setSystemTime(new Date("2026-10-09T00:05:00Z"));
+    await (await request(undefined, "?image=preview-1024")).arrayBuffer();
+    vi.setSystemTime(new Date("2026-10-09T00:09:59Z"));
+    await (await request(undefined, "?image=thumbnail-320")).arrayBuffer();
+    expect(mocks.output).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not turn invalid-image errors into an account-wide quota pause", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.output.mockRejectedValue(new Error("ERROR 9412: input is not a valid image"));
+    await (await request(undefined, "?image=preview-1024")).arrayBuffer();
+    await Promise.all(pending);
+    await (await request(undefined, "?image=thumbnail-320")).arrayBuffer();
+    expect(mocks.output).toHaveBeenCalledTimes(2);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("delivers and reuses a resized public icon while checking live metadata", async () => {

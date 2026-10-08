@@ -22,7 +22,9 @@ const PRESET_VARIANTS: Record<ContentImagePreset, readonly [ContentImageVariant,
 };
 
 /** Change only a stored image's display URL; uploads and live data previews pass through. */
-export function contentImageSources(src: string, preset: ContentImagePreset) {
+export function contentImageSources(src: string, preset: ContentImagePreset, options?: {
+  intrinsicSizing?: boolean;
+}) {
   if (!src.startsWith("/") && !/^https?:\/\//u.test(src)) return { src };
   const base = new URL(src, "https://beutl.invalid");
   if (!/^\/api\/contents\/[^/]+$/u.test(base.pathname)) return { src };
@@ -35,6 +37,9 @@ export function contentImageSources(src: string, preset: ContentImagePreset) {
       : url.href;
   };
   const [normal, retina] = PRESET_VARIANTS[preset];
+  // Natural-size consumers must not divide a fallback original's dimensions
+  // by a density descriptor. Request the largest preset without a srcset.
+  if (options?.intrinsicSizing) return { src: variantUrl(retina) };
   return {
     src: variantUrl(normal),
     srcSet: `${variantUrl(normal)} 1x, ${variantUrl(retina)} 2x`,
