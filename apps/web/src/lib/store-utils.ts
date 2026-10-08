@@ -2,6 +2,7 @@ import "server-only";
 import { unstable_cache } from "next/cache";
 import { getDb } from "@beutl/db";
 import { contentPath } from "@/lib/content-url";
+import { withOwnPrismaClient } from "@/prisma";
 import { selectPricing, packageTypeWhere } from "@beutl/core";
 import type { PackageTypeFilter } from "@beutl/core";
 import { guessCurrency } from "./currency";
@@ -136,9 +137,14 @@ export type LandingPackage = {
   door would open a database connection for a list that changes on the order of
   weeks. The cache wraps the query alone: an error must not be cached, or one
   blip would blank the section for the whole revalidation window.
+
+  Once stale, the entry is served as is and recomputed after the page has
+  answered, so the query brings its own client rather than the request's,
+  which closes with the response.
 */
 const cachedLatestPublishedPackages = unstable_cache(
-  (take: number) => retrieveLatestPublishedPackages({ take }),
+  (take: number) =>
+    withOwnPrismaClient((prisma) => retrieveLatestPublishedPackages({ take, prisma })),
   ["landing-latest-packages"],
   { revalidate: 3600 },
 );
