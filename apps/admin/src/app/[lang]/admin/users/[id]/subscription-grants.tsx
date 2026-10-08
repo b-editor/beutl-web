@@ -41,6 +41,7 @@ function grantPlanLabel(t: Translator, planId: string, tier: string | null) {
 }
 
 const STATUS_VARIANT: Record<SubscriptionGrantStatus, "default" | "secondary" | "outline"> = {
+  scheduled: "secondary",
   active: "default",
   expired: "secondary",
   revoked: "outline",
@@ -142,7 +143,7 @@ export async function SubscriptionGrantSection({
                       {granterLabels.get(grant.grantedByUserId) ?? grant.grantedByUserId}
                     </TableCell>
                     <TableCell className="text-right">
-                      {status === "active" && (
+                      {(status === "active" || status === "scheduled") && (
                         <RevokeSubscriptionGrantButton
                           lang={lang}
                           userId={userId}

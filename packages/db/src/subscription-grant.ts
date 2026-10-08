@@ -42,21 +42,41 @@ export async function findActiveSubscriptionGrant({
   });
 }
 
+// 新しい順の履歴。上限で切るのは終わった付与だけで、まだ終わっていない付与 (開始前を
+// 含む) は上限を超えても必ず含める: 管理画面の取り消しはこの一覧から出るので、古い
+// 付与が押し出されると取り消せず、作り直しも grant-exists で断られてしまう。
 export async function listSubscriptionGrantsByUserId({
   userId,
   limit = SUBSCRIPTION_GRANT_LIST_LIMIT,
+  now = new Date(),
   prisma,
 }: {
   userId: string;
   limit?: number;
+  now?: Date;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? (await getDb());
-  return await db.subscriptionGrant.findMany({
+  const orderBy = [{ createdAt: "desc" as const }, { id: "desc" as const }];
+  const recent = await db.subscriptionGrant.findMany({
     where: { userId },
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    orderBy,
     take: limit,
   });
+  const open = await db.subscriptionGrant.findMany({
+    where: {
+      userId,
+      revokedAt: null,
+      OR: [{ endsAt: null }, { endsAt: { gt: now } }],
+    },
+    orderBy,
+  });
+  const byId = new Map([...recent, ...open].map((grant) => [grant.id, grant]));
+  return [...byId.values()].sort(
+    (left, right) =>
+      right.createdAt.getTime() - left.createdAt.getTime() ||
+      (right.id < left.id ? -1 : right.id > left.id ? 1 : 0),
+  );
 }
 
 type StoredSubscription = NonNullable<Awaited<ReturnType<typeof getSubscription>>>;
@@ -135,7 +155,8 @@ export type CreateSubscriptionGrantResult =
 // 付与を作る。呼び出し側のトランザクションの中で呼ぶ (確認と作成の間に別の付与や
 // 契約が割り込まないよう、CockroachDB の SERIALIZABLE に任せる)。
 //
-// 同じプランで効いている付与は 1 つまで。延長や変更は取り消してから作り直す。
+// 同じプランで終わっていない付与 (開始前を含む) は 1 つまで。延長や変更は取り消して
+// から作り直す。
 // Stripe の契約が続いている人には与えない: 付与は Stripe の契約が権利を与えて
 // いない間だけ効くので、支払い中の人には何も起きず、支払いに失敗している人には
 // 請求画面が付与だけを見せて、直すべき契約を隠してしまう。
@@ -170,11 +191,16 @@ export async function createSubscriptionGrant({
     return { status: "rejected", reason: "user-not-found" };
   }
 
-  const existing = await findActiveSubscriptionGrant({
-    userId,
-    planId: plan.id,
-    now: startsAt,
-    prisma,
+  // 開始前の付与も数える。新しい付与の開始時点で終わっていない付与は、いずれ
+  // 期間が重なる。
+  const existing = await prisma.subscriptionGrant.findFirst({
+    where: {
+      userId,
+      planId: plan.id,
+      revokedAt: null,
+      OR: [{ endsAt: null }, { endsAt: { gt: startsAt } }],
+    },
+    select: { id: true },
   });
   if (existing) return { status: "rejected", reason: "grant-exists" };
   const subscription = await getSubscription({

@@ -133,6 +133,7 @@
       "grantedBy": "Granted by",
       "noEnd": "No end date",
       "statuses": {
+        "scheduled": "Scheduled",
         "active": "Active",
         "expired": "Expired",
         "revoked": "Revoked"

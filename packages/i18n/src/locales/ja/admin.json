@@ -133,6 +133,7 @@
       "grantedBy": "付与者",
       "noEnd": "無期限",
       "statuses": {
+        "scheduled": "開始前",
         "active": "有効",
         "expired": "期限切れ",
         "revoked": "取り消し済み"

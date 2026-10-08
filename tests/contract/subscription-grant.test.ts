@@ -4,12 +4,14 @@ import {
   isActiveSubscription,
   STORAGE_FREE_QUOTA_BYTES,
   subscriptionGrantPeriodAt,
+  subscriptionGrantStatus,
   subscriptionStateOfGrant,
 } from "@beutl/core";
 import {
   consumeUsage,
   createSubscriptionGrant,
   getEntitlementSubscription,
+  listSubscriptionGrantsByUserId,
   resolveStorageQuota,
   revokeSubscriptionGrant,
   setDbProvider,
@@ -88,6 +90,19 @@ describe("subscription grant periods", () => {
         new Date("2026-05-10T00:00:00.000Z"),
       ),
     ).toBeNull();
+  });
+
+  it("reports a grant that has not started as scheduled, not active", () => {
+    const term = grant("2026-05-01T00:00:00.000Z", "2026-06-01T00:00:00.000Z");
+    expect(subscriptionGrantStatus(term, new Date("2026-04-30T00:00:00.000Z"))).toBe(
+      "scheduled",
+    );
+    expect(subscriptionGrantStatus(term, new Date("2026-05-01T00:00:00.000Z"))).toBe(
+      "active",
+    );
+    expect(subscriptionGrantStatus(term, new Date("2026-06-01T00:00:00.000Z"))).toBe(
+      "expired",
+    );
   });
 
   it("entitles through the shared rule without a Stripe Price", () => {
@@ -313,6 +328,59 @@ describe("subscription grants", () => {
       ),
     ).resolves.toBeNull();
     await expect(grant()).resolves.toMatchObject({ status: "created" });
+  });
+
+  it("counts a grant that has not started yet as one in effect", async () => {
+    await grant({
+      startsAt: new Date(Date.now() + 10 * DAY),
+      endsAt: new Date(Date.now() + 40 * DAY),
+    });
+    // Not entitling yet, but a new grant would overlap it.
+    await expect(
+      getEntitlementSubscription({ userId: USER_ID, planId: "pro" }),
+    ).resolves.toBeNull();
+    await expect(grant()).resolves.toEqual({
+      status: "rejected",
+      reason: "grant-exists",
+    });
+  });
+
+  it("lists every grant still in effect beyond the history limit", async () => {
+    const at = (days: number) => new Date(Date.now() + days * DAY);
+    const row = (id: string, createdAt: Date, overrides: Record<string, unknown>) => ({
+      id,
+      userId: USER_ID,
+      planId: "storage",
+      tier: "100gb",
+      startsAt: createdAt,
+      endsAt: null,
+      reason: "r",
+      grantedByUserId: ADMIN_ID,
+      revokedAt: null,
+      revokedByUserId: null,
+      createdAt,
+      updatedAt: createdAt,
+      ...overrides,
+    });
+    // The oldest grant is still in effect; newer ones were granted and revoked.
+    memory.state.subscriptionGrants.set(
+      "old-pro",
+      row("old-pro", at(-30), { planId: "pro", tier: null }),
+    );
+    for (const day of [-3, -2, -1]) {
+      const id = `revoked-${day}`;
+      memory.state.subscriptionGrants.set(
+        id,
+        row(id, at(day), { revokedAt: at(day), revokedByUserId: ADMIN_ID }),
+      );
+    }
+
+    const grants = await listSubscriptionGrantsByUserId({ userId: USER_ID, limit: 2 });
+    expect(grants.map((item) => item.id)).toEqual([
+      "revoked--1",
+      "revoked--2",
+      "old-pro",
+    ]);
   });
 
   it("refuses to revoke another user's grant", async () => {

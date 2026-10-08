@@ -20,7 +20,8 @@ export type SubscriptionGrantTerm = {
   revokedAt: Date | null;
 };
 
-export type SubscriptionGrantStatus = "active" | "expired" | "revoked";
+// scheduled は開始前。管理画面の付与は今から始まるが、DB の API は開始日を受け取る。
+export type SubscriptionGrantStatus = "scheduled" | "active" | "expired" | "revoked";
 
 // 月を足す。足した先の月にその日が無ければ月末に寄せ、時刻はそのまま保つ。毎回
 // 元の日付から数えるので、1/31 → 2/28 → 3/31 と元の日に戻る (Stripe の月額と同じ)。
@@ -49,6 +50,7 @@ export function subscriptionGrantStatus(
   if (grant.endsAt !== null && grant.endsAt.getTime() <= now.getTime()) {
     return "expired";
   }
+  if (grant.startsAt.getTime() > now.getTime()) return "scheduled";
   return "active";
 }
 
@@ -60,7 +62,6 @@ export function subscriptionGrantPeriodAt(
   now: Date = new Date(),
 ): { start: Date; end: Date } | null {
   if (subscriptionGrantStatus(grant, now) !== "active") return null;
-  if (grant.startsAt.getTime() > now.getTime()) return null;
   let months =
     (now.getUTCFullYear() - grant.startsAt.getUTCFullYear()) * 12 +
     (now.getUTCMonth() - grant.startsAt.getUTCMonth());
