@@ -19,6 +19,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ToggleGroup, ToggleGroupItem } from "@beutl/ui/ui/toggle-group";
 import { RepositoryActions, RepositoryContextMenu, RepositoryDate, RepositoryGridCard, RepositoryVisibility, repositoryPageHref, type RepositoryHandlers } from "./repository-items";
 import Link from "next/link";
+import { actionFailureKey } from "@/lib/action-error";
 
 type ViewMode = "grid" | "list";
 type SortField = "name" | "createdAt";
@@ -62,7 +63,7 @@ export function RepositoryManager({ lang, userId, initialResult }: {
   const [deleteError, setDeleteError] = useState<string>();
   const [connecting, setConnecting] = useState<GitRepositorySummary>();
   const [pending, startTransition] = useTransition();
-  const failure = () => t("dashboard:repositories.errors.requestFailed");
+  const failure = (error?: unknown) => t(actionFailureKey(error, "dashboard:repositories.errors.requestFailed"));
   const create = () => setEditing({ creationId: crypto.randomUUID() });
   const refresh = () => startTransition(async () => {
     setNotice(undefined);
@@ -71,9 +72,9 @@ export function RepositoryManager({ lang, userId, initialResult }: {
       setAvailable(result.success);
       if (result.success) { setRepositories(result.data ?? []); setError(undefined); }
       else setError(result.message ?? failure());
-    } catch {
+    } catch (error) {
       // The action could not be reached; the server logs its own failures.
-      setAvailable(false); setError(failure());
+      setAvailable(false); setError(failure(error));
     }
   });
   const copy = async (value: string) => {
@@ -93,9 +94,9 @@ export function RepositoryManager({ lang, userId, initialResult }: {
         setRepositories((rows) => rows.filter((row) => row.id !== repository.id));
         setDeleting(undefined); setError(undefined);
         setNotice(t("dashboard:repositories.deleted"));
-      } catch {
+      } catch (error) {
         // The action could not be reached; the server logs its own failures.
-        setDeleteError(failure());
+        setDeleteError(failure(error));
       }
     });
   };

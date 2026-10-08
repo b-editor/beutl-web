@@ -32,5 +32,6 @@
   "somethingWentWrong": "Something went wrong",
   "somethingWentWrongDescription": "An unexpected error occurred. Please try again.",
   "tryAgain": "Try again",
+  "pageOutdated": "This page is out of date. Reload the page and try again.",
   "openMenu": "Open menu"
 }
