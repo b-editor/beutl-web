@@ -29,6 +29,9 @@ export type StorageEntitlementResponse = {
   // cancel_at を考慮した実効の終了。
   currentPeriodEnd: string | null;
   cancelAtPeriodEnd: boolean;
+  // 有料枠が Stripe の契約ではなく管理者の付与から来ているとき。Stripe で管理・解約
+  // するものは無い。endsAt が null なら取り消すまで続く。
+  grant: { endsAt: string | null } | null;
 };
 
 export async function getStorageEntitlement(
@@ -69,5 +72,9 @@ export async function getStorageEntitlement(
       : null,
     currentPeriodEnd: effectiveEnd ? effectiveEnd.toISOString() : null,
     cancelAtPeriodEnd: subscription?.cancelAtPeriodEnd ?? false,
+    grant:
+      subscription?.source === "grant"
+        ? { endsAt: subscription.grant.endsAt?.toISOString() ?? null }
+        : null,
   };
 }

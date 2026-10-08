@@ -39,6 +39,7 @@ export * from "./storage-upload";
 export * from "./storage-multipart-cleanup";
 export * from "./storage-quota";
 export * from "./subscription";
+export * from "./subscription-grant";
 export * from "./subscription-checkout-attempt";
 export * from "./subscription-observation";
 export * from "./top-up-checkout-attempt";

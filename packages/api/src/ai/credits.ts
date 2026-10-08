@@ -6,7 +6,7 @@ import {
   findAccountDeletionIntentByUserId,
   getAiJobById,
   getAiJobByIdempotency,
-  getSubscription,
+  getEntitlementSubscription,
   refundUsage,
   updateActiveAiJobToFailed,
   failAiJobOwnedByFinalizer,
@@ -276,7 +276,7 @@ export async function createReservedAiJob({
       if (await findAccountDeletionIntentByUserId({ userId, prisma })) {
         return { outcome: "accountDeletionAuthorized" as const };
       }
-      const subscription = await getSubscription({ userId, planId: PRO_PLAN.id, prisma });
+      const subscription = await getEntitlementSubscription({ userId, planId: PRO_PLAN.id, prisma });
       if (!subscription || !isActiveProSubscription(subscription)) {
         return { outcome: "planRequired" as const };
       }
@@ -488,7 +488,7 @@ export async function failAiJobAndRefundUsage({
   expectedProviderJobId?: string | null;
 }) {
   await startAiJobTransaction(async (prisma) => {
-    const subscription = await getSubscription({ userId, planId: PRO_PLAN.id, prisma });
+    const subscription = await getEntitlementSubscription({ userId, planId: PRO_PLAN.id, prisma });
     const usagePeriod = subscription
       ? toUsagePeriod(subscription)
       : { start: null, end: null };
@@ -560,7 +560,7 @@ export async function failFinalizingAiJobAndRefundUsage({
   error: string;
 }) {
   await startAiJobTransaction(async (prisma) => {
-    const subscription = await getSubscription({ userId, planId: PRO_PLAN.id, prisma });
+    const subscription = await getEntitlementSubscription({ userId, planId: PRO_PLAN.id, prisma });
     const usagePeriod = subscription
       ? toUsagePeriod(subscription)
       : { start: null, end: null };
@@ -590,7 +590,7 @@ export async function failPolledAiJobAndRefundUsage({
   error: string;
 }) {
   await startAiJobTransaction(async (prisma) => {
-    const subscription = await getSubscription({ userId, planId: PRO_PLAN.id, prisma });
+    const subscription = await getEntitlementSubscription({ userId, planId: PRO_PLAN.id, prisma });
     const usagePeriod = subscription
       ? toUsagePeriod(subscription)
       : { start: null, end: null };

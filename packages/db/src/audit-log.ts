@@ -67,6 +67,8 @@ export const auditLogActions = {
     releasePublished: "admin.releasePublished",
     releaseUnpublished: "admin.releaseUnpublished",
     userSessionsRevoked: "admin.userSessionsRevoked",
+    subscriptionGranted: "admin.subscriptionGranted",
+    subscriptionGrantRevoked: "admin.subscriptionGrantRevoked",
   },
 } as const;
 

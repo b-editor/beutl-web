@@ -85,6 +85,20 @@ export type {
   SubscriptionPlanId,
   SubscriptionState,
 } from "./subscription-plans";
+export {
+  SUBSCRIPTION_GRANT_MAX_YEARS,
+  SUBSCRIPTION_GRANT_MONTH_OPTIONS,
+  SUBSCRIPTION_GRANT_REASON_MAX_LENGTH,
+  addUtcMonths,
+  subscriptionGrantPeriodAt,
+  subscriptionGrantStatus,
+  subscriptionStateOfGrant,
+} from "./subscription-grant";
+export type {
+  SubscriptionGrantState,
+  SubscriptionGrantStatus,
+  SubscriptionGrantTerm,
+} from "./subscription-grant";
 export type { ActionResult } from "./action-result";
 export {
   isAllowedContinueUrlHost,

@@ -509,6 +509,7 @@ describe("v3 AI endpoints contract", () => {
         currentPeriodStart: expect.any(String),
         currentPeriodEnd: expect.any(String),
         cancelAtPeriodEnd: false,
+        grant: null,
         canUseAi: true,
         balance: {
           monthlyUsage: {
@@ -593,6 +594,7 @@ describe("v3 AI endpoints contract", () => {
         currentPeriodStart: null,
         currentPeriodEnd: null,
         cancelAtPeriodEnd: false,
+        grant: null,
         canUseAi: false,
         balance: {
           monthlyUsage: {

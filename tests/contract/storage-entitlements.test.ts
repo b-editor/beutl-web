@@ -66,6 +66,7 @@ describe("storage entitlement for the desktop API", () => {
       currentPeriodStart: null,
       currentPeriodEnd: null,
       cancelAtPeriodEnd: false,
+      grant: null,
     });
   });
 

@@ -182,6 +182,52 @@ type Subscription = {
   updatedAt: Date;
 };
 
+type SubscriptionGrant = {
+  id: string;
+  userId: string;
+  planId: string;
+  tier: string | null;
+  startsAt: Date;
+  endsAt: Date | null;
+  reason: string;
+  grantedByUserId: string;
+  revokedAt: Date | null;
+  revokedByUserId: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type SubscriptionGrantWhere = {
+  id?: string;
+  userId?: string;
+  planId?: string;
+  revokedAt?: null;
+  startsAt?: { lte?: Date };
+  OR?: Array<{ endsAt?: null | { gt?: Date } }>;
+};
+
+function matchesSubscriptionGrantWhere(
+  grant: SubscriptionGrant,
+  where: SubscriptionGrantWhere | undefined,
+): boolean {
+  return (
+    (where?.id === undefined || grant.id === where.id) &&
+    (where?.userId === undefined || grant.userId === where.userId) &&
+    (where?.planId === undefined || grant.planId === where.planId) &&
+    (where?.revokedAt === undefined || grant.revokedAt === null) &&
+    (where?.startsAt?.lte === undefined ||
+      grant.startsAt.getTime() <= where.startsAt.lte.getTime()) &&
+    (where?.OR === undefined ||
+      where.OR.some((clause) =>
+        clause.endsAt === null
+          ? grant.endsAt === null
+          : clause.endsAt?.gt !== undefined &&
+            grant.endsAt !== null &&
+            grant.endsAt.getTime() > clause.endsAt.gt.getTime(),
+      ))
+  );
+}
+
 type SubscriptionCheckoutAttempt = {
   userId: string;
   planId: string;
@@ -378,6 +424,10 @@ export type InMemoryPrismaState = {
   aiRemoteJobCleanups: Map<string, AiRemoteJobCleanup>;
   // Keyed by `${userId}:${planId}`.
   subscriptions: Map<string, Subscription>;
+  // Keyed by id.
+  subscriptionGrants: Map<string, SubscriptionGrant>;
+  // Only what existsUserById reads. Tests that need a user to exist add it.
+  users: Set<string>;
   subscriptionCheckoutAttempts: Map<string, SubscriptionCheckoutAttempt>;
   topUpCheckoutAttempts: Map<string, TopUpCheckoutAttempt>;
   topUpDuplicateRefundAttempts: Map<string, TopUpDuplicateRefundAttempt>;
@@ -778,6 +828,8 @@ export function createInMemoryPrisma() {
     accountDeletionIntents: new Map(),
     aiRemoteJobCleanups: new Map(),
     subscriptions: new Map(),
+    subscriptionGrants: new Map(),
+    users: new Set(),
     subscriptionCheckoutAttempts: new Map(),
     topUpCheckoutAttempts: new Map(),
     topUpDuplicateRefundAttempts: new Map(),
@@ -1263,6 +1315,10 @@ export function createInMemoryPrisma() {
     subscriptions: new Map(
       [...state.subscriptions].map(([k, v]) => [k, { ...v }]),
     ),
+    subscriptionGrants: new Map(
+      [...state.subscriptionGrants].map(([k, v]) => [k, { ...v }]),
+    ),
+    users: new Set(state.users),
     subscriptionCheckoutAttempts: new Map(
       [...state.subscriptionCheckoutAttempts].map(([k, v]) => [k, { ...v }]),
     ),
@@ -1293,6 +1349,8 @@ export function createInMemoryPrisma() {
 
   const prisma = {
     user: {
+      findFirst: async ({ where }: { where: { id: string } }) =>
+        state.users.has(where.id) ? { id: where.id } : null,
       update: async ({ where }: { where: { id: string } }) => {
         const storageRevision = (state.storageRevisions.get(where.id) ?? 0) + 1;
         state.storageRevisions.set(where.id, storageRevision);
@@ -2416,6 +2474,71 @@ export function createInMemoryPrisma() {
     subscriptionEntitlementHold: {
       findFirst: async () => null,
       findMany: async () => [],
+    },
+    subscriptionGrant: {
+      findFirst: async ({ where }: { where?: SubscriptionGrantWhere }) => {
+        const grant = [...state.subscriptionGrants.values()]
+          .filter((row) => matchesSubscriptionGrantWhere(row, where))
+          .sort((left, right) =>
+            right.createdAt.getTime() - left.createdAt.getTime() ||
+            compareStrings(right.id, left.id),
+          )[0];
+        return grant ? { ...grant } : null;
+      },
+      findMany: async ({
+        where,
+        take,
+      }: {
+        where?: SubscriptionGrantWhere;
+        take?: number;
+      }) =>
+        [...state.subscriptionGrants.values()]
+          .filter((row) => matchesSubscriptionGrantWhere(row, where))
+          .sort((left, right) =>
+            right.createdAt.getTime() - left.createdAt.getTime() ||
+            compareStrings(right.id, left.id),
+          )
+          .slice(0, take)
+          .map((row) => ({ ...row })),
+      create: async ({
+        data,
+      }: {
+        data: Omit<
+          SubscriptionGrant,
+          "id" | "revokedAt" | "revokedByUserId" | "createdAt" | "updatedAt"
+        >;
+      }) => {
+        const timestamp = now();
+        const row: SubscriptionGrant = {
+          ...data,
+          id: crypto.randomUUID(),
+          revokedAt: null,
+          revokedByUserId: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+        state.subscriptionGrants.set(row.id, row);
+        return { ...row };
+      },
+      updateMany: async ({
+        where,
+        data,
+      }: {
+        where: SubscriptionGrantWhere;
+        data: Partial<SubscriptionGrant>;
+      }) => {
+        let count = 0;
+        for (const row of state.subscriptionGrants.values()) {
+          if (!matchesSubscriptionGrantWhere(row, where)) continue;
+          state.subscriptionGrants.set(row.id, {
+            ...row,
+            ...data,
+            updatedAt: now(),
+          });
+          count += 1;
+        }
+        return { count };
+      },
     },
     subscriptionCheckoutAttempt: {
       findUnique: async ({

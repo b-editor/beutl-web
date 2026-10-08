@@ -86,6 +86,9 @@ export type SubscriptionState = {
   currentPeriodEnd: Date | null;
   cancelAt: Date | null;
   entitlementHeld?: boolean;
+  // 管理者の付与 (SubscriptionGrant) から組んだ状態なら "grant"。Stripe の行には
+  // 無く、無ければ Stripe の契約として扱う。
+  source?: "stripe" | "grant";
 };
 
 // 期間末より前に cancel_at が指定されていればそちらが実効の終了。
@@ -104,6 +107,7 @@ export function effectiveSubscriptionEnd(
 
 // 契約が今この瞬間に権利を与えているか。どのプランでも同じ規則:
 // active で、返金・異議の hold が無く、Price が既知 (offer あり) で、実効の終了が未来。
+// 管理者の付与は Price を持たないので、offer の代わりに付与であることで足りる。
 export function isActiveSubscription(
   subscription: SubscriptionState | null,
   planId: SubscriptionPlanId,
@@ -115,8 +119,9 @@ export function isActiveSubscription(
     subscription.status === "active" &&
     subscription.entitlementHeld !== true &&
     subscription.planId === planId &&
-    typeof subscription.billingOfferId === "string" &&
-    subscription.billingOfferId.length > 0 &&
+    (subscription.source === "grant" ||
+      (typeof subscription.billingOfferId === "string" &&
+        subscription.billingOfferId.length > 0)) &&
     effectiveEnd !== null &&
     effectiveEnd.getTime() > now.getTime()
   );

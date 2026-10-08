@@ -43,7 +43,7 @@ import {
   findStripeCustomerOwnershipByStripeId,
   findTopUpCheckoutAttemptBySessionId,
   getOrCreateTopUpCheckoutAttempt,
-  getSubscription,
+  getEntitlementSubscription,
   releaseTopUpCheckoutCreation,
   requireTopUpRefund,
 } from "@beutl/db";
@@ -57,8 +57,13 @@ function expandableId(
 }
 
 
+// 追加クレジットは Pro の権利がある間だけ使えるので、購入もそれを条件にする。
+// 管理者の付与で Pro を使っている人も買える。
 async function hasActiveProSubscription(userId: string): Promise<boolean> {
-  const subscription = await getSubscription({ userId, planId: PRO_PLAN.id });
+  const subscription = await getEntitlementSubscription({
+    userId,
+    planId: PRO_PLAN.id,
+  });
   return isActiveProSubscription(subscription);
 }
 

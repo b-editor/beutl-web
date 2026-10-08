@@ -74,6 +74,8 @@ vi.mock("@beutl/db", () => ({
   getOrCreateTopUpCheckoutAttempt: mocks.getOrCreateTopUpCheckoutAttempt,
   getOrCreateSubscriptionCheckoutAttempt: mocks.getOrCreateSubscriptionCheckoutAttempt,
   getSubscription: mocks.getSubscription,
+  // No grants here: the entitlement is whatever Stripe subscription is stored.
+  getEntitlementSubscription: (args: unknown) => mocks.getSubscription(args),
   recordBillingRefundCancellation: mocks.recordBillingRefundCancellation,
   releaseTopUpCheckoutCreation: mocks.releaseTopUpCheckoutCreation,
   scheduleBillingRefundAttempt: mocks.scheduleBillingRefundAttempt,

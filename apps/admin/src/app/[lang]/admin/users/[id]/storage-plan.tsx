@@ -28,12 +28,18 @@ export async function StoragePlanSection({
   ]);
   const used = Number(usedBytes);
   const subscription = quota.subscription;
+  // Stripe の契約が有効でなく、管理者の付与が容量を決めている。
+  const granted = subscription?.source === "grant";
   // The tier the customer subscribed to, whether or not it grants anything
   // right now (past_due, a refund hold); the effective quota below is what is
   // enforced and may have fallen back to free.
   const subscribedTier = isStorageTierId(subscription?.tier) ? subscription!.tier : null;
   const entitled = quota.tier !== null;
-  const periodEnd = subscription ? effectiveSubscriptionEnd(subscription) : null;
+  const periodEnd = granted
+    ? subscription.grant.endsAt
+    : subscription
+      ? effectiveSubscriptionEnd(subscription)
+      : null;
   const usedPercent = Math.min(
     100,
     Math.round((used / quota.quotaBytes) * 100),
@@ -48,7 +54,10 @@ export async function StoragePlanSection({
             ? t(`admin:storage.tiers.${subscribedTier}`)
             : t("admin:storage.free")}
         </Badge>
-        {subscription?.status && (
+        {granted && (
+          <Badge variant="secondary">{t("admin:users.grants.badge")}</Badge>
+        )}
+        {subscription?.status && !granted && (
           <code className="text-xs text-muted-foreground">
             {subscription.status}
           </code>
@@ -86,7 +95,13 @@ export async function StoragePlanSection({
           <dt className="text-muted-foreground">
             {t("admin:storage.subscriptionPeriod")}
           </dt>
-          <dd>{periodEnd ? formatTimestamp(periodEnd, lang) : "-"}</dd>
+          <dd>
+            {periodEnd
+              ? formatTimestamp(periodEnd, lang)
+              : granted
+                ? t("admin:users.grants.noEnd")
+                : "-"}
+          </dd>
         </div>
       </dl>
     </section>

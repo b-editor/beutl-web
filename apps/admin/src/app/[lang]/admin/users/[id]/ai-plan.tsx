@@ -2,7 +2,7 @@ import {
   findCreditAccount,
   findTopUpCheckoutIntervention,
   getDb,
-  getSubscription,
+  getEntitlementSubscription,
   listRecentAiJobsByUserId,
   listRecentCreditTransactionsByUserId,
   usagePeriodsEqual,
@@ -49,7 +49,8 @@ export async function AiPlanSection({
   const [account, subscription, jobs, transactions, settings, intervention] =
     await Promise.all([
       findCreditAccount({ userId, prisma }),
-      getSubscription({ userId, planId: PRO_PLAN.id, prisma }),
+      // 権利を与えている側 (Stripe の契約か管理者の付与)。割当の期間もこれに従う。
+      getEntitlementSubscription({ userId, planId: PRO_PLAN.id, prisma }),
       listRecentAiJobsByUserId({ userId, limit: RECENT_LIMIT, prisma }),
       listRecentCreditTransactionsByUserId({
         userId,
@@ -61,6 +62,7 @@ export async function AiPlanSection({
     ]);
 
   const isActive = isActiveProSubscription(subscription);
+  const granted = subscription?.source === "grant";
   const monthlyUsageLimit = isActive ? settings.getMonthlyUsageLimit() : 0;
   // 保存されたカウンタは請求期間が変わっても即座には戻らず、次に台帳へ書き込む
   // 処理が 0 に直す。適用フォームは同じ期間 (subscription.currentPeriod*) で
@@ -101,7 +103,10 @@ export async function AiPlanSection({
         <Badge variant={isActive ? "default" : "outline"}>
           {t(isActive ? "admin:users.aiPlanActive" : "admin:users.aiPlanNone")}
         </Badge>
-        {subscription?.status && (
+        {granted && (
+          <Badge variant="secondary">{t("admin:users.grants.badge")}</Badge>
+        )}
+        {subscription?.status && !granted && (
           <code className="text-xs text-muted-foreground">
             {subscription.status}
           </code>
@@ -158,9 +163,13 @@ export async function AiPlanSection({
             {t("admin:users.aiSubscriptionPeriod")}
           </dt>
           <dd>
-            {subscription?.currentPeriodEnd
-              ? formatTimestamp(subscription.currentPeriodEnd, lang)
-              : "-"}
+            {granted
+              ? subscription.grant.endsAt
+                ? formatTimestamp(subscription.grant.endsAt, lang)
+                : t("admin:users.grants.noEnd")
+              : subscription?.currentPeriodEnd
+                ? formatTimestamp(subscription.currentPeriodEnd, lang)
+                : "-"}
           </dd>
         </div>
       </dl>
