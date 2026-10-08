@@ -191,8 +191,23 @@ The command appends the session option
 session variable is `create_table_with_schema_locked`) while preserving any
 existing query parameters. It must not be added to the normal runtime or
 upgrade URL, because turning schema locking off globally weakens the intended
-schema-ownership guard. After deployment, verify the explicit relocks (and
-investigate any application table that is still unlocked):
+schema-ownership guard.
+
+Prisma applies every migration with `use_declarative_schema_changer = off`.
+Cockroach's legacy schema changer cannot unlock a table for a single statement,
+so any DDL on a table that an earlier migration left schema-locked fails with
+P3018 / SQLSTATE 57000, even though the same SQL succeeds in a plain `cockroach
+sql` session. `20260917010000_add_storage_cursor_indexes` indexes `File` after
+`20260909010000` relocked it; it keeps its original SQL and checksum, and
+`20260917005000_unlock_storage_cursor_index_tables` /
+`20260917020000_relock_storage_cursor_index_tables` open and restore the locks
+around it. Databases that already applied `20260917010000` receive only those
+two lock repairs from `prisma migrate deploy`; no maintenance window is needed.
+`tests/contract/prisma-migration-chain.test.ts` replays the lock state of the
+chain and fails when a migration runs DDL on a table that is still locked.
+
+After deployment, verify the explicit relocks (and investigate any application
+table that is still unlocked):
 
 ```sql
 SHOW CREATE TABLE "PackageCheckoutResolution";

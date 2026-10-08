@@ -25,6 +25,108 @@ async function readMigrations() {
   );
 }
 
+// Split on top-level `;`, skipping comments, string literals and
+// dollar-quoted bodies (`DO $$ ... $$`).
+function splitStatements(sql: string) {
+  const statements: string[] = [];
+  let current = "";
+  let index = 0;
+  while (index < sql.length) {
+    const rest = sql.slice(index);
+    const comment = /^--[^\n]*/.exec(rest);
+    if (comment) {
+      index += comment[0].length;
+      continue;
+    }
+    const quoted =
+      /^'(?:[^']|'')*'/.exec(rest) ?? /^(\$\w*\$)[\s\S]*?\1/.exec(rest);
+    if (quoted) {
+      current += quoted[0];
+      index += quoted[0].length;
+      continue;
+    }
+    if (sql[index] === ";") {
+      statements.push(current);
+      current = "";
+    } else {
+      current += sql[index];
+    }
+    index += 1;
+  }
+  statements.push(current);
+  return statements
+    .map((statement) => statement.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+// Prisma applies migrations with use_declarative_schema_changer = off, and
+// Cockroach's legacy schema changer rejects DDL on a schema-locked table
+// (57000) instead of unlocking it for the statement. An ALTER TABLE that adds
+// a foreign key also changes the referenced table; a CREATE TABLE with an
+// inline foreign key does not. Replay the lock state of the fresh-chain
+// bootstrap (create_table_with_schema_locked = off) and report every table DDL
+// that would run while its table is still locked.
+function findDdlOnLockedTables(migrations: { name: string; sql: string }[]) {
+  const locked = new Map<string, boolean>();
+  const indexTables = new Map<string, string>();
+  const violations: string[] = [];
+  for (const { name, sql } of migrations) {
+    for (const statement of splitStatements(sql)) {
+      const alter = (table: string) => {
+        if (locked.get(table)) violations.push(`${name}: ${table}`);
+      };
+      let match: RegExpExecArray | null;
+      if (
+        (match = /^CREATE TABLE (?:IF NOT EXISTS )?"([^"]+)"/i.exec(statement))
+      ) {
+        if (!locked.has(match[1])) locked.set(match[1], false);
+      } else if (
+        (match = /^DROP TABLE (?:IF EXISTS )?"([^"]+)"/i.exec(statement))
+      ) {
+        locked.delete(match[1]);
+      } else if (
+        (match =
+          /^ALTER TABLE (?:IF EXISTS )?"([^"]+)" SET \(schema_locked = (true|false)\)$/i.exec(
+            statement,
+          ))
+      ) {
+        locked.set(match[1], match[2].toLowerCase() === "true");
+      } else if (
+        (match =
+          /^ALTER TABLE (?:IF EXISTS )?"([^"]+)"(?: RENAME TO "([^"]+)")?/i.exec(
+            statement,
+          ))
+      ) {
+        alter(match[1]);
+        for (const [, referenced] of statement.matchAll(
+          /\bREFERENCES "([^"]+)"/gi,
+        )) {
+          if (referenced !== match[1]) alter(referenced);
+        }
+        if (match[2]) {
+          locked.set(match[2], locked.get(match[1]) ?? false);
+          locked.delete(match[1]);
+        }
+      } else if (
+        (match =
+          /^CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?"([^"]+)" ON "([^"]+)"/i.exec(
+            statement,
+          ))
+      ) {
+        indexTables.set(match[1], match[2]);
+        alter(match[2]);
+      } else if (
+        (match = /^DROP INDEX (?:IF EXISTS )?(?:"([^"]+)"@)?"([^"]+)"/i.exec(
+          statement,
+        ))
+      ) {
+        alter(match[1] ?? indexTables.get(match[2]) ?? match[2].split("_")[0]);
+      }
+    }
+  }
+  return violations;
+}
+
 describe("Prisma migration chain", () => {
   it("defines FeedbackStatus and Feedback.status exactly once", async () => {
     const migrations = await readMigrations();
@@ -64,5 +166,38 @@ describe("Prisma migration chain", () => {
       "20260808120000_replace_subscription_credits_with_monthly_usage",
       "20260817000000_store_package_payment_amount",
     ]);
+  });
+
+  it("unlocks every table before Prisma runs DDL on it", async () => {
+    const migrations = await readMigrations();
+
+    expect(findDdlOnLockedTables(migrations)).toEqual([]);
+    // Without the lock repair pair the replay must reproduce the fresh-chain
+    // failure observed on Cockroach v26.2 (P3018 / 57000 on "File").
+    expect(
+      findDdlOnLockedTables(
+        migrations.filter(
+          ({ name }) =>
+            name !== "20260917005000_unlock_storage_cursor_index_tables" &&
+            name !== "20260917020000_relock_storage_cursor_index_tables",
+        ),
+      ),
+    ).toEqual(["20260917010000_add_storage_cursor_indexes: File"]);
+    // A foreign key added by ALTER TABLE needs its referenced table unlocked.
+    expect(
+      findDdlOnLockedTables(
+        migrations.map((migration) =>
+          migration.name === "20261008000000_add_subscription_grants"
+            ? {
+                ...migration,
+                sql: migration.sql.replace(
+                  'ALTER TABLE "User" SET (schema_locked = false);',
+                  "",
+                ),
+              }
+            : migration,
+        ),
+      ),
+    ).toEqual(["20261008000000_add_subscription_grants: User"]);
   });
 });
