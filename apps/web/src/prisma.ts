@@ -7,9 +7,7 @@ import { resolveStorageBucket } from "@beutl/api/storage/bucket-from-env";
 import { after } from "next/server";
 import { cache } from "react";
 
-// Register a lazy OpenNext factory without reusing request-bound I/O across
-// Worker invocations. The React cache below deduplicates Server Component calls.
-const createPrismaClient = async () => {
+async function connectPrismaClient() {
   const { env } = await getCloudflareContext({ async: true });
 
   if (!env.BEUTL_DATABASE_HYPERDRIVE) {
@@ -22,10 +20,33 @@ const createPrismaClient = async () => {
   }
 
   const adapter = new PrismaPg({ connectionString, max: 5, maxUses: 1 });
-  const prisma = new PrismaClient({ adapter });
+  return new PrismaClient({ adapter });
+}
+
+// Register a lazy OpenNext factory without reusing request-bound I/O across
+// Worker invocations. The React cache below deduplicates Server Component calls.
+const createPrismaClient = async () => {
+  const prisma = await connectPrismaClient();
   after(() => prisma.$disconnect());
   return prisma;
 };
+
+/**
+ * A client of its own for work that can outlive the response, released when
+ * that work settles. A stale `unstable_cache` entry is recomputed in the
+ * background after the page has answered; on the request client, `after()`
+ * would end the pool between that work's queries.
+ */
+export async function withOwnPrismaClient<T>(
+  work: (prisma: PrismaClient) => Promise<T>,
+): Promise<T> {
+  const prisma = await connectPrismaClient();
+  try {
+    return await work(prisma);
+  } finally {
+    await prisma.$disconnect();
+  }
+}
 
 // OpenNext recommends React cache for sharing one Prisma client throughout a
 // Server Component render. Calls outside that render create their own client.
