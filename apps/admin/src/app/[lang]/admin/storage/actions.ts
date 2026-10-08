@@ -14,6 +14,7 @@ import {
   type StorageProvider,
 } from "@beutl/api";
 import { adminAction } from "@/lib/auth-guard";
+import { RAW } from "@/lib/i18n";
 import {
   decodeFileCursor,
   encodeFileCursor,
@@ -101,7 +102,7 @@ export async function moveFileToProvider(
             outcome.sourceRemoved
               ? "admin:storage.messages.moved"
               : "admin:storage.messages.movedSourceLeft",
-            { name: file.name, from: providerName(outcome.from), to: providerName(to) },
+            { name: file.name, from: providerName(outcome.from), to: providerName(to), ...RAW },
           ),
         };
       }
@@ -114,10 +115,11 @@ export async function moveFileToProvider(
           message: t("admin:storage.messages.alreadyThere", {
             name: file.name,
             to: providerName(to),
+            ...RAW,
           }),
         };
       }
-      return { success: false, message: t("admin:storage.messages.missing", { name: file.name }) };
+      return { success: false, message: t("admin:storage.messages.missing", { name: file.name, ...RAW }) };
     } catch (error) {
       console.error("Failed to move a storage object", file.id, error);
       return {

@@ -4,6 +4,7 @@ import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { getTranslation } from "@beutl/i18n";
 import type { ActionResult } from "@beutl/core";
 import { adminAction } from "@/lib/auth-guard";
+import { RAW } from "@/lib/i18n";
 import {
   deleteAiOperationModel,
   deleteAiSetting,
@@ -233,7 +234,7 @@ export async function resumeStorageUploadInterventionAction(lang: string, input:
       : {
           success: false,
           message: result.status === "unsafe"
-            ? t("admin:ai.interventions.messages.unsafe", { reason: result.reason })
+            ? t("admin:ai.interventions.messages.unsafe", { reason: result.reason, ...RAW })
             : t("admin:ai.interventions.messages.resolutionChanged"),
         };
   });
@@ -423,7 +424,7 @@ export async function terminalizeOrphanTopUpResolution(
         : {
             success: false,
             message: result.status === "unsafe"
-              ? t("admin:ai.interventions.messages.unsafe", { reason: result.reason })
+              ? t("admin:ai.interventions.messages.unsafe", { reason: result.reason, ...RAW })
               : t("admin:ai.interventions.messages.resolutionChanged"),
           };
     } catch (error) {
@@ -434,6 +435,7 @@ export async function terminalizeOrphanTopUpResolution(
           reason: error instanceof Error
             ? error.message
             : t("admin:ai.interventions.common.unknownError"),
+          ...RAW,
         }),
       };
     }

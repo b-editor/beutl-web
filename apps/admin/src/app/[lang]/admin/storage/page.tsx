@@ -14,6 +14,7 @@ import {
 import Link from "next/link";
 import { requireAdmin } from "@/lib/auth-guard";
 import { formatTimestamp } from "@/lib/format";
+import { RAW } from "@/lib/i18n";
 import { fetchPaginated, parsePageParam } from "@/lib/pagination";
 import { firstSearchParam } from "@/lib/search-params";
 import { getStorageStores, locateFiles, type FileLocation } from "@/lib/storage";
@@ -36,7 +37,7 @@ function LocationCell({
   if (location.kind === "error") {
     return (
       <span className="text-xs text-destructive">
-        {t("admin:storage.location.unknown", { error: location.error })}
+        {t("admin:storage.location.unknown", { error: location.error, ...RAW })}
       </span>
     );
   }
@@ -95,7 +96,7 @@ export default async function Page(props: {
 
       {configError && (
         <p className="rounded-lg border border-destructive p-4 text-sm text-destructive">
-          {t("admin:storage.stores.configError", { error: configError })}
+          {t("admin:storage.stores.configError", { error: configError, ...RAW })}
         </p>
       )}
 

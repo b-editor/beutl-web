@@ -3,6 +3,7 @@
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { Button } from "@beutl/ui/ui/button";
 import { useState, useTransition } from "react";
+import { RAW } from "@/lib/i18n";
 import { terminalizeOrphanTopUpResolution } from "./actions";
 
 type Row = {
@@ -116,6 +117,7 @@ function TopUpResolutionRow({
         })};{" "}
         {t("admin:ai.interventions.topUp.expectedPaymentIntents", {
           ids: resolution.expectedPaymentIntentIds || "[]",
+          ...RAW,
         })}
       </p>
       <p>

@@ -1,5 +1,6 @@
 import { getTranslation } from "@beutl/i18n";
 import { requireAdmin } from "@/lib/auth-guard";
+import { RAW } from "@/lib/i18n";
 import { getStorageStores } from "@/lib/storage";
 import { StorageBatchPanel } from "../components";
 import { HelpPopover } from "@/components/admin/help-popover";
@@ -31,7 +32,7 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
 
       {configError ? (
         <p className="rounded-lg border border-destructive p-4 text-sm text-destructive">
-          {t("admin:storage.stores.configError", { error: configError })}
+          {t("admin:storage.stores.configError", { error: configError, ...RAW })}
         </p>
       ) : (
         <section className="grid gap-4 sm:grid-cols-2">
