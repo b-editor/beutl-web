@@ -55,13 +55,16 @@ export async function findFileForContentAccess({
       userId: true,
       mimeType: true,
       size: true,
+      sha256: true,
       Package: {
         select: {
           userId: true,
           published: true,
         },
       },
-      Profile: true,
+      Profile: {
+        select: { userId: true },
+      },
       PackageScreenshot: {
         select: {
           package: {

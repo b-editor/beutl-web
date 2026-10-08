@@ -41,6 +41,24 @@ export function contentCacheHeaders(
       };
 }
 
+/** Every stored replacement gets a new object key, including legacy files without a hash. */
+export function contentEntityTag(file: {
+  objectKey: string;
+  sha256?: string | null;
+}): string {
+  return file.sha256 && /^[a-f\d]{64}$/iu.test(file.sha256)
+    ? `"sha256-${file.sha256.toLowerCase()}"`
+    : `W/"object-${encodeURIComponent(file.objectKey)}"`;
+}
+
+export function matchesContentEntityTag(header: string | null, etag: string): boolean {
+  const value = etag.replace(/^W\//u, "");
+  return header?.split(",").some((part) => {
+    const candidate = part.trim();
+    return candidate === "*" || candidate.replace(/^W\//u, "") === value;
+  }) ?? false;
+}
+
 /** Whether the content routes serve this type inline, so an element can render it. */
 export function servedInline(storedMimeType: string | null | undefined): boolean {
   const mimeType = storedMimeType?.split(";", 1)[0].trim().toLowerCase();
