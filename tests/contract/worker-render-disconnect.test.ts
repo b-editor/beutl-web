@@ -20,6 +20,26 @@ function controllableBody() {
   };
 }
 
+/** Produces each chunk only when read, and only once `render()` is called. */
+function pulledBody(chunks: string[]) {
+  const state = { cancelled: false, drained: false };
+  let render!: () => void;
+  const rendering = new Promise<void>((resolve) => { render = resolve; });
+  let next = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      await rendering;
+      if (next < chunks.length) controller.enqueue(encoder.encode(chunks[next++]));
+      else {
+        state.drained = true;
+        controller.close();
+      }
+    },
+    cancel() { state.cancelled = true; },
+  }, { highWaterMark: 0 });
+  return { stream, state, render };
+}
+
 function context() {
   const pending: Promise<unknown>[] = [];
   return { pending, waitUntil: (promise: Promise<unknown>) => { pending.push(promise); } };
@@ -77,6 +97,35 @@ describe("page renders after a client disconnect", () => {
       await Promise.all(ctx.pending);
       expect(body.state.cancelled).toBe(false);
       expect(forwarded.signal.aborted).toBe(false);
+    },
+  );
+
+  it.each([["before", true], ["after", false]])(
+    "finishes a render whose body nobody reads or cancels once the visitor left %s it began",
+    async (_when, leftFirst) => {
+      // A navigation the client router aborted: the runtime may drop the
+      // response without reading or cancelling it. Nothing else can make
+      // progress then, so a held waitUntil would be reported as a hang.
+      const visitor = new AbortController();
+      if (leftFirst) visitor.abort();
+      const ctx = context();
+      const body = pulledBody(["0:", "1:", "2:", "3:"]);
+      await keepRenderingAfterDisconnect(
+        new Request(`${ORIGIN}/ja/dashboard/account/billing`, { signal: visitor.signal }),
+        ctx,
+        async () => new Response(body.stream, { headers: { "content-type": "text/x-component" } }),
+      );
+      if (!leftFirst) visitor.abort();
+      body.render();
+
+      const finished = await Promise.race([
+        Promise.all(ctx.pending).then(() => true),
+        new Promise((resolve) => setTimeout(() => resolve(false), 200)),
+      ]);
+      expect(finished).toBe(true);
+      // The render was read to its end, not merely released.
+      expect(body.state.drained).toBe(true);
+      expect(body.state.cancelled).toBe(false);
     },
   );
 
