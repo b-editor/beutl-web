@@ -122,6 +122,23 @@ describe("public Web Worker API entrypoint", () => {
     expect(mocks.next).toHaveBeenCalledTimes(3);
   });
 
+  it("hides a visitor's disconnect from page renders but not from Server Actions", async () => {
+    const seen: Request[] = [];
+    mocks.next.mockImplementation(async (request: Request) => {
+      seen.push(request);
+      return new Response("<html>", { headers: { "content-type": "text/html; charset=utf-8" } });
+    });
+    const page = new AbortController();
+    const action = new AbortController();
+    await web.fetch(new Request(`${env.PUBLIC_ORIGIN}/ja/store/demo`, { signal: page.signal }), env, context());
+    await web.fetch(new Request(`${env.PUBLIC_ORIGIN}/ja/dashboard/ai`, {
+      method: "POST", headers: { "next-action": "40".padEnd(42, "0") }, body: "[]", signal: action.signal,
+    }), env, context());
+    page.abort();
+    action.abort();
+    expect(seen.map((request) => request.signal.aborted)).toEqual([false, true]);
+  });
+
   it("runs the complete shared scheduler from the Web cron", async () => {
     const scheduled = vi.spyOn(apiRuntime, "scheduled").mockResolvedValue();
     const controller = { scheduledTime: Date.now() }, ctx = context();
