@@ -122,6 +122,23 @@ describe("public Web Worker API entrypoint", () => {
     expect(mocks.next).toHaveBeenCalledTimes(3);
   });
 
+  it.each(["/api/contents/file-1?image=preview-1024", "/_next/image?url=/img/test.png&w=64&q=75"])(
+    "keeps the Images binding disabled by default for %s", async (path) => {
+      const images = { input: vi.fn() };
+      const bindings = { ...env, IMAGES: images };
+      await web.fetch(new Request(`${env.PUBLIC_ORIGIN}${path}`), bindings, context());
+      expect(mocks.next.mock.calls[0][1].IMAGES).toBeUndefined();
+      expect(bindings.IMAGES).toBe(images);
+    },
+  );
+
+  it("passes the Images binding only after explicit free-plan activation", async () => {
+    const images = { input: vi.fn() };
+    const bindings = { ...env, IMAGES: images, BEUTL_IMAGE_FREE_TRANSFORMS_ENABLED: "true" };
+    await web.fetch(new Request(`${env.PUBLIC_ORIGIN}/_next/image?url=/img/test.png&w=64&q=75`), bindings, context());
+    expect(mocks.next.mock.calls[0][1].IMAGES).toBe(images);
+  });
+
   it("hides a visitor's disconnect from page renders but not from Server Actions", async () => {
     const seen: Request[] = [];
     mocks.next.mockImplementation(async (request: Request) => {

@@ -41,6 +41,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { contentImageSources } from "@/lib/content-image";
 import { readVideoDurationSeconds, videoDurationStatus, type VideoDurationStatus } from "@/lib/ai-video-duration";
 import { listStorageFoldersAction, saveResultToStorageAction } from "./actions";
 import {
@@ -1146,8 +1147,9 @@ export function ShimmerImage({
       {!loaded && <Shimmer className="absolute inset-0 min-h-48 w-full" />}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src={src}
+        {...contentImageSources(src, "preview")}
         alt={alt}
+        decoding="async"
         onLoad={() => setLoaded(true)}
         className={cn(
           className,

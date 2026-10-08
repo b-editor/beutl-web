@@ -14,6 +14,7 @@ import {
 import { useFileActions, type FileListHandlers } from "./file-actions";
 import { VisibilityBadge } from "./visibility-badge";
 import type { StorageFile } from "./types";
+import { contentImageSources } from "@/lib/content-image";
 
 function Preview({ file }: { file: StorageFile }) {
   const [failed, setFailed] = useState(false);
@@ -23,7 +24,7 @@ function Preview({ file }: { file: StorageFile }) {
       {hasThumbnail(file) && !failed ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={contentUrl(file)}
+          {...contentImageSources(contentUrl(file), "thumbnail")}
           alt=""
           decoding="async"
           onError={() => setFailed(true)}

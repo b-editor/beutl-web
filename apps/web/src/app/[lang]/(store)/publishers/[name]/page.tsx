@@ -6,6 +6,7 @@ import { Badge } from "@beutl/ui/ui/badge";
 import { Separator } from "@beutl/ui/ui/separator";
 import { formatAmount, visiblePackageTags } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
+import { contentImageSources } from "@/lib/content-image";
 
 const getPublishedPackages = cache((name: string) => retrievePublishedPackages(name));
 
@@ -66,7 +67,11 @@ export default async function Page(props: { params: Promise<{ lang: string; name
                       <img
                         className="flex-1 w-16 h-16 max-w-16 max-h-16 rounded-md"
                         alt="Package icon"
-                        src={item.iconFileUrl}
+                        {...contentImageSources(item.iconFileUrl, "icon")}
+                        width={64}
+                        height={64}
+                        loading="lazy"
+                        decoding="async"
                       />
                     )}
                     {!item.iconFileUrl && (

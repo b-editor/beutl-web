@@ -4,6 +4,7 @@ import { Separator } from "@beutl/ui/ui/separator";
 import { formatAmount, visiblePackageTags } from "@beutl/core";
 import Link from "next/link";
 import type { ListedPackage } from "./actions";
+import { contentImageSources } from "@/lib/content-image";
 
 // ライブラリ一覧と概要ページで同じカードを使う。
 export function LibraryPackageCard({
@@ -40,7 +41,11 @@ export function LibraryPackageCard({
                 <img
                   className="w-16 h-16 max-w-16 max-h-16 rounded-md"
                   alt="Package icon"
-                  src={item.iconFileUrl}
+                  {...contentImageSources(item.iconFileUrl, "icon")}
+                  width={64}
+                  height={64}
+                  loading="lazy"
+                  decoding="async"
                 />
               ) : (
                 <div className="w-16 h-16 shrink-0 rounded-md bg-secondary" />

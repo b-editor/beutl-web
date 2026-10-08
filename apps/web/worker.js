@@ -14,6 +14,7 @@
 // 境界ではない。
 import { fetchWithBodyLimit } from "./src/lib/worker-body-limit";
 import { keepRenderingAfterDisconnect } from "./src/lib/worker-render-disconnect";
+import { freeImageTransformsEnabled } from "./src/lib/image-transform-policy";
 import apiRuntime, { isApiRequest } from "@beutl/api/runtime";
 export { GitRepositoryDurableObject } from "@beutl/api/runtime";
 //@ts-expect-error: Will be resolved by wrangler build
@@ -31,10 +32,13 @@ export default {
     // Versioned APIs include streaming Git/LFS and storage uploads. Route them
     // before OpenNext buffers request bodies or applies the Web upload cap.
     if (isApiRequest(request)) return apiRuntime.fetch(request, env, ctx);
+    // Cover OpenNext's /_next/image as well as our content preview routes.
+    // Merely deploying an IMAGES binding must not enable billable transforms.
+    const imageEnv = freeImageTransformsEnabled(env) ? env : { ...env, IMAGES: undefined };
     // 閲覧者が離れても、ページの描画は閉じずに最後まで続ける。
     // 理由は worker-render-disconnect.ts を参照。
     return await keepRenderingAfterDisconnect(request, ctx, (forwarded) =>
-      fetchWithBodyLimit(forwarded, env, ctx, (bounded, nextEnv, nextCtx) =>
+      fetchWithBodyLimit(forwarded, imageEnv, ctx, (bounded, nextEnv, nextCtx) =>
         openNext.fetch(bounded, nextEnv, nextCtx),
       ),
     );

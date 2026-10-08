@@ -12,6 +12,9 @@ const mocks = vi.hoisted(() => ({
   open: vi.fn(),
   match: vi.fn(),
   put: vi.fn(),
+  input: vi.fn(),
+  transform: vi.fn(),
+  output: vi.fn(),
 }));
 
 vi.mock("@beutl/db", () => ({
@@ -34,6 +37,7 @@ beforeAll(async () => {
 });
 
 const BYTES = new Uint8Array([1, 2, 3, 4]);
+const WEBP_BYTES = new Uint8Array([5, 6]);
 const SHA256 = "a".repeat(64);
 const file = () => ({
   name: "image.png",
@@ -71,7 +75,13 @@ beforeEach(() => {
   mocks.put.mockImplementation(async (key: Request, response: Response) => {
     stored.set(key.url, new Response(await response.arrayBuffer(), { headers: response.headers }));
   });
-  mocks.getCloudflareContext.mockReturnValue({ ctx: { waitUntil: (task: Promise<unknown>) => pending.push(task) } });
+  mocks.getCloudflareContext.mockReturnValue({
+    env: { IMAGES: { input: mocks.input }, BEUTL_IMAGE_FREE_TRANSFORMS_ENABLED: "true" },
+    ctx: { waitUntil: (task: Promise<unknown>) => pending.push(task) },
+  });
+  mocks.input.mockReturnValue({ transform: mocks.transform });
+  mocks.transform.mockReturnValue({ output: mocks.output });
+  mocks.output.mockImplementation(async () => ({ response: () => new Response(WEBP_BYTES) }));
   mocks.findFileForContentAccess.mockResolvedValue(file());
   mocks.getSession.mockResolvedValue(null);
   mocks.tryGetUserIdFromHeaders.mockResolvedValue(null);
@@ -89,6 +99,270 @@ afterEach(async () => {
 });
 
 describe("image delivery", () => {
+  it.each([undefined, "false", "1", "TRUE"])("never calls the transformation service without explicit free-plan activation: %s", async (flag) => {
+    mocks.getCloudflareContext.mockReturnValue({
+      env: { IMAGES: { input: mocks.input }, BEUTL_IMAGE_FREE_TRANSFORMS_ENABLED: flag },
+      ctx: { waitUntil: (task: Promise<unknown>) => pending.push(task) },
+    });
+    const response = await request(undefined, "?image=preview-1024");
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES);
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(response.headers.get("ETag")).toBe(contentEntityTag(file()));
+    expect(mocks.input).not.toHaveBeenCalled();
+  });
+
+  it("serves the authenticated original when the Images Free quota is exhausted", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mocks.findFileForContentAccess.mockResolvedValue({ ...file(), visibility: "PRIVATE" });
+    mocks.getSession.mockResolvedValue({ user: { id: "owner" } });
+    mocks.output.mockRejectedValue(new Error("ERROR 9422: Image transformation usage limit reached"));
+    const response = await request(undefined, "?image=preview-1024");
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES);
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("ETag")).toBe(contentEntityTag(file()));
+    expect(mocks.put).toHaveBeenCalledTimes(1);
+    expect((mocks.put.mock.calls[0][0] as Request).url).not.toContain("variant");
+
+    mocks.getSession.mockResolvedValue({ user: { id: "other-user" } });
+    expect((await request(undefined, "?image=preview-1024")).status).toBe(404);
+    expect(mocks.input).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers and reuses a resized public icon while checking live metadata", async () => {
+    const first = await request({ "If-None-Match": contentEntityTag(file()) }, "?image=icon-64&ignored=1");
+    expect(new Uint8Array(await first.arrayBuffer())).toEqual(WEBP_BYTES);
+    expect(first.headers.get("Content-Type")).toBe("image/webp");
+    expect(first.headers.get("Content-Disposition")).toContain("image.webp");
+    expect(first.headers.get("Content-Length")).toBe("2");
+    expect(first.headers.get("Accept-Ranges")).toBe("none");
+    expect(first.headers.get("ETag")).toMatch(/^W\/"sha256-.*-webp-q85-v1-icon-64"$/u);
+    expect(mocks.transform).toHaveBeenCalledWith({ width: 64, height: 64, fit: "scale-down" });
+    expect(mocks.output).toHaveBeenCalledWith({ format: "image/webp", quality: 85 });
+    await Promise.all(pending);
+
+    mocks.findFileForContentAccess.mockResolvedValue({ ...file(), name: "renamed.png" });
+    const second = await request({ Cookie: "session=unused" }, "?image=icon-64&ignored=2");
+    expect(new Uint8Array(await second.arrayBuffer())).toEqual(WEBP_BYTES);
+    expect(second.headers.get("Content-Disposition")).toContain("renamed.webp");
+    expect(second.headers.get("Cache-Control")).toBe("public, no-cache, must-revalidate");
+    expect(mocks.findFileForContentAccess).toHaveBeenCalledTimes(2);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(mocks.input).toHaveBeenCalledTimes(1);
+    expect(mocks.getSession).not.toHaveBeenCalled();
+
+    const original = await request();
+    expect(new Uint8Array(await original.arrayBuffer())).toEqual(BYTES);
+    expect(original.headers.get("Content-Type")).toBe("image/png");
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps each size and source replacement separate and revalidates the selected representation", async () => {
+    const small = await request(undefined, "?image=icon-64");
+    await small.arrayBuffer();
+    await Promise.all(pending);
+    const large = await request({ "If-None-Match": small.headers.get("ETag")! }, "?image=icon-128");
+    expect(large.status).toBe(200);
+    expect(large.headers.get("ETag")).not.toBe(small.headers.get("ETag"));
+    await large.arrayBuffer();
+    await Promise.all(pending);
+    expect(mocks.input).toHaveBeenCalledTimes(2);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+
+    const revalidated = await request({ "If-None-Match": large.headers.get("ETag")! }, "?image=icon-128");
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.headers.get("Content-Type")).toBe("image/webp");
+    expect(mocks.input).toHaveBeenCalledTimes(2);
+    expect(mocks.match).toHaveBeenCalledTimes(4);
+
+    mocks.findFileForContentAccess.mockResolvedValue({ ...file(), objectKey: "objects/image-2", sha256: "b".repeat(64) });
+    const replaced = await request({ "If-None-Match": large.headers.get("ETag")! }, "?image=icon-128");
+    expect(replaced.status).toBe(200);
+    expect(replaced.headers.get("ETag")).not.toBe(large.headers.get("ETag"));
+    expect(mocks.get).toHaveBeenCalledTimes(2);
+    expect(mocks.input).toHaveBeenCalledTimes(3);
+  });
+
+  it("checks unpublishing and deletion before serving cached transformed bytes or 304", async () => {
+    const first = await request(undefined, "?image=screenshot-320");
+    await first.arrayBuffer();
+    await Promise.all(pending);
+    for (const record of [
+      { ...file(), visibility: "DEDICATED", Package: [{ userId: "owner", published: false }] },
+      null,
+    ]) {
+      mocks.findFileForContentAccess.mockResolvedValue(record);
+      const denied = await request({ "If-None-Match": first.headers.get("ETag")! }, "?image=screenshot-320");
+      expect(denied.status).toBe(404);
+      expect(denied.headers.get("Cache-Control")).toBe("no-store");
+    }
+    expect(mocks.match).toHaveBeenCalledTimes(2);
+    expect(mocks.input).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["thumbnail-320", "preview-1024"])("reuses %s only after authenticating its owner on every request", async (preset) => {
+    mocks.findFileForContentAccess.mockResolvedValue({ ...file(), visibility: "PRIVATE" });
+    mocks.getSession.mockResolvedValue({ user: { id: "owner" } });
+    const first = await request({ Cookie: "session=owner" }, `?image=${preset}`);
+    expect(first.status).toBe(200);
+    expect(new Uint8Array(await first.arrayBuffer())).toEqual(WEBP_BYTES);
+    expect(first.headers.get("Cache-Control")).toBe("no-store");
+    expect(first.headers.get("Vary")).toBe("Cookie, Authorization");
+    await Promise.all(pending);
+
+    const second = await request({ "If-None-Match": first.headers.get("ETag")! }, `?image=${preset}`);
+    expect(second.status).toBe(200);
+    expect(new Uint8Array(await second.arrayBuffer())).toEqual(WEBP_BYTES);
+    expect(second.headers.get("Cache-Control")).toBe("no-store");
+    expect(mocks.getSession).toHaveBeenCalledTimes(2);
+    expect(mocks.findFileForContentAccess).toHaveBeenCalledTimes(2);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(mocks.input).toHaveBeenCalledTimes(1);
+
+    // Downloads and editing inputs still use the unmodified original URL.
+    const original = await request();
+    expect(new Uint8Array(await original.arrayBuffer())).toEqual(BYTES);
+    expect(original.headers.get("Content-Type")).toBe("image/png");
+    expect(original.headers.get("ETag")).toBe(contentEntityTag(file()));
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(mocks.input).toHaveBeenCalledTimes(1);
+
+    for (const session of [null, { user: { id: "other-user" } }]) {
+      mocks.getSession.mockResolvedValue(session);
+      const denied = await request({ "If-None-Match": first.headers.get("ETag")! }, `?image=${preset}`);
+      expect(denied.status).toBe(404);
+      expect(denied.headers.get("Cache-Control")).toBe("no-store");
+    }
+    expect(mocks.match).toHaveBeenCalledTimes(4);
+    expect(mocks.input).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires the current purchase before reusing a transformed paid image", async () => {
+    mocks.findFileForContentAccess.mockResolvedValue({
+      ...file(), visibility: "DEDICATED", Release: [{ published: true, package: {
+        id: "package-1", userId: "owner", published: true, packagePricing: [{ id: "price-1", price: 100 }],
+      } }],
+    });
+    mocks.getSession.mockResolvedValue({ user: { id: "purchaser" } });
+    mocks.existsUserPaymentHistory.mockResolvedValue(true);
+    const first = await request(undefined, "?image=preview-1024");
+    expect(first.status).toBe(200);
+    expect(new Uint8Array(await first.arrayBuffer())).toEqual(WEBP_BYTES);
+    expect(first.headers.get("Cache-Control")).toBe("no-store");
+    await Promise.all(pending);
+    const second = await request({ "If-None-Match": first.headers.get("ETag")! }, "?image=preview-1024");
+    expect(second.status).toBe(200);
+    expect(new Uint8Array(await second.arrayBuffer())).toEqual(WEBP_BYTES);
+    expect(second.headers.get("Cache-Control")).toBe("no-store");
+    expect(mocks.input).toHaveBeenCalledTimes(1);
+
+    mocks.existsUserPaymentHistory.mockResolvedValue(false);
+    const denied = await request({ "If-None-Match": first.headers.get("ETag")! }, "?image=preview-1024");
+    expect(denied.status).toBe(403);
+    expect(denied.headers.get("Cache-Control")).toBe("no-store");
+    expect(mocks.existsUserPaymentHistory).toHaveBeenCalledTimes(3);
+    expect(mocks.match).toHaveBeenCalledTimes(3);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(mocks.input).toHaveBeenCalledTimes(1);
+  });
+
+  it("authenticates a desktop token before serving a private thumbnail", async () => {
+    mocks.findFileForContentAccess.mockResolvedValue({ ...file(), visibility: "PRIVATE" });
+    mocks.tryGetUserIdFromHeaders.mockResolvedValue("owner");
+    const response = await request({ Authorization: "Bearer desktop-token" }, "?image=thumbnail-320");
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(WEBP_BYTES);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(mocks.tryGetUserIdFromHeaders).toHaveBeenCalledTimes(1);
+    expect(mocks.input).toHaveBeenCalledTimes(1);
+  });
+
+  it("rechecks a public image becoming private before accessing its transformed cache", async () => {
+    const first = await request(undefined, "?image=thumbnail-320");
+    await first.arrayBuffer();
+    await Promise.all(pending);
+    mocks.findFileForContentAccess.mockResolvedValue({ ...file(), visibility: "PRIVATE" });
+    const denied = await request({ "If-None-Match": first.headers.get("ETag")! }, "?image=thumbnail-320");
+    expect(denied.status).toBe(404);
+    expect(mocks.match).toHaveBeenCalledTimes(2);
+
+    mocks.getSession.mockResolvedValue({ user: { id: "owner" } });
+    const allowed = await request({ "If-None-Match": first.headers.get("ETag")! }, "?image=thumbnail-320");
+    expect(allowed.status).toBe(200);
+    expect(new Uint8Array(await allowed.arrayBuffer())).toEqual(WEBP_BYTES);
+    expect(allowed.headers.get("Cache-Control")).toBe("no-store");
+    expect(mocks.input).toHaveBeenCalledTimes(1);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["thumbnail-320", 320], ["thumbnail-640", 640],
+    ["preview-1024", 1024], ["preview-2048", 2048],
+  ])("bounds %s to %s pixels without upscaling", async (preset, size) => {
+    const response = await request(undefined, `?image=${preset}`);
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(WEBP_BYTES);
+    expect(mocks.transform).toHaveBeenCalledWith({ width: size, height: size, fit: "scale-down" });
+    expect(mocks.output).toHaveBeenCalledWith({ format: "image/webp", quality: 85 });
+  });
+
+  it.each([
+    { query: "?image=icon-999", mimeType: "image/png", size: BigInt(4) },
+    { query: "?image=constructor", mimeType: "image/png", size: BigInt(4) },
+    { query: "?image=icon-64", mimeType: "image/svg+xml", size: BigInt(4) },
+    { query: "?image=icon-64", mimeType: "image/gif", size: BigInt(4) },
+    { query: "?image=icon-64", mimeType: "image/png", size: BigInt(11 * 1024 * 1024) },
+  ])("uses original delivery for unsupported variants or sources: $query $mimeType $size", async ({ query, mimeType, size }) => {
+    mocks.findFileForContentAccess.mockResolvedValue({ ...file(), mimeType, size });
+    const response = await request(undefined, query);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES);
+    expect(response.headers.get("ETag")).toBe(contentEntityTag(file()));
+    expect(mocks.input).not.toHaveBeenCalled();
+  });
+
+  it("retains original byte-range semantics when an image preset is present", async () => {
+    mocks.get.mockResolvedValue({ body: new Response(BYTES.slice(0, 2)).body, size: 4 });
+    const response = await request({ Range: "bytes=0-1" }, "?image=icon-64");
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(response.headers.get("Content-Range")).toBe("bytes 0-1/4");
+    expect(mocks.input).not.toHaveBeenCalled();
+    expect(mocks.open).not.toHaveBeenCalled();
+  });
+
+  it("returns the unread original after the transformation consumes its copy and fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mocks.output.mockImplementation(async () => {
+      await new Response(mocks.input.mock.calls[0][0]).arrayBuffer();
+      throw new Error("Images unavailable");
+    });
+    const response = await request(undefined, "?image=icon-64");
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES);
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(response.headers.get("ETag")).toBe(contentEntityTag(file()));
+    expect(mocks.put).toHaveBeenCalledTimes(1);
+    expect((mocks.put.mock.calls[0][0] as Request).url).not.toContain("variant");
+  });
+
+  it.each([0, 10 * 1024 * 1024 + 1])("rejects empty or oversized transformation output (%s bytes)", async (length) => {
+    mocks.output.mockResolvedValue({ response: () => new Response(new Uint8Array(length)) });
+    const response = await request(undefined, "?image=screenshot-640");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES);
+    expect(response.headers.get("ETag")).toBe(contentEntityTag(file()));
+    expect(mocks.put).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves the original when the Images binding is absent", async () => {
+    mocks.getCloudflareContext.mockReturnValue({ env: {}, ctx: { waitUntil: (task: Promise<unknown>) => pending.push(task) } });
+    const response = await request(undefined, "?image=icon-64");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES);
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(mocks.input).not.toHaveBeenCalled();
+  });
+
   it("skips session and token lookups for public images", async () => {
     expect((await request({ Cookie: "session=unused", Authorization: "Bearer unused" })).status).toBe(200);
     expect(mocks.getSession).not.toHaveBeenCalled();

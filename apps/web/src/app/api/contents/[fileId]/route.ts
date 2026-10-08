@@ -15,6 +15,7 @@ import {
   matchesContentEntityTag,
 } from "@/lib/content-cache";
 import { getImageContentCache } from "@/lib/image-content-cache";
+import { getContentImageVariant } from "@/lib/content-image-transform";
 
 export async function GET(
   request: NextRequest,
@@ -61,10 +62,18 @@ export async function GET(
       ...contentCacheHeaders(access.canUsePublicCache),
       ETag: etag,
     };
+    const variant = getContentImageVariant(request, file);
+    const variantHeaders = variant ? {
+      ...headers,
+      "Content-Type": "image/webp",
+      "Content-Disposition": contentDisposition("inline", `${file.name.replace(/\.[^.]*$/u, "")}.webp`),
+      ETag: variant.etag,
+      "Accept-Ranges": "none",
+    } : headers;
     // Revalidate access first, then let a browser reuse unchanged public bytes.
     // Private/paid content retains no-store and always receives a full response.
-    if (access.canUsePublicCache && matchesContentEntityTag(request.headers.get("if-none-match"), etag)) {
-      return new NextResponse(null, { status: 304, headers });
+    if (access.canUsePublicCache && matchesContentEntityTag(request.headers.get("if-none-match"), variantHeaders.ETag)) {
+      return new NextResponse(null, { status: 304, headers: variantHeaders });
     }
     // Media players seek with one byte range at a time.
     const size = Number(file.size);
@@ -81,14 +90,32 @@ export async function GET(
         headers: { ...byteRangeHeaders(null, size), ...contentCacheHeaders(false) },
       });
     }
+    const variantCache = variant ? await getImageContentCache(request, file, variant.key) : null;
+    const cachedVariant = await variantCache?.match();
+    if (cachedVariant) {
+      return new NextResponse(cachedVariant.body, {
+        headers: { ...variantHeaders, "Content-Length": cachedVariant.headers.get("Content-Length")! },
+      });
+    }
+    const deliver = async (source: NextResponse) => {
+      if (!variant) return source;
+      const bytes = await variant.transform(source);
+      if (!bytes) return source;
+      const response = new NextResponse(bytes, {
+        headers: { ...variantHeaders, "Content-Length": bytes.byteLength.toString() },
+      });
+      variantCache?.put(response);
+      void source.body?.cancel().catch(() => {});
+      return response;
+    };
     // Cache only whole images; a partial response must never replace the full
     // object. This check runs after the live visibility and payment checks.
     const cache = range ? null : await getImageContentCache(request, file);
     const cached = await cache?.match();
     if (cached) {
-      return new NextResponse(cached.body, {
+      return deliver(new NextResponse(cached.body, {
         headers: { ...headers, "Content-Length": size.toString(), "Accept-Ranges": "bytes" },
-      });
+      }));
     }
     const bucket = getR2Bucket();
     if (!bucket.get) {
@@ -127,7 +154,7 @@ export async function GET(
       status: range ? 206 : 200,
     });
     cache?.put(response);
-    return response;
+    return deliver(response);
   }
 
   if (access.outcome === "payment-required") {

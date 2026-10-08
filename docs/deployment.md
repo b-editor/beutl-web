@@ -161,6 +161,80 @@ does not know the upload id, but a part cannot be resent, so a browser that
 was mid-upload sees that upload fail and the user has to start it again;
 the new upload then goes to the primary.
 
+## Image delivery
+
+The Web Worker uses its `IMAGES` binding to resize store icons and screenshots,
+storage thumbnails and previews, and AI results directly from the configured
+object store. Deploy the binding in
+`apps/web/wrangler.jsonc` together with the application. Cloudflare Images
+transformations must be available on the account; see the
+[Images binding documentation](https://developers.cloudflare.com/images/optimization/binding/)
+for setup and billing.
+
+### Free-only activation
+
+On 2026-10-09, the operator confirmed that this deployment uses **Images Free**.
+The checked-in `apps/web/wrangler.jsonc` therefore sets
+`BEUTL_IMAGE_FREE_TRANSFORMS_ENABLED=true`, enabling transformations on the
+next deployment. The application still disables transformations whenever the
+variable is absent or not exactly `true`: both the custom content route and
+OpenNext's `/_next/image` receive no active Images binding, and original image
+delivery and the byte cache remain available.
+
+To disable transformations, set the variable to `false` in the Wrangler
+configuration. This flag is now managed in source and applied by deployment;
+`keep_vars` preserves other remotely managed variables.
+
+Before setting that variable, confirm **Images Free** in the account's
+Cloudflare Images subscription settings. The zone's Free/Pro plan and the
+Workers plan do not identify the Images plan. Do not enable it with Images
+Paid or legacy paid image resizing when the budget for transformations is zero.
+The variable records the operator's confirmation; it cannot switch plans or
+enforce a free limit on a Paid account.
+
+As of 2026-10-09, Images Free includes 5,000 unique transformations per calendar
+month. The same source and parameters count once within that month. Once the
+free limit is reached, new transformations fail with error `9422`; the content
+route catches the failure and serves the original image. Already cached
+variants remain available after the file's live access check. Images Free
+does not charge for overages. On Images Paid, the first 5,000 are included and
+the excess costs $0.50 per 1,000 unique transformations. See
+[the current Images pricing](https://developers.cloudflare.com/images/pricing/).
+
+This implementation keeps originals outside Cloudflare Images, so its Images
+cost metric is transformations, not Images Stored or Images Delivered.
+Object storage, database, and Worker costs are separate. The 24-hour byte
+cache reduces repeated storage reads and encoding, but extending that cache
+does not reduce monthly unique transformation charges by itself.
+
+### Presets and access checks
+
+Image elements request `/api/contents/<fileId>?image=<preset>`. Eight fixed
+presets are accepted: `icon-64`, `icon-128`, `screenshot-320`,
+`screenshot-640`, `thumbnail-320`, `thumbnail-640`, `preview-1024`, and
+`preview-2048`. They produce WebP at quality 85, preserve the aspect ratio,
+and do not upscale. The browser selects a 1x or 2x version through `srcset`.
+The first screenshot loads immediately; the remaining screenshots and list
+icons use lazy loading. Storage cards and the details pane use thumbnails;
+the preview dialog and AI generation/edit results use previews. AI history
+uses icons. Browser-local upload URLs and streamed data previews are unchanged.
+
+The Worker caches transformed bytes for 24 hours, keyed by the source object,
+hash, and preset version. Every request still checks the current File access
+policy before reading the cache or returning 304, so deletion and unpublishing
+take effect immediately. Public images use `no-cache, must-revalidate`.
+Private and paid images are transformed only after authenticating the caller
+and checking the current owner or purchase, and retain `no-store` even on
+cache hits. Their bytes are reused only in the Worker's internal named cache;
+they never return 304. Do not add a CDN rule that bypasses these access checks.
+
+Download, open-original, and editing-input URLs still request the original
+without a preset. Range requests, unsupported image types, and originals over
+10 MiB retain the existing delivery path. If the Images binding is absent
+in local development or a transformation fails, the route serves the original
+image with its original content type and validator. No database migration or
+object rewrite is required.
+
 ## Admin authentication and session sharing
 
 The admin console can share the Better Auth session with the Web app through

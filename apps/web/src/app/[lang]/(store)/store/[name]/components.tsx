@@ -44,6 +44,7 @@ import {
 } from "@beutl/ui/ui/alert-dialog";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { DesktopInstallButton } from "@/components/desktop-install-button";
+import { contentImageSources } from "@/lib/content-image";
 
 const PACKAGE_TYPE_LABEL_KEYS: Record<PackageType, string> = {
   extension: "store:typeExtension",
@@ -179,7 +180,10 @@ export function ClientPage({
               <img
                 className="w-16 h-16 max-w-fit rounded-md"
                 alt="Package icon"
-                src={pkg.iconFileUrl}
+                {...contentImageSources(pkg.iconFileUrl, "icon")}
+                width={64}
+                height={64}
+                decoding="async"
               />
             )}
             {!pkg.iconFileUrl && (
@@ -285,7 +289,7 @@ export function ClientPage({
           </h3>
           <Carousel className="mt-4" opts={{ active: maxLg }}>
             <CarouselContent className="max-lg:overflow-x-scroll max-lg:hidden-scrollbar">
-              {pkg.PackageScreenshot.map((item) => (
+              {pkg.PackageScreenshot.map((item, index) => (
                 <CarouselItem
                   className="max-w-max min-w-max"
                   key={item.file.id}
@@ -294,7 +298,9 @@ export function ClientPage({
                   <img
                     className="rounded h-80 aspect-auto"
                     alt="Screenshot"
-                    src={item.url}
+                    {...contentImageSources(item.url, "screenshot")}
+                    loading={index === 0 ? "eager" : "lazy"}
+                    decoding="async"
                   />
                 </CarouselItem>
               ))}

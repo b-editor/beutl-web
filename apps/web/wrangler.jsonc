@@ -33,6 +33,11 @@
     "directory": ".open-next/assets",
     "binding": "ASSETS",
   },
+  "images": {
+    // Images Free is confirmed for this deployment. The Worker still requires
+    // the explicit opt-in below, and content previews fall back at the quota.
+    "binding": "IMAGES"
+  },
   "services": [
     {
       "binding": "AI_IMAGE_WORKER",
@@ -79,6 +84,7 @@
   // replace existing secrets or reset an enabled Git service on deployment.
   "vars": {
     "PUBLIC_ORIGIN": "https://beutl.beditor.net",
+    "BEUTL_IMAGE_FREE_TRANSFORMS_ENABLED": "true",
     "OPENROUTER_REQUEST_TIMEOUT_MS": "120000",
     "VERCEL_AI_GATEWAY_REQUEST_TIMEOUT_MS": "120000"
   }

@@ -3,6 +3,7 @@ import Link from "next/link";
 import type { Translator } from "@beutl/i18n";
 import { cn } from "@beutl/core";
 import type { LandingPackage } from "@/lib/store-utils";
+import { contentImageSources } from "@/lib/content-image";
 import InteractiveExportMock from "./export-mock";
 import InteractiveNodeGraphMock from "./node-graph-mock";
 import InteractiveTimelineMock from "./timeline-mock";
@@ -371,7 +372,10 @@ export function PackagesMock({
               className="size-[46px] flex-none rounded-md object-cover"
               alt=""
               loading="lazy"
-              src={pkg.iconFileUrl}
+              {...contentImageSources(pkg.iconFileUrl, "icon")}
+              width={46}
+              height={46}
+              decoding="async"
             />
           ) : (
             <div className="size-[46px] flex-none rounded-md bg-[linear-gradient(135deg,var(--color-lp-indigo),var(--color-lp-coral))]" />
