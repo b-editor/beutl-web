@@ -16,7 +16,7 @@ import {
   listDueAiStorageCleanups,
   makeAiStorageCleanupDue,
   getAiJobById,
-  getSubscription,
+  getEntitlementSubscription,
   registerAiStorageCleanup,
   releaseGatewayVideoCostSettlement,
   settleUsage,
@@ -226,7 +226,7 @@ async function settleCompletedAiJobUsage({
   prisma: PrismaTransaction;
 }): Promise<void> {
   const [subscription, settings] = await Promise.all([
-    getSubscription({ userId: job.userId, planId: PRO_PLAN.id, prisma }),
+    getEntitlementSubscription({ userId: job.userId, planId: PRO_PLAN.id, prisma }),
     loadAiSettings({ prisma }),
   ]);
   const usesActualCostBilling =

@@ -26,7 +26,6 @@ import { AlertTriangle, ExternalLink } from "lucide-react";
 import { SectionCard } from "@/components/dashboard/section-card";
 import type { BillingHistoryEntry } from "@/lib/billing-history";
 import { formatBillingProductLabel } from "@/lib/billing-product";
-import type { AiPlanStatusPresentation } from "@/lib/ai-plan-presentation";
 import {
   createBillingPortalLink,
   createCreditCheckout,
@@ -38,20 +37,22 @@ import { StorageTierDialog } from "./storage-tier-dialog";
 import type {
   BillingOfferEntry,
   BillingSubscriptionEntry,
+  BillingSubscriptionStatus,
   StorageTierPrices,
 } from "./queries";
 
-const STATUS_LABEL_KEY: Record<AiPlanStatusPresentation, string> = {
+const STATUS_LABEL_KEY: Record<BillingSubscriptionStatus, string> = {
   active: "account:aiPlan.statusActive",
   cancelScheduled: "account:aiPlan.statusCancelScheduled",
   canceled: "account:aiPlan.statusCanceled",
   needsAttention: "account:aiPlan.statusNeedsAttention",
   none: "account:aiPlan.statusNone",
+  granted: "account:aiPlan.statusGranted",
 };
 
-function statusVariant(status: AiPlanStatusPresentation) {
+function statusVariant(status: BillingSubscriptionStatus) {
   if (status === "needsAttention") return "destructive" as const;
-  if (status === "active") return "default" as const;
+  if (status === "active" || status === "granted") return "default" as const;
   return "secondary" as const;
 }
 
@@ -145,13 +146,26 @@ export function PlanSection({
                     })}
                   </p>
                 )}
-                {subscription.currentPeriodEnd && (
-                  <p className="text-sm text-muted-foreground">
-                    {subscription.status === "cancelScheduled"
-                      ? t("account:aiPlan.accessEndsOn")
-                      : t("account:aiPlan.nextBillingDate")}
-                    : {formatDate(subscription.currentPeriodEnd, lang)}
-                  </p>
+                {subscription.status === "granted" ? (
+                  <>
+                    <p className="text-sm text-muted-foreground">
+                      {subscription.currentPeriodEnd
+                        ? `${t("account:aiPlan.accessEndsOn")}: ${formatDate(subscription.currentPeriodEnd, lang)}`
+                        : t("account:billing.grantNoEndDate")}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {t("account:billing.grantNotice")}
+                    </p>
+                  </>
+                ) : (
+                  subscription.currentPeriodEnd && (
+                    <p className="text-sm text-muted-foreground">
+                      {subscription.status === "cancelScheduled"
+                        ? t("account:aiPlan.accessEndsOn")
+                        : t("account:aiPlan.nextBillingDate")}
+                      : {formatDate(subscription.currentPeriodEnd, lang)}
+                    </p>
+                  )
                 )}
                 {subscription.showCancellationNotice && (
                   <p className="mt-1 text-sm text-amber-600 dark:text-amber-500">
@@ -163,18 +177,21 @@ export function PlanSection({
                   </p>
                 )}
               </div>
-              <div className="flex flex-wrap gap-2">
-                {subscription.product === "storage" &&
-                  subscription.status === "active" &&
-                  subscription.tier !== null && (
-                    <StorageTierDialog
-                      lang={lang}
-                      currentTier={subscription.tier}
-                      prices={storageTierPrices}
-                    />
-                  )}
-                <ManageSubscriptionButton t={t} product={subscription.product} />
-              </div>
+              {/* 付与には Stripe の契約が無いので、ティアの変更も管理も出さない。 */}
+              {subscription.status !== "granted" && (
+                <div className="flex flex-wrap gap-2">
+                  {subscription.product === "storage" &&
+                    subscription.status === "active" &&
+                    subscription.tier !== null && (
+                      <StorageTierDialog
+                        lang={lang}
+                        currentTier={subscription.tier}
+                        prices={storageTierPrices}
+                      />
+                    )}
+                  <ManageSubscriptionButton t={t} product={subscription.product} />
+                </div>
+              )}
             </div>
           ))
         )}

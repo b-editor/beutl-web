@@ -6,6 +6,7 @@ import { adminAction } from "@/lib/auth-guard";
 import { isAdmin, normalizeUsageUnits } from "@beutl/core";
 import {
   adjustPurchasedCreditsByAdmin,
+  createSubscriptionGrant,
   CreditAdjustmentRejectedError,
   deleteUserById,
   drainUserStorageFiles,
@@ -14,7 +15,7 @@ import {
   findAdminCreditAdjustment,
   findAccountDeletionIntentByUserId,
   findCustomerByUserId,
-  getSubscription,
+  getEntitlementSubscription,
   listSubscriptionsByUserId,
   isUniqueConstraintViolation,
   prepareAccountDeletionOutboxes,
@@ -23,6 +24,7 @@ import {
   startRetryableTransaction,
   resumeTopUpCheckoutIntervention,
   revokeAllUserSessions,
+  revokeSubscriptionGrant,
   terminalizeTopUpCheckoutIntervention,
 } from "@beutl/db";
 import {
@@ -31,7 +33,13 @@ import {
   loadAiSettings,
   PRO_PLAN,
 } from "@beutl/api";
-import { isActiveSubscription, isSubscriptionPlanId } from "@beutl/core";
+import {
+  addUtcMonths,
+  isActiveSubscription,
+  isSubscriptionPlanId,
+  SUBSCRIPTION_GRANT_MAX_YEARS,
+  SUBSCRIPTION_GRANT_REASON_MAX_LENGTH,
+} from "@beutl/core";
 
 // How a plan is called in a message to an administrator.
 function subscriptionPlanLabel(planId: string): string {
@@ -403,7 +411,8 @@ export async function setAiMonthlyUsage({
 
     try {
       const result = await startRetryableTransaction(async (tx) => {
-        const subscription = await getSubscription({
+        // 割当の期間は権利を与えている側に従う (付与なら付与の月ごとの区切り)。
+        const subscription = await getEntitlementSubscription({
           userId,
           planId: PRO_PLAN.id,
           prisma: tx,
@@ -485,6 +494,170 @@ export async function revokeUserSessions({
       return revoked;
     });
     if (!result) return { success: false, message: "User not found" };
+
+    revalidatePath("/[lang]/admin/users/[id]", "page");
+    return { success: true };
+  });
+}
+
+// 管理画面の期間の選択肢。months は付与の開始から数えるので、AI の月間割当の区切りと
+// 終了がちょうど揃う。until は画面が選んだ日の終わりを時刻に直して送る。
+type SubscriptionGrantTermInput =
+  | { kind: "months"; months: number }
+  | { kind: "until"; endsAt: string }
+  | { kind: "indefinite" };
+
+const MAX_GRANT_MONTHS = SUBSCRIPTION_GRANT_MAX_YEARS * 12;
+
+// 付与の終了。null は無期限、undefined は入力が不正。
+function resolveSubscriptionGrantEnd(
+  term: unknown,
+  startsAt: Date,
+): Date | null | undefined {
+  if (!term || typeof term !== "object") return undefined;
+  const value = term as Record<string, unknown>;
+  if (value.kind === "indefinite") return null;
+  if (value.kind === "months") {
+    const months = value.months;
+    if (
+      typeof months !== "number" ||
+      !Number.isSafeInteger(months) ||
+      months < 1 ||
+      months > MAX_GRANT_MONTHS
+    ) {
+      return undefined;
+    }
+    return addUtcMonths(startsAt, months);
+  }
+  if (value.kind === "until" && typeof value.endsAt === "string") {
+    const endsAt = new Date(value.endsAt);
+    if (
+      !Number.isFinite(endsAt.getTime()) ||
+      endsAt.getTime() <= startsAt.getTime() ||
+      endsAt.getTime() > addUtcMonths(startsAt, MAX_GRANT_MONTHS).getTime()
+    ) {
+      return undefined;
+    }
+    return endsAt;
+  }
+  return undefined;
+}
+
+// Stripe を通さずにプランの権利を与える。請求は無く、取り消すか期限が来るまで効く。
+export async function grantSubscription({
+  userId,
+  planId,
+  tier,
+  term,
+  reason,
+}: {
+  userId: string;
+  planId: string;
+  tier: string | null;
+  term: SubscriptionGrantTermInput;
+  reason: string;
+}): Promise<ActionResult> {
+  return await adminAction(async (session) => {
+    // Server Action の引数は型注釈が実行時に消えるため、値を検証してから永続化する。
+    if (typeof userId !== "string" || userId.length === 0) {
+      return { success: false, message: "Invalid user id" };
+    }
+    if (!isSubscriptionPlanId(planId)) {
+      return { success: false, message: "Invalid plan" };
+    }
+    if (tier !== null && typeof tier !== "string") {
+      return { success: false, message: "Invalid tier" };
+    }
+    const trimmedReason = typeof reason === "string" ? reason.trim() : "";
+    if (
+      trimmedReason.length === 0 ||
+      trimmedReason.length > SUBSCRIPTION_GRANT_REASON_MAX_LENGTH
+    ) {
+      return {
+        success: false,
+        message: `Enter a reason of up to ${SUBSCRIPTION_GRANT_REASON_MAX_LENGTH} characters`,
+      };
+    }
+    const startsAt = new Date();
+    const endsAt = resolveSubscriptionGrantEnd(term, startsAt);
+    if (endsAt === undefined) {
+      return { success: false, message: "Invalid grant period" };
+    }
+
+    const result = await startRetryableTransaction(async (tx) => {
+      const created = await createSubscriptionGrant({
+        userId,
+        planId,
+        tier,
+        startsAt,
+        endsAt,
+        reason: trimmedReason,
+        grantedByUserId: session.user.id,
+        prisma: tx,
+      });
+      if (created.status === "created") {
+        await addAuditLog({
+          userId: session.user.id,
+          action: auditLogActions.admin.subscriptionGranted,
+          details: `userId: ${userId}, grantId: ${created.grant.id}, planId: ${planId}, tier: ${tier ?? "-"}, endsAt: ${endsAt?.toISOString() ?? "none"}, reason: ${trimmedReason}`,
+          prisma: tx,
+        });
+      }
+      return created;
+    });
+    if (result.status === "rejected") {
+      const message = {
+        "user-not-found": "User not found",
+        "invalid-plan": "Invalid plan",
+        "invalid-tier": "Invalid tier for this plan",
+        "invalid-term": "Invalid grant period",
+        "grant-exists": `This user already has a ${subscriptionPlanLabel(planId)} grant in effect. Revoke it before granting again`,
+        "subscription-open": `This user has a ${subscriptionPlanLabel(planId)} subscription in Stripe. Cancel it before granting the plan`,
+      }[result.reason];
+      return { success: false, message };
+    }
+
+    revalidatePath("/[lang]/admin/users/[id]", "page");
+    return { success: true };
+  });
+}
+
+// 効いている付与をただちに止める。Stripe の契約には触れない。
+export async function revokeGrantedSubscription({
+  userId,
+  grantId,
+}: {
+  userId: string;
+  grantId: string;
+}): Promise<ActionResult> {
+  return await adminAction(async (session) => {
+    if (typeof userId !== "string" || userId.length === 0) {
+      return { success: false, message: "Invalid user id" };
+    }
+    if (typeof grantId !== "string" || grantId.length === 0) {
+      return { success: false, message: "Invalid grant id" };
+    }
+
+    const revoked = await startRetryableTransaction(async (tx) => {
+      const grant = await revokeSubscriptionGrant({
+        grantId,
+        userId,
+        revokedByUserId: session.user.id,
+        prisma: tx,
+      });
+      if (grant) {
+        await addAuditLog({
+          userId: session.user.id,
+          action: auditLogActions.admin.subscriptionGrantRevoked,
+          details: `userId: ${userId}, grantId: ${grant.id}, planId: ${grant.planId}, tier: ${grant.tier ?? "-"}`,
+          prisma: tx,
+        });
+      }
+      return grant;
+    });
+    if (!revoked) {
+      return { success: false, message: "The grant is no longer in effect" };
+    }
 
     revalidatePath("/[lang]/admin/users/[id]", "page");
     return { success: true };

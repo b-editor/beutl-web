@@ -2,7 +2,7 @@ import {
   findAccountDeletionIntentByUserId,
   findCreditAccount,
   getDb,
-  getSubscription,
+  getEntitlementSubscription,
   startRetryableTransaction,
   type PrismaTransaction,
   usagePeriodsEqual,
@@ -62,6 +62,11 @@ type EntitlementsResponse = {
   // True when the plan stays usable until currentPeriodEnd and then stops. A
   // cancellation made in the Stripe customer portal shows up here, not in status.
   cancelAtPeriodEnd: boolean;
+  // Set when the plan comes from an administrator's grant instead of a Stripe
+  // subscription: there is nothing to manage or cancel in Stripe. endsAt is
+  // null for a grant that lasts until it is revoked. The status and period
+  // fields above then describe the grant's current monthly allowance period.
+  grant: { endsAt: string | null } | null;
   canUseAi: boolean;
   balance: AiBalancePresentation;
   availability: AiOperationAvailability;
@@ -164,6 +169,7 @@ type SubscriptionState = {
   currentPeriodEnd: Date | null;
   cancelAt: Date | null;
   entitlementHeld?: boolean;
+  source?: "stripe" | "grant";
 };
 
 function getEffectiveSubscriptionEnd(
@@ -189,8 +195,10 @@ export function isActiveProSubscription(
     subscription?.status === "active" &&
     subscription.entitlementHeld !== true &&
     subscription.planId === PRO_PLAN.id &&
-    typeof subscription.billingOfferId === "string" &&
-    subscription.billingOfferId.length > 0 &&
+    // An administrator's grant has no Price; being a grant stands in for it.
+    (subscription.source === "grant" ||
+      (typeof subscription.billingOfferId === "string" &&
+        subscription.billingOfferId.length > 0)) &&
     effectiveEnd !== null &&
     effectiveEnd.getTime() > Date.now()
   );
@@ -204,7 +212,7 @@ async function loadEntitlementSnapshot(
   balance: AiBalanceSnapshot;
 }> {
   const [subscription, deletionIntent, settings] = await Promise.all([
-    getSubscription({ userId, planId: PRO_PLAN.id, prisma }),
+    getEntitlementSubscription({ userId, planId: PRO_PLAN.id, prisma }),
     findAccountDeletionIntentByUserId({ userId, prisma }),
     loadAiSettings({ prisma }),
   ]);
@@ -251,6 +259,10 @@ async function loadEntitlementSnapshot(
         : null,
       currentPeriodEnd: effectiveEnd ? effectiveEnd.toISOString() : null,
       cancelAtPeriodEnd: subscription?.cancelAtPeriodEnd === true,
+      grant:
+        subscription?.source === "grant"
+          ? { endsAt: subscription.grant.endsAt?.toISOString() ?? null }
+          : null,
       canUseAi: isActive,
       balance: toAiBalancePresentation(balance),
     },
@@ -381,7 +393,7 @@ export async function canStartAiOperation(
     if (await findAccountDeletionIntentByUserId({ userId, prisma })) {
       return false;
     }
-    const subscription = await getSubscription({ userId, planId: PRO_PLAN.id, prisma });
+    const subscription = await getEntitlementSubscription({ userId, planId: PRO_PLAN.id, prisma });
     if (!subscription || !isActiveProSubscription(subscription)) {
       return false;
     }

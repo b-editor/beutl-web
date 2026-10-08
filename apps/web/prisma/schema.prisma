@@ -40,6 +40,7 @@ model User {
   accountDeletionIntents       AccountDeletionIntent[]
   stripeCustomerOwnerships     StripeCustomerOwnership[]
   subscriptionEntitlementHolds SubscriptionEntitlementHold[]
+  subscriptionGrants           SubscriptionGrant[]
   AiSetting                    AiSetting[]
   StorageFolder                StorageFolder[]
   AiOperationModel             AiOperationModel[]
@@ -707,6 +708,28 @@ model Subscription {
   @@index([billingOfferId])
   // 管理画面の利用状況レポートは有効な契約数を status と期間で数える。
   @@index([status, currentPeriodEnd])
+}
+
+// 管理者が Stripe を通さずに与えたプランの権利。請求は無く、Subscription の行とは
+// 別に持つ。権利の判定 (getEntitlementSubscription) だけが両方を読み、Stripe の
+// 契約が権利を与えていない間に限って付与を使う。endsAt が null なら取り消すまで続く。
+// 行は消さずに revokedAt で閉じ、誰がいつ与えて取り消したかを残す。
+model SubscriptionGrant {
+  id              String    @id @default(uuid())
+  userId          String
+  planId          String
+  tier            String?
+  startsAt        DateTime
+  endsAt          DateTime?
+  reason          String
+  grantedByUserId String
+  revokedAt       DateTime?
+  revokedByUserId String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, planId, revokedAt])
 }
 
 // サブスクリプションのチェックアウト試行。ユーザーとプランごとに 1 行で、Stripe の

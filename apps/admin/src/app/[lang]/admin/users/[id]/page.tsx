@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { requireAdmin } from "@/lib/auth-guard";
 import { AiPlanSection } from "./ai-plan";
 import { StoragePlanSection } from "./storage-plan";
+import { SubscriptionGrantSection } from "./subscription-grants";
 import { SecuritySection } from "./security";
 import { Badge } from "@beutl/ui/ui/badge";
 import { stripeDashboardUrl } from "@/lib/stripe-dashboard";
@@ -121,6 +122,7 @@ export default async function Page(props: {
 
       <AiPlanSection lang={lang} userId={user.id} />
       <StoragePlanSection lang={lang} userId={user.id} />
+      <SubscriptionGrantSection lang={lang} userId={user.id} />
 
       <section className="rounded-lg border bg-card p-6">
         <h2 className="mb-4 text-lg font-semibold">{t("admin:users.packages")}</h2>

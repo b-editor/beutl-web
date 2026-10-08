@@ -32,12 +32,15 @@ import {
 } from "@/lib/stripe/subscription-billing";
 import { subscriptionPlanConfig } from "@/lib/stripe/subscription-plans";
 
+// granted は管理者の付与。請求も Stripe での管理も無い。
+export type BillingSubscriptionStatus = AiPlanStatusPresentation | "granted";
+
 export type BillingSubscriptionEntry = {
   product: BillingProduct;
   // ストレージ契約だけ持つ。
   tier: StorageTierId | null;
-  status: AiPlanStatusPresentation;
-  // 表示すべきでないときは null。
+  status: BillingSubscriptionStatus;
+  // 表示すべきでないときは null。付与 (granted) では付与の終了で、null は無期限。
   currentPeriodEnd: string | null;
   showCancellationNotice: boolean;
 };
@@ -133,7 +136,17 @@ export async function retrieveBillingPage(userId: string) {
   // 契約中の商品と加入できる商品を配列で返す。商品ごとに片方にだけ入る。
   const subscriptions: BillingSubscriptionEntry[] = [];
   const offers: BillingOfferEntry[] = [];
-  if (presentation.canManageSubscription) {
+  // 付与が権利を与えているのは Stripe の契約が与えていない間だけなので、付与を
+  // 先に見る。加入の案内も出さない (付与が終われば出る)。
+  if (entitlements.grant) {
+    subscriptions.push({
+      product: "aiPro",
+      tier: null,
+      status: "granted",
+      currentPeriodEnd: entitlements.grant.endsAt,
+      showCancellationNotice: false,
+    });
+  } else if (presentation.canManageSubscription) {
     subscriptions.push({
       product: "aiPro",
       tier: null,
@@ -146,7 +159,15 @@ export async function retrieveBillingPage(userId: string) {
   } else {
     offers.push({ product: "aiPro" });
   }
-  if (storagePresentation.canManageSubscription && storageSubscription) {
+  if (storageSubscription?.source === "grant") {
+    subscriptions.push({
+      product: "storage",
+      tier: isStorageTierId(storageSubscription.tier) ? storageSubscription.tier : null,
+      status: "granted",
+      currentPeriodEnd: storageSubscription.grant.endsAt?.toISOString() ?? null,
+      showCancellationNotice: false,
+    });
+  } else if (storagePresentation.canManageSubscription && storageSubscription) {
     subscriptions.push({
       product: "storage",
       // The tier the customer subscribed to, whether or not it is granting
