@@ -29,6 +29,8 @@ export async function getImageContentCache(request: Request, file: {
     const { ctx } = getCloudflareContext();
     waitUntil = ctx.waitUntil.bind(ctx);
   } catch {
+    // Worker context is absent in local Node/Next execution. Caching is
+    // optional; continue serving the image from storage in that environment.
     return null;
   }
 
