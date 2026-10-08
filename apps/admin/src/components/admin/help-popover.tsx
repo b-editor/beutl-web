@@ -5,6 +5,7 @@ import { Button } from "@beutl/ui/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@beutl/ui/ui/popover";
 import { CircleHelp } from "lucide-react";
 import type { ReactNode } from "react";
+import { RAW } from "@/lib/i18n";
 
 export function HelpPopover({
   lang,
@@ -25,7 +26,7 @@ export function HelpPopover({
           variant="ghost"
           size="icon"
           className="size-7 shrink-0 text-muted-foreground"
-          aria-label={t("admin:common.helpFor", { name: title })}
+          aria-label={t("admin:common.helpFor", { name: title, ...RAW })}
         >
           <CircleHelp className="size-4" aria-hidden="true" />
         </Button>

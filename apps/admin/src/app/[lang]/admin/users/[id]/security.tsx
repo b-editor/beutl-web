@@ -3,6 +3,7 @@ import { getTranslation } from "@beutl/i18n";
 import { Badge } from "@beutl/ui/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
 import { formatTimestamp } from "@/lib/format";
+import { RAW } from "@/lib/i18n";
 import { RevokeSessionsButton } from "./components";
 
 // サインイン手段と現在有効なセッション。乗っ取りの問い合わせで、どこから
@@ -171,6 +172,7 @@ export async function SecuritySection({
                       <Badge variant="secondary">
                         {t("admin:users.security.revokedAt", {
                           date: formatTimestamp(family.revokedAt, lang),
+                          ...RAW,
                         })}
                       </Badge>
                     ) : (
