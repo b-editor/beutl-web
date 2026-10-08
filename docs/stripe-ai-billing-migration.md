@@ -210,6 +210,8 @@ After deployment, verify the explicit relocks (and investigate any application
 table that is still unlocked):
 
 ```sql
+SHOW CREATE TABLE "File";
+SHOW CREATE TABLE "StorageFolder";
 SHOW CREATE TABLE "PackageCheckoutResolution";
 SHOW CREATE TABLE "TopUpDuplicateRefundAttempt";
 SHOW CREATE TABLE "TopUpCheckoutResolution";

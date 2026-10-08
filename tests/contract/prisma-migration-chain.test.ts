@@ -83,6 +83,9 @@ function findDdlOnLockedTables(migrations: { name: string; sql: string }[]) {
       } else if (
         (match = /^DROP TABLE (?:IF EXISTS )?"([^"]+)"/i.exec(statement))
       ) {
+        // The legacy schema changer drops a schema-locked table, and a table
+        // whose foreign key references a locked one, without an unlock
+        // (verified on Cockroach v26.2.5), so dropping only forgets the state.
         locked.delete(match[1]);
       } else if (
         (match =
