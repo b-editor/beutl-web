@@ -139,6 +139,13 @@ describe("public Web Worker API entrypoint", () => {
     expect(mocks.next.mock.calls[0][1].IMAGES).toBe(images);
   });
 
+  it("keeps variant metadata available to HEAD on the content route", async () => {
+    const images = { input: vi.fn() };
+    const bindings = { ...env, IMAGES: images, BEUTL_IMAGE_FREE_TRANSFORMS_ENABLED: "true" };
+    await web.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/contents/file-1?image=preview-1024`, { method: "HEAD" }), bindings, context());
+    expect(mocks.next.mock.calls[0][1].IMAGES).toBe(images);
+  });
+
   it.each([
     "/_next/image?url=https://beutl.beditor.net/api/contents/public-file&w=3840&q=75",
     "/_next/image/?url=/img/test.png&w=64&q=75",

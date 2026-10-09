@@ -8,5 +8,6 @@ export function freeImageTransformsEnabled(env: {
 
 /** Expose the binding only to the content route with bounded presets. */
 export function isContentImageTransformRequest(request: Request): boolean {
-  return request.method === "GET" && /^\/api\/contents\/[a-z\d_-]+\/?$/iu.test(new URL(request.url).pathname);
+  return (request.method === "GET" || request.method === "HEAD") &&
+    /^\/api\/contents\/[a-z\d_-]+\/?$/iu.test(new URL(request.url).pathname);
 }

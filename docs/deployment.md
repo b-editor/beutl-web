@@ -177,7 +177,7 @@ The operator confirmed that this deployment uses **Images Free**.
 The checked-in `apps/web/wrangler.jsonc` therefore sets
 `BEUTL_IMAGE_FREE_TRANSFORMS_ENABLED=true`, enabling transformations on the
 next deployment. The application still disables transformations whenever the
-variable is absent or not exactly `true`. When enabled, only GET requests to
+variable is absent or not exactly `true`. When enabled, only GET and HEAD requests to
 the content route receive the Images binding. OpenNext's generic `/_next/image`
 optimizer always receives no binding, so arbitrary Next.js width and quality
 combinations cannot consume the shared quota. Original image delivery and the
@@ -212,7 +212,10 @@ This implementation keeps originals outside Cloudflare Images, so its Images
 cost metric is transformations, not Images Stored or Images Delivered.
 Object storage, database, and Worker costs are separate. The 24-hour byte
 cache reduces repeated storage reads and encoding, but extending that cache
-does not reduce monthly unique transformation charges by itself.
+does not reduce monthly unique transformation charges by itself. AVIF inputs
+are served unchanged because AVIF input decoding requires Enterprise. Images
+Free never attempts that conversion; see
+[supported input formats](https://developers.cloudflare.com/images/get-started/limits/#input-formats).
 
 ### Presets and access checks
 
@@ -233,6 +236,14 @@ The Worker caches transformed bytes for 24 hours, keyed by the source object,
 hash, and preset version. Every request still checks the current File access
 policy before reading the cache or returning 304, so deletion and unpublishing
 take effect immediately. Public images use `no-cache, must-revalidate`.
+If a public transformation falls back, its original ETag is checked before
+returning the body, allowing 304 revalidation during an outage or quota pause.
+HEAD checks the same access policy without fetching or transforming bytes. It
+returns cached-variant metadata when available and known-original metadata
+when optimization is unavailable or paused. For an uncached eligible variant,
+it omits representation headers that depend on the eventual encoding/fallback
+decision, as permitted by
+[RFC 9110 section 9.3.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.3.2).
 Private and paid images are transformed only after authenticating the caller
 and checking the current owner or purchase, and retain `no-store` even on
 cache hits. Their bytes are reused only in the Worker's internal named cache;

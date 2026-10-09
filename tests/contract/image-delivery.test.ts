@@ -31,9 +31,10 @@ vi.mock("../../apps/web/node_modules/@opennextjs/cloudflare/dist/api/index.js", 
 
 type ContentGet = typeof import("../../apps/web/src/app/api/contents/[fileId]/route").GET;
 let GET: ContentGet;
+let HEAD: ContentGet;
 beforeAll(async () => {
   setR2BucketProvider(() => ({ get: mocks.get }) as never);
-  ({ GET } = await import("../../apps/web/src/app/api/contents/[fileId]/route"));
+  ({ GET, HEAD } = await import("../../apps/web/src/app/api/contents/[fileId]/route"));
 });
 
 const BYTES = new Uint8Array([1, 2, 3, 4]);
@@ -61,6 +62,13 @@ let stored: Map<string, Response>;
 async function request(headers?: HeadersInit, query = "") {
   return GET(
     new Request(`https://beutl.example/api/contents/file-1${query}`, { headers }) as Parameters<ContentGet>[0],
+    { params: Promise.resolve({ fileId: "file-1" }) },
+  );
+}
+
+async function head(headers?: HeadersInit, query = "") {
+  return HEAD(
+    new Request(`https://beutl.example/api/contents/file-1${query}`, { method: "HEAD", headers }) as Parameters<ContentGet>[0],
     { params: Promise.resolve({ fileId: "file-1" }) },
   );
 }
@@ -100,6 +108,162 @@ afterEach(async () => {
 });
 
 describe("image delivery", () => {
+  it.each(["PUBLIC", "PRIVATE"] as const)("HEAD matches cached WebP GET metadata for %s images without encoding", async (visibility) => {
+    mocks.findFileForContentAccess.mockResolvedValue({ ...file(), visibility });
+    mocks.getSession.mockResolvedValue({ user: { id: "owner" } });
+    const get = await request(undefined, "?image=preview-1024");
+    await get.arrayBuffer();
+    await Promise.all(pending);
+    const response = await head(undefined, "?image=preview-1024");
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("");
+    for (const name of ["Content-Type", "ETag", "Content-Length", "Content-Disposition", "Accept-Ranges", "Cache-Control", "Vary"]) {
+      expect(response.headers.get(name)).toBe(get.headers.get(name));
+    }
+    expect(mocks.input).toHaveBeenCalledTimes(1);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    const conditional = await head({ "If-None-Match": get.headers.get("ETag")! }, "?image=preview-1024");
+    expect(conditional.status).toBe(visibility === "PUBLIC" ? 304 : 200);
+    expect(mocks.input).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits uncertain encoding metadata on cold HEAD without fetching or transforming bytes", async () => {
+    const response = await head(undefined, "?image=preview-1024");
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("");
+    for (const name of ["Content-Type", "Content-Length", "ETag", "Content-Disposition", "Accept-Ranges"]) {
+      expect(response.headers.get(name)).toBeNull();
+    }
+    expect(response.headers.get("Cache-Control")).toBe("public, no-cache, must-revalidate");
+    expect(mocks.get).not.toHaveBeenCalled();
+    expect(mocks.input).not.toHaveBeenCalled();
+  });
+
+  it("HEAD advertises and revalidates the original during a known quota pause", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.output.mockRejectedValue({ code: 9422 });
+    const get = await request(undefined, "?image=preview-1024");
+    await get.arrayBuffer();
+    await Promise.all(pending);
+    const response = await head(undefined, "?image=preview-1024");
+    expect(await response.text()).toBe("");
+    for (const name of ["Content-Type", "ETag", "Content-Length", "Accept-Ranges"]) {
+      expect(response.headers.get(name)).toBe(get.headers.get(name));
+    }
+    expect((await head({ "If-None-Match": get.headers.get("ETag")! }, "?image=preview-1024")).status).toBe(304);
+    expect(mocks.input).toHaveBeenCalledTimes(1);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+  });
+
+  it("HEAD still describes an already cached variant while other transformations are paused", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const get = await request(undefined, "?image=icon-64");
+    await get.arrayBuffer();
+    await Promise.all(pending);
+    mocks.output.mockRejectedValue({ code: 9422 });
+    await (await request(undefined, "?image=icon-128")).arrayBuffer();
+    const response = await head(undefined, "?image=icon-64");
+    expect(response.headers.get("Content-Type")).toBe("image/webp");
+    expect(response.headers.get("Content-Length")).toBe("2");
+    expect(response.headers.get("ETag")).toBe(get.headers.get("ETag"));
+    expect((await head({ "If-None-Match": get.headers.get("ETag")! }, "?image=icon-64")).status).toBe(304);
+    expect((await request({ "If-None-Match": get.headers.get("ETag")! }, "?image=icon-64")).status).toBe(304);
+    expect(mocks.input).toHaveBeenCalledTimes(2);
+  });
+
+  it("HEAD checks current private ownership before reading cached metadata", async () => {
+    mocks.findFileForContentAccess.mockResolvedValue({ ...file(), visibility: "PRIVATE" });
+    mocks.getSession.mockResolvedValue({ user: { id: "owner" } });
+    await (await request(undefined, "?image=icon-64")).arrayBuffer();
+    await Promise.all(pending);
+    mocks.getSession.mockResolvedValue({ user: { id: "other" } });
+    const response = await head(undefined, "?image=icon-64");
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe("");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(mocks.match).toHaveBeenCalledTimes(2);
+    expect(mocks.input).toHaveBeenCalledTimes(1);
+  });
+
+  it("HEAD ignores byte ranges and returns full cached-variant metadata", async () => {
+    await (await request(undefined, "?image=preview-1024")).arrayBuffer();
+    await Promise.all(pending);
+    const response = await head({ Range: "bytes=0-1" }, "?image=preview-1024");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("image/webp");
+    expect(response.headers.get("Content-Length")).toBe("2");
+    expect(response.headers.get("Content-Range")).toBeNull();
+    expect(await response.text()).toBe("");
+    expect(mocks.input).toHaveBeenCalledTimes(1);
+  });
+
+  it("HEAD and GET serve AVIF originals without attempting Enterprise-only decoding", async () => {
+    mocks.findFileForContentAccess.mockResolvedValue({ ...file(), name: "image.avif", mimeType: "image/avif" });
+    const response = await head(undefined, "?image=preview-1024");
+    expect(response.headers.get("Content-Type")).toBe("image/avif");
+    expect(response.headers.get("Content-Length")).toBe("4");
+    expect(response.headers.get("ETag")).toBe(contentEntityTag(file()));
+    expect(mocks.get).not.toHaveBeenCalled();
+    for (let index = 0; index < 2; index++) {
+      expect(new Uint8Array(await (await request(undefined, "?image=preview-1024")).arrayBuffer())).toEqual(BYTES);
+      await Promise.all(pending);
+    }
+    expect(mocks.input).not.toHaveBeenCalled();
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+  });
+
+  it("revalidates the original after transient transformation failures", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mocks.output.mockRejectedValue(new Error("Images temporarily unavailable"));
+    const first = await request(undefined, "?image=preview-1024");
+    await first.arrayBuffer();
+    await Promise.all(pending);
+    const response = await request({ "If-None-Match": first.headers.get("ETag")! }, "?image=preview-1024");
+    expect(response.status).toBe(304);
+    expect(await response.text()).toBe("");
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(response.headers.get("ETag")).toBe(contentEntityTag(file()));
+    expect(mocks.output).toHaveBeenCalledTimes(2);
+  });
+
+  it("revalidates the original after a public variant falls back at the free quota", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.output.mockRejectedValue({ code: 9422 });
+    const first = await request(undefined, "?image=preview-1024");
+    expect(new Uint8Array(await first.arrayBuffer())).toEqual(BYTES);
+    await Promise.all(pending);
+    const second = await request({ "If-None-Match": first.headers.get("ETag")! }, "?image=preview-1024");
+    expect(second.status).toBe(304);
+    expect(second.headers.get("ETag")).toBe(contentEntityTag(file()));
+    expect(await second.text()).toBe("");
+    expect(mocks.output).toHaveBeenCalledTimes(1);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+  });
+
+  it("revalidates a paused original without fetching storage when its byte cache is gone", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.output.mockRejectedValue({ code: 9422 });
+    await (await request(undefined, "?image=preview-1024")).arrayBuffer();
+    await Promise.all(pending);
+    stored.clear();
+    const response = await request({ "If-None-Match": contentEntityTag(file()) }, "?image=preview-1024");
+    expect(response.status).toBe(304);
+    expect(await response.text()).toBe("");
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(mocks.input).toHaveBeenCalledTimes(1);
+  });
+
+  it("still sends an authenticated private original in full when transformations fail", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mocks.findFileForContentAccess.mockResolvedValue({ ...file(), visibility: "PRIVATE" });
+    mocks.getSession.mockResolvedValue({ user: { id: "owner" } });
+    mocks.output.mockRejectedValue(new Error("Images temporarily unavailable"));
+    const response = await request({ "If-None-Match": contentEntityTag(file()) }, "?image=preview-1024");
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
   it.each([undefined, "false", "1", "TRUE"])("never calls the transformation service without explicit free-plan activation: %s", async (flag) => {
     mocks.getCloudflareContext.mockReturnValue({
       env: { IMAGES: { input: mocks.input }, BEUTL_IMAGE_FREE_TRANSFORMS_ENABLED: flag },
@@ -409,6 +573,7 @@ describe("image delivery", () => {
     { query: "?image=constructor", mimeType: "image/png", size: BigInt(4) },
     { query: "?image=icon-64", mimeType: "image/svg+xml", size: BigInt(4) },
     { query: "?image=icon-64", mimeType: "image/gif", size: BigInt(4) },
+    { query: "?image=icon-64", mimeType: "image/avif", size: BigInt(4) },
     { query: "?image=icon-64", mimeType: "image/png", size: BigInt(11 * 1024 * 1024) },
   ])("uses original delivery for unsupported variants or sources: $query $mimeType $size", async ({ query, mimeType, size }) => {
     mocks.findFileForContentAccess.mockResolvedValue({ ...file(), mimeType, size });

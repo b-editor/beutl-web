@@ -17,9 +17,31 @@ import {
 import { getImageContentCache } from "@/lib/image-content-cache";
 import { getContentImageVariant } from "@/lib/content-image-transform";
 
+type ContentProps = { params: Promise<{ fileId: string }> };
+
 export async function GET(
   request: NextRequest,
-  props: { params: Promise<{ fileId: string }> },
+  props: ContentProps,
+) {
+  return serveContent(request, props, false);
+}
+
+/** Return representation metadata without fetching or encoding an image body. */
+export async function HEAD(request: NextRequest, props: ContentProps) {
+  const headers = new Headers(request.headers);
+  // RFC 9110 only defines Range for GET. HEAD describes the full representation.
+  headers.delete("range");
+  headers.delete("if-range");
+  const headRequest = new Request(request.url, { method: "HEAD", headers, signal: request.signal });
+  const response = await serveContent(headRequest as NextRequest, props, true);
+  void response.body?.cancel().catch(() => {});
+  return new NextResponse(null, { status: response.status, headers: response.headers });
+}
+
+async function serveContent(
+  request: NextRequest,
+  props: ContentProps,
+  headOnly: boolean,
 ) {
   const { fileId } = await props.params;
   const file = await findFileForContentAccess({ id: fileId });
@@ -72,8 +94,28 @@ export async function GET(
     } : headers;
     // Revalidate access first, then let a browser reuse unchanged public bytes.
     // Private/paid content retains no-store and always receives a full response.
-    if (access.canUsePublicCache && matchesContentEntityTag(request.headers.get("if-none-match"), variantHeaders.ETag)) {
+    if (access.canUsePublicCache && (!variant || !variant.isPaused()) &&
+      matchesContentEntityTag(request.headers.get("if-none-match"), variantHeaders.ETag)) {
       return new NextResponse(null, { status: 304, headers: variantHeaders });
+    }
+    if (headOnly) {
+      const cache = variant ? await getImageContentCache(request, file, variant.key) : null;
+      const cached = await cache?.match();
+      let headHeaders: Record<string, string>;
+      if (cached) {
+        headHeaders = { ...variantHeaders, "Content-Length": cached.headers.get("Content-Length")! };
+        void cached.body?.cancel().catch(() => {});
+      } else if (!variant || variant.isPaused()) {
+        headHeaders = { ...headers, "Content-Length": file.size.toString(), "Accept-Ranges": "bytes" };
+      } else {
+        // An uncached encoding may succeed or fall back. RFC 9110 9.3.2 permits
+        // omitting fields determined only while producing the response body.
+        // Do not advertise the original's metadata for a potential WebP GET.
+        headHeaders = contentCacheHeaders(access.canUsePublicCache);
+      }
+      const notModified = access.canUsePublicCache && headHeaders.ETag !== undefined &&
+        matchesContentEntityTag(request.headers.get("if-none-match"), headHeaders.ETag);
+      return new NextResponse(null, { status: notModified ? 304 : 200, headers: headHeaders });
     }
     // Media players seek with one byte range at a time.
     const size = Number(file.size);
@@ -93,14 +135,28 @@ export async function GET(
     const variantCache = variant ? await getImageContentCache(request, file, variant.key) : null;
     const cachedVariant = await variantCache?.match();
     if (cachedVariant) {
+      if (access.canUsePublicCache && matchesContentEntityTag(request.headers.get("if-none-match"), variantHeaders.ETag)) {
+        void cachedVariant.body?.cancel().catch(() => {});
+        return new NextResponse(null, { status: 304, headers: variantHeaders });
+      }
       return new NextResponse(cachedVariant.body, {
         headers: { ...variantHeaders, "Content-Length": cachedVariant.headers.get("Content-Length")! },
       });
     }
+    if (variant?.isPaused() && access.canUsePublicCache &&
+      matchesContentEntityTag(request.headers.get("if-none-match"), etag)) {
+      return new NextResponse(null, { status: 304, headers });
+    }
     const deliver = async (source: NextResponse) => {
       if (!variant) return source;
       const bytes = await variant.transform(source);
-      if (!bytes) return source;
+      if (!bytes) {
+        if (access.canUsePublicCache && matchesContentEntityTag(request.headers.get("if-none-match"), etag)) {
+          void source.body?.cancel().catch(() => {});
+          return new NextResponse(null, { status: 304, headers });
+        }
+        return source;
+      }
       const response = new NextResponse(bytes, {
         headers: { ...variantHeaders, "Content-Length": bytes.byteLength.toString() },
       });

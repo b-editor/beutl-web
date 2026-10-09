@@ -11,6 +11,12 @@ type QuotaState = {
 // presets, without keeping requests, streams, or caller identity in global state.
 const quotaStates = new WeakMap<object, QuotaState>();
 
+/** Whether a known quota backoff or recovery probe currently prevents encoding. */
+export function isImageTransformQuotaPaused(images: object): boolean {
+  const state = quotaStates.get(images);
+  return state !== undefined && (state.probing || Date.now() < state.retryAfter);
+}
+
 /** Pause after quota exhaustion and allow one probe after the backoff expires.
  * Cold isolates probe independently; this is not an account-wide quota meter. */
 export async function withImageTransformQuota<T>(

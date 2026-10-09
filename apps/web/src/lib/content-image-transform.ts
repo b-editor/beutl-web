@@ -3,10 +3,11 @@ import { contentEntityTag } from "./content-cache";
 import { MAX_CACHED_IMAGE_BYTES } from "./image-content-cache";
 import { CONTENT_IMAGE_VARIANTS, type ContentImageVariant } from "./content-image";
 import { freeImageTransformsEnabled } from "./image-transform-policy";
-import { withImageTransformQuota } from "./image-transform-quota";
+import { isImageTransformQuotaPaused, withImageTransformQuota } from "./image-transform-quota";
 
 const TRANSFORMABLE_TYPES = new Set([
-  "image/jpeg", "image/png", "image/webp", "image/avif",
+  // AVIF input decoding requires Enterprise; this deployment uses Images Free.
+  "image/jpeg", "image/png", "image/webp",
 ]);
 
 /** Only call after the file's live access policy allows this request, including authentication. */
@@ -42,6 +43,7 @@ export function getContentImageVariant(request: Request, file: {
   return {
     key,
     etag,
+    isPaused: () => isImageTransformQuotaPaused(images),
     async transform(source: Response): Promise<Uint8Array<ArrayBuffer> | null> {
       try {
         return await withImageTransformQuota(images, async () => {
