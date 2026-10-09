@@ -13,7 +13,7 @@ export type AppDownloadOs = (typeof APP_DOWNLOAD_OSES)[number];
 const APP_DOWNLOAD_ARCHES = ["x64", "arm64"] as const;
 export type AppDownloadArch = (typeof APP_DOWNLOAD_ARCHES)[number];
 
-const APP_DOWNLOAD_TYPES = ["installer", "app", "flatpak", "debian", "zip"] as const;
+const APP_DOWNLOAD_TYPES = ["installer", "app", "flatpak", "zip"] as const;
 export type AppDownloadType = (typeof APP_DOWNLOAD_TYPES)[number];
 
 export type AppDownload = {
@@ -39,16 +39,15 @@ export const UNKNOWN_PLATFORM: DetectedPlatform = { os: null, arch: null };
 
 /*
   The variants the page lists, in order. Only self-contained builds are listed,
-  which run without a separately installed .NET runtime; the builds that need
-  one remain on the GitHub releases page. Each platform's first variant is the
-  one the download button offers. On Linux that is the Flatpak, the format most
-  Linux downloads have chosen since it was introduced.
+  which run without a separately installed .NET runtime. Each platform's first
+  variant is the one the download button offers. On Linux that is the Flatpak,
+  which runs more reliably than the Debian package even on Debian, so the .deb
+  stays on the GitHub releases page with the builds that need a runtime.
 */
 const VARIANTS: { os: AppDownloadOs; type: AppDownloadType; standalone: boolean }[] = [
   { os: "win", type: "installer", standalone: true },
   { os: "osx", type: "app", standalone: true },
   { os: "linux", type: "flatpak", standalone: true },
-  { os: "linux", type: "debian", standalone: true },
   { os: "linux", type: "zip", standalone: true },
 ];
 

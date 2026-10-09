@@ -163,14 +163,14 @@ describe("platform detection", () => {
 
 describe("registered downloads", () => {
   it("lists the self-contained builds grouped by platform, defaults first", () => {
-    // The builds that need a separately installed .NET runtime stay on GitHub.
+    // The builds that need a separately installed .NET runtime, and the .deb,
+    // which the Flatpak supersedes, stay on GitHub.
     expect(toAppDownloads(REGISTERED).map(key)).toEqual([
       "win/x64/installer/standalone",
       "win/arm64/installer/standalone",
       "osx/arm64/app/standalone",
       "osx/x64/app/standalone",
       "linux/x64/flatpak/standalone",
-      "linux/x64/debian/standalone",
       "linux/x64/zip/standalone",
     ]);
   });

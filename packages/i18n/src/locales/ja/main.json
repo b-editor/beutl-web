@@ -140,7 +140,6 @@
   "downloadAppleSilicon": "Appleシリコン",
   "downloadIntelMac": "Intel",
   "downloadFlatpak": "Flatpak",
-  "downloadDebian": "Debian / Ubuntu (.deb)",
   "downloadZip": "ZIP",
   "releaseNotes": "リリースノート",
   "moreDownloads": "その他の形式・過去のバージョン"
