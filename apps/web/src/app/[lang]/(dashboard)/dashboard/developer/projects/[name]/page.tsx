@@ -8,6 +8,8 @@ import { PackagePricingForm } from "./package-pricing-form";
 import { ReleaseForm } from "./release-form";
 import { isAdmin } from "@beutl/core";
 import { throwIfUnauth } from "@/lib/auth-guard";
+import { findAppReleaseAssetVersions } from "@beutl/db";
+import SemVer from "semver";
 
 export default async function Page(props: {
   params: Promise<{ lang: string; name: string }>;
@@ -26,6 +28,12 @@ export default async function Page(props: {
     notFound();
   }
 
+  const beutlVersions = [...new Set(
+    (await findAppReleaseAssetVersions({}))
+      .map(({ version }) => SemVer.valid(version))
+      .filter((version): version is string => version !== null),
+  )].sort(SemVer.rcompare);
+
   return (
     <>
       <div className="max-w-5xl mx-auto py-10 lg:py-6 px-4 lg:px-6 bg-card lg:rounded-lg border text-card-foreground lg:my-4">
@@ -36,7 +44,7 @@ export default async function Page(props: {
         <div className="flex max-lg:flex-col mt-6">
           <div className="lg:basis-2/3 lg:pr-6">
             <PackageDescriptionForm pkg={pkg} lang={lang} />
-            <ReleaseForm pkg={pkg} lang={lang} />
+            <ReleaseForm pkg={pkg} lang={lang} beutlVersions={beutlVersions} />
           </div>
           <div className="lg:basis-1/3">
             <PackageDetailsForm pkg={pkg} lang={lang} />
