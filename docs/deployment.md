@@ -222,8 +222,13 @@ Free never attempts that conversion; see
 Image elements request `/api/contents/<fileId>?image=<preset>`. Eight fixed
 presets are accepted: `icon-64`, `icon-128`, `screenshot-320`,
 `screenshot-640`, `thumbnail-320`, `thumbnail-640`, `preview-1024`, and
-`preview-2048`. They produce WebP at quality 85, preserve the aspect ratio,
-and do not upscale. Consumers with a fixed CSS size select a 1x or 2x version
+`preview-2048`. They produce WebP at quality 85, preserve the aspect ratio
+and transparent pixels, and do not upscale. The transform explicitly sets a
+transparent background; see
+[the Images background parameter](https://developers.cloudflare.com/images/optimization/features/#background).
+The versioned cache key and ETag change with these encoding settings, so old
+opaque variants are not reused. Consumers with a fixed CSS size select a 1x
+or 2x version
 through `srcset`. The storage preview dialog requests the largest preview
 preset without a density descriptor, preserving intrinsic dimensions when
 the source is smaller than that preset or a transformation falls back.
@@ -236,6 +241,8 @@ The Worker caches transformed bytes for 24 hours, keyed by the source object,
 hash, and preset version. Every request still checks the current File access
 policy before reading the cache or returning 304, so deletion and unpublishing
 take effect immediately. Public images use `no-cache, must-revalidate`.
+Variant validators are checked only against cached or successfully generated
+WebP bytes; an uncached variant must not return 304 before its encoding is known.
 If a public transformation falls back, its original ETag is checked before
 returning the body, allowing 304 revalidation during an outage or quota pause.
 HEAD checks the same access policy without fetching or transforming bytes. It

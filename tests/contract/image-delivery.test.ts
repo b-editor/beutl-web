@@ -139,6 +139,20 @@ describe("image delivery", () => {
     expect(mocks.input).not.toHaveBeenCalled();
   });
 
+  it("does not revalidate an evicted variant on HEAD before its encoding is known", async () => {
+    const first = await request(undefined, "?image=preview-1024");
+    await first.arrayBuffer();
+    await Promise.all(pending);
+    stored.clear();
+    const response = await head({ "If-None-Match": first.headers.get("ETag")! }, "?image=preview-1024");
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("");
+    expect(response.headers.get("ETag")).toBeNull();
+    expect(response.headers.get("Content-Type")).toBeNull();
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(mocks.input).toHaveBeenCalledTimes(1);
+  });
+
   it("HEAD advertises and revalidates the original during a known quota pause", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     mocks.output.mockRejectedValue({ code: 9422 });
@@ -223,6 +237,38 @@ describe("image delivery", () => {
     expect(await response.text()).toBe("");
     expect(response.headers.get("Content-Type")).toBe("image/png");
     expect(response.headers.get("ETag")).toBe(contentEntityTag(file()));
+    expect(mocks.output).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends the original when an evicted variant fails to regenerate despite a matching variant validator", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const first = await request(undefined, "?image=preview-1024");
+    await first.arrayBuffer();
+    await Promise.all(pending);
+    stored.clear();
+    mocks.output.mockRejectedValue(new Error("Images temporarily unavailable"));
+    const response = await request({ "If-None-Match": first.headers.get("ETag")! }, "?image=preview-1024");
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES);
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(response.headers.get("ETag")).toBe(contentEntityTag(file()));
+    expect(mocks.output).toHaveBeenCalledTimes(2);
+  });
+
+  it("revalidates an evicted variant only after successfully regenerating and caching it", async () => {
+    const first = await request(undefined, "?image=preview-1024");
+    await first.arrayBuffer();
+    await Promise.all(pending);
+    stored.clear();
+    const response = await request({ "If-None-Match": first.headers.get("ETag")! }, "?image=preview-1024");
+    expect(response.status).toBe(304);
+    expect(await response.text()).toBe("");
+    expect(response.headers.get("ETag")).toBe(first.headers.get("ETag"));
+    expect(response.headers.get("Content-Type")).toBe("image/webp");
+    expect(mocks.output).toHaveBeenCalledTimes(2);
+    await Promise.all(pending);
+    const cached = await request(undefined, "?image=preview-1024");
+    expect(new Uint8Array(await cached.arrayBuffer())).toEqual(WEBP_BYTES);
     expect(mocks.output).toHaveBeenCalledTimes(2);
   });
 
@@ -398,8 +444,8 @@ describe("image delivery", () => {
     expect(first.headers.get("Content-Disposition")).toContain("image.webp");
     expect(first.headers.get("Content-Length")).toBe("2");
     expect(first.headers.get("Accept-Ranges")).toBe("none");
-    expect(first.headers.get("ETag")).toMatch(/^W\/"sha256-.*-webp-q85-v1-icon-64"$/u);
-    expect(mocks.transform).toHaveBeenCalledWith({ width: 64, height: 64, fit: "scale-down" });
+    expect(first.headers.get("ETag")).toMatch(/^W\/"sha256-.*-webp-q85-v2-icon-64"$/u);
+    expect(mocks.transform).toHaveBeenCalledWith({ width: 64, height: 64, fit: "scale-down", background: "rgba(0,0,0,0)" });
     expect(mocks.output).toHaveBeenCalledWith({ format: "image/webp", quality: 85 });
     await Promise.all(pending);
 
@@ -419,6 +465,19 @@ describe("image delivery", () => {
     expect(mocks.get).toHaveBeenCalledTimes(1);
   });
 
+  it("does not reuse variants or validators created with the old background settings", async () => {
+    const oldTag = `W/"sha256-${SHA256}-webp-q85-v1-icon-64"`;
+    const oldKey = new URL("https://beutl.example/__beutl_image_content/objects%2Fimage-1");
+    oldKey.searchParams.set("sha256", SHA256);
+    oldKey.searchParams.set("variant", "webp-q85-v1-icon-64");
+    stored.set(oldKey.href, new Response(new Uint8Array([9]), { headers: { "Content-Length": "1" } }));
+    const response = await request({ "If-None-Match": oldTag }, "?image=icon-64");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("ETag")).not.toBe(oldTag);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(WEBP_BYTES);
+    expect(mocks.output).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps each size and source replacement separate and revalidates the selected representation", async () => {
     const small = await request(undefined, "?image=icon-64");
     await small.arrayBuffer();
@@ -435,7 +494,7 @@ describe("image delivery", () => {
     expect(revalidated.status).toBe(304);
     expect(revalidated.headers.get("Content-Type")).toBe("image/webp");
     expect(mocks.input).toHaveBeenCalledTimes(2);
-    expect(mocks.match).toHaveBeenCalledTimes(4);
+    expect(mocks.match).toHaveBeenCalledTimes(5);
 
     mocks.findFileForContentAccess.mockResolvedValue({ ...file(), objectKey: "objects/image-2", sha256: "b".repeat(64) });
     const replaced = await request({ "If-None-Match": large.headers.get("ETag")! }, "?image=icon-128");
@@ -564,7 +623,7 @@ describe("image delivery", () => {
     const response = await request(undefined, `?image=${preset}`);
     expect(response.status).toBe(200);
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(WEBP_BYTES);
-    expect(mocks.transform).toHaveBeenCalledWith({ width: size, height: size, fit: "scale-down" });
+    expect(mocks.transform).toHaveBeenCalledWith({ width: size, height: size, fit: "scale-down", background: "rgba(0,0,0,0)" });
     expect(mocks.output).toHaveBeenCalledWith({ format: "image/webp", quality: 85 });
   });
 

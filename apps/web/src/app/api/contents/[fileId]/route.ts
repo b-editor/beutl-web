@@ -92,9 +92,10 @@ async function serveContent(
       ETag: variant.etag,
       "Accept-Ranges": "none",
     } : headers;
-    // Revalidate access first, then let a browser reuse unchanged public bytes.
+    // Originals have known metadata; variants must be cached or generated
+    // before revalidation, since a failed transformation changes the response.
     // Private/paid content retains no-store and always receives a full response.
-    if (access.canUsePublicCache && (!variant || !variant.isPaused()) &&
+    if (access.canUsePublicCache && !variant &&
       matchesContentEntityTag(request.headers.get("if-none-match"), variantHeaders.ETag)) {
       return new NextResponse(null, { status: 304, headers: variantHeaders });
     }
@@ -162,6 +163,10 @@ async function serveContent(
       });
       variantCache?.put(response);
       void source.body?.cancel().catch(() => {});
+      if (access.canUsePublicCache && matchesContentEntityTag(request.headers.get("if-none-match"), variantHeaders.ETag)) {
+        void response.body?.cancel().catch(() => {});
+        return new NextResponse(null, { status: 304, headers: variantHeaders });
+      }
       return response;
     };
     // Cache only whole images; a partial response must never replace the full

@@ -36,7 +36,8 @@ export function getContentImageVariant(request: Request, file: {
   }
   if (!images) return null;
 
-  const key = `webp-q85-v1-${name}`;
+  // v2 preserves alpha and must not reuse outputs from the old background settings.
+  const key = `webp-q85-v2-${name}`;
   // Transformation engines may change their encoder without changing the
   // source. A weak tag describes the representation without claiming byte parity.
   const etag = `W/${contentEntityTag(file).replace(/^W\//u, "").replace(/"$/u, `-${key}"`)}`;
@@ -50,7 +51,11 @@ export function getContentImageVariant(request: Request, file: {
           const input = source.clone();
           try {
             const result = await images.input(input.body!)
-              .transform({ ...CONTENT_IMAGE_VARIANTS[name as ContentImageVariant], fit: "scale-down" })
+              .transform({
+                ...CONTENT_IMAGE_VARIANTS[name as ContentImageVariant],
+                fit: "scale-down",
+                background: "rgba(0,0,0,0)",
+              })
               .output({ format: "image/webp", quality: 85 });
             const response = result.response();
             if (!response.ok || !response.body) return null;
