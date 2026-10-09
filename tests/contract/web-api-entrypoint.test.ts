@@ -122,6 +122,53 @@ describe("public Web Worker API entrypoint", () => {
     expect(mocks.next).toHaveBeenCalledTimes(3);
   });
 
+  it.each(["/api/contents/file-1?image=preview-1024", "/_next/image?url=/img/test.png&w=64&q=75"])(
+    "keeps the Images binding disabled by default for %s", async (path) => {
+      const images = { input: vi.fn() };
+      const bindings = { ...env, IMAGES: images };
+      await web.fetch(new Request(`${env.PUBLIC_ORIGIN}${path}`), bindings, context());
+      expect(mocks.next.mock.calls[0][1].IMAGES).toBeUndefined();
+      expect(bindings.IMAGES).toBe(images);
+    },
+  );
+
+  it.each(["/api/contents/file-1?image=preview-1024", "/api/contents/file-1/?image=thumbnail-320"])("passes the Images binding to the activated content route: %s", async (path) => {
+    const images = { input: vi.fn() };
+    const bindings = { ...env, IMAGES: images, BEUTL_IMAGE_FREE_TRANSFORMS_ENABLED: "true" };
+    await web.fetch(new Request(`${env.PUBLIC_ORIGIN}${path}`), bindings, context());
+    expect(mocks.next.mock.calls[0][1].IMAGES).toBe(images);
+  });
+
+  it("keeps variant metadata available to HEAD on the content route", async () => {
+    const images = { input: vi.fn() };
+    const bindings = { ...env, IMAGES: images, BEUTL_IMAGE_FREE_TRANSFORMS_ENABLED: "true" };
+    await web.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/contents/file-1?image=preview-1024`, { method: "HEAD" }), bindings, context());
+    expect(mocks.next.mock.calls[0][1].IMAGES).toBe(images);
+  });
+
+  it.each([
+    "/_next/image?url=https://beutl.beditor.net/api/contents/public-file&w=3840&q=75",
+    "/_next/image/?url=/img/test.png&w=64&q=75",
+    "/ja/dashboard/storage",
+    "/api/contents/file-1/extra?image=preview-1024",
+    "/api/contents/%2F..%2F..%2F_next%2Fimage?url=/img/test.png&w=3840&q=75",
+  ])("withholds the binding outside the bounded content route even when activated: %s", async (path) => {
+    const images = { input: vi.fn() };
+    const bindings = { ...env, IMAGES: images, BEUTL_IMAGE_FREE_TRANSFORMS_ENABLED: "true" };
+    await web.fetch(new Request(`${env.PUBLIC_ORIGIN}${path}`), bindings, context());
+    expect(mocks.next.mock.calls[0][1].IMAGES).toBeUndefined();
+    expect(bindings.IMAGES).toBe(images);
+  });
+
+  it("does not expose the binding to Server Actions posted to the content path", async () => {
+    const images = { input: vi.fn() };
+    const bindings = { ...env, IMAGES: images, BEUTL_IMAGE_FREE_TRANSFORMS_ENABLED: "true" };
+    await web.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/contents/file-1`, {
+      method: "POST", headers: { "next-action": "40".padEnd(42, "0") }, body: "[]",
+    }), bindings, context());
+    expect(mocks.next.mock.calls[0][1].IMAGES).toBeUndefined();
+  });
+
   it("hides a visitor's disconnect from page renders but not from Server Actions", async () => {
     const seen: Request[] = [];
     mocks.next.mockImplementation(async (request: Request) => {

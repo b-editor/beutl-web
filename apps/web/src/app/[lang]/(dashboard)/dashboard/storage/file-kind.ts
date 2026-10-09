@@ -45,8 +45,8 @@ const THUMBNAIL_TYPES = new Set([
   "image/x-icon",
 ]);
 
-// There is no thumbnail service; the grid shows the original. Past this size
-// a page of cards would pull more than a video's worth of bytes.
+// Resized thumbnails fall back to originals without an Images binding or for
+// unsupported formats. Bound that fallback cost for a whole page of cards.
 const THUMBNAIL_MAX_BYTES = 8 * 1024 * 1024;
 
 const KIND_ICONS: Record<FileKind, LucideIcon> = {

@@ -2,6 +2,7 @@
 
 import { formatDateTime, randomUuid } from "@beutl/core";
 import { browserTimeZone } from "@/lib/client-time-zone";
+import { contentImageSources } from "@/lib/content-image";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { Alert, AlertDescription, AlertTitle } from "@beutl/ui/ui/alert";
 import {
@@ -553,8 +554,12 @@ export function JobHistory({
                     {job.url && isImage && !brokenThumbnails.has(job.id) ? (
                       /* eslint-disable-next-line @next/next/no-img-element */
                       <img
-                        src={job.url}
+                        {...contentImageSources(job.url, "icon")}
                         alt=""
+                        width={48}
+                        height={48}
+                        loading="lazy"
+                        decoding="async"
                         className="h-12 w-12 shrink-0 rounded border object-cover"
                         // A result the storage layer no longer has would leave
                         // a broken image where the row's only visual is.

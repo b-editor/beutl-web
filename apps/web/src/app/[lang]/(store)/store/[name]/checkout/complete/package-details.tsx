@@ -12,6 +12,7 @@ import {
 import { formatAmount } from "@beutl/core";
 import type { Package } from "@/lib/store-utils";
 import { useTranslation } from "@beutl/ui/i18n-client";
+import { contentImageSources } from "@/lib/content-image";
 
 export function PackageDetails({
   pkg,
@@ -36,7 +37,10 @@ export function PackageDetails({
               <img
                 className="w-16 h-16 max-w-fit rounded-md"
                 alt="Package icon"
-                src={pkg.iconFileUrl}
+                {...contentImageSources(pkg.iconFileUrl, "icon")}
+                width={64}
+                height={64}
+                decoding="async"
               />
             )}
             {!pkg.iconFileUrl && (
@@ -69,7 +73,7 @@ export function PackageDetails({
             </h3>
             <Carousel className="mt-4" opts={{ active: maxLg }}>
               <CarouselContent className="max-lg:overflow-x-scroll max-lg:hidden-scrollbar">
-                {pkg.PackageScreenshot.map((item) => (
+                {pkg.PackageScreenshot.map((item, index) => (
                   <CarouselItem
                     className="w-min max-w-min min-w-min"
                     key={item.file.id}
@@ -78,7 +82,9 @@ export function PackageDetails({
                     <img
                       className="rounded h-80 aspect-auto"
                       alt="Screenshot"
-                      src={item.url}
+                      {...contentImageSources(item.url, "screenshot")}
+                      loading={index === 0 ? "eager" : "lazy"}
+                      decoding="async"
                     />
                   </CarouselItem>
                 ))}

@@ -19,6 +19,7 @@ import {
 import { cn, formatBytes, normalizeMimeType } from "@beutl/core";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { servedInline } from "@/lib/content-cache";
+import { contentImageSources } from "@/lib/content-image";
 
 /** A file the preview can show: where its bytes are served and what they are. */
 export type PreviewFile = {
@@ -166,7 +167,8 @@ function PreviewBody({ file, lang }: { file: PreviewFile; lang: string }) {
       return (
         <>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img key={file.url} src={file.url} alt={file.name} onLoad={() => setLoadedUrl(file.url)} {...media}
+          <img key={file.url} {...contentImageSources(file.url, "preview", { intrinsicSizing: true })} alt={file.name} onLoad={() => setLoadedUrl(file.url)} {...media}
+            decoding="async"
             className={cn(media.className, "max-h-full max-w-full object-contain")} />
           {!loaded && <MediaLoading lang={lang} />}
         </>

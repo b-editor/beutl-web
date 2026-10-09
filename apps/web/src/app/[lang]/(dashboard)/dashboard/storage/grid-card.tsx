@@ -21,6 +21,7 @@ import {
 } from "./file-actions";
 import { useVisibilitySpec } from "./visibility-badge";
 import type { StorageFile, StorageFolder } from "./types";
+import { contentImageSources } from "@/lib/content-image";
 
 type FileCardProps = {
   row: Row<StorageFile>;
@@ -65,7 +66,7 @@ export const FileCard = forwardRef<HTMLDivElement, FileCardProps>(
           {thumbnail ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={contentUrl(file)}
+              {...contentImageSources(contentUrl(file), "thumbnail")}
               alt=""
               loading="lazy"
               decoding="async"

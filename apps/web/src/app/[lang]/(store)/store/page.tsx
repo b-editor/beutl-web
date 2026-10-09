@@ -12,6 +12,7 @@ import {
 } from "@beutl/core";
 import type { PackageTypeFilter } from "@beutl/core";
 import { retrievePackages } from "@/lib/store-utils";
+import { contentImageSources } from "@/lib/content-image";
 import Link from "next/link";
 
 const TYPE_FILTER_LABEL_KEYS: Record<PackageTypeFilter, string> = {
@@ -115,7 +116,11 @@ export default async function Page(
                         <img
                           className="flex-1 w-16 h-16 max-w-16 max-h-16 rounded-md"
                           alt="Package icon"
-                          src={item.iconFileUrl}
+                          {...contentImageSources(item.iconFileUrl, "icon")}
+                          width={64}
+                          height={64}
+                          loading="lazy"
+                          decoding="async"
                         />
                       )}
                       {!item.iconFileUrl && (
