@@ -8,7 +8,8 @@ import {
 import type { Package } from "./types";
 import { Button } from "@beutl/ui/ui/button";
 import { Edit, Loader2, Plus, Save } from "lucide-react";
-import { Textarea } from "@beutl/ui/ui/textarea";
+import { Markdown } from "@beutl/ui/ui/markdown";
+import { MarkdownEditor } from "@beutl/ui/ui/markdown-editor";
 import { Input } from "@beutl/ui/ui/input";
 import {
   Select,
@@ -213,9 +214,16 @@ export function ReleaseForm({
           <>
             <Select
               value={release?.id}
-              onValueChange={(e) =>
-                setRelease(releases.find((r) => r.id === e)!)
-              }
+              disabled={edit}
+              onValueChange={(e) => {
+                const selected = releases.find((r) => r.id === e)!;
+                setRelease(selected);
+                setTitle(selected.title);
+                setDescription(selected.description);
+                setTargetVersion({ value: selected.targetVersion, message: "" });
+                setPublished(selected.published);
+                setFiles([]);
+              }}
             >
               <SelectTrigger className="font-bold text-xl border-none bg-transparent px-0 pr-3 flex-1">
                 <SelectValue />
@@ -243,6 +251,7 @@ export function ReleaseForm({
                   size="icon"
                   variant="ghost"
                   className="w-8 h-8"
+                  aria-label={t("developer:common.edit")}
                   onClick={() => setEdit(true)}
                 >
                   <Edit className="w-4 h-4" />
@@ -258,19 +267,16 @@ export function ReleaseForm({
         )}
       </div>
       {!edit && (
-        <p
-          className="mt-4 whitespace-pre-wrap"
-          style={{ wordWrap: "break-word" }}
-        >
+        <div className="mt-4">
           {release ? (
             <>
-              {release.title} <br />
-              {release.description}
+              <p className="mb-3 font-semibold break-words">{release.title}</p>
+              <Markdown>{release.description}</Markdown>
             </>
           ) : (
             <>{t("developer:release.noReleases")}</>
           )}
-        </p>
+        </div>
       )}
       {edit && release && (
         <div className="flex flex-col gap-2">
@@ -287,13 +293,20 @@ export function ReleaseForm({
           <Label className="mt-2" htmlFor="release-description">
             {t("developer:release.description")}
           </Label>
-          <Textarea
+          <MarkdownEditor
+            key={release.id}
             id="release-description"
             placeholder={t("developer:release.description")}
             maxLength={1000}
             value={description}
             disabled={saving}
             onChange={(e) => setDescription(e.target.value)}
+            labels={{
+              write: t("developer:markdown.write"),
+              preview: t("developer:markdown.preview"),
+              hint: t("developer:markdown.hint"),
+              emptyPreview: t("developer:markdown.emptyPreview"),
+            }}
           />
           <Label className="mt-2" htmlFor="release-target-version">
             {t("developer:release.targetVersion")}

@@ -2,6 +2,7 @@ import { ADMIN_PACKAGE_RELEASE_PAGE_SIZE, getPackageDetailForAdmin } from "@beut
 import { formatAmount, formatBytes } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 import { Badge } from "@beutl/ui/ui/badge";
+import { Markdown } from "@beutl/ui/ui/markdown";
 import { Button } from "@beutl/ui/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
 import { ArrowLeft } from "lucide-react";
@@ -114,8 +115,8 @@ export default async function Page(props: {
           </div>
           <div className="sm:col-span-2">
             <dt className="text-muted-foreground">{t("admin:packages.description")}</dt>
-            <dd className="max-h-64 overflow-auto whitespace-pre-wrap rounded border bg-muted/30 p-3">
-              {pkg.description || "-"}
+            <dd className="max-h-64 overflow-auto rounded border bg-muted/30 p-3">
+              <Markdown>{pkg.description || "-"}</Markdown>
             </dd>
           </div>
         </dl>

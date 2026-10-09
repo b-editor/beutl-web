@@ -6,6 +6,7 @@
     "confirmDeleteTitle": "Are you sure you want to delete this?",
     "create": "Create",
     "delete": "Delete",
+    "edit": "Edit",
     "error": "Error",
     "publish": "Publish",
     "save": "Save",
@@ -60,6 +61,12 @@
   },
   "description": {
     "title": "Description"
+  },
+  "markdown": {
+    "write": "Write",
+    "preview": "Preview",
+    "hint": "Markdown is supported.",
+    "emptyPreview": "Nothing to preview."
   },
   "details": {
     "title": "Details",

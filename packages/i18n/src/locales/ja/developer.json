@@ -6,6 +6,7 @@
     "confirmDeleteTitle": "本当に削除しますか？",
     "create": "作成",
     "delete": "削除",
+    "edit": "編集",
     "error": "エラー",
     "publish": "公開する",
     "save": "保存",
@@ -60,6 +61,12 @@
   },
   "description": {
     "title": "説明"
+  },
+  "markdown": {
+    "write": "編集",
+    "preview": "プレビュー",
+    "hint": "Markdownが使えます。",
+    "emptyPreview": "プレビューする内容がありません。"
   },
   "details": {
     "title": "詳細",

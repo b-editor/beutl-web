@@ -4,7 +4,8 @@ import { Button } from "@beutl/ui/ui/button";
 import type { Package } from "./types";
 import { Edit, Loader2, Save } from "lucide-react";
 import { useCallback, useReducer, useState, useTransition } from "react";
-import { Textarea } from "@beutl/ui/ui/textarea";
+import { Markdown } from "@beutl/ui/ui/markdown";
+import { MarkdownEditor } from "@beutl/ui/ui/markdown-editor";
 import { useToast } from "@beutl/ui/use-toast";
 import { updateDescription } from "./actions/package";
 import { useTranslation } from "@beutl/ui/i18n-client";
@@ -45,6 +46,7 @@ export function PackageDescriptionForm({
             size="icon"
             variant="ghost"
             className="w-8 h-8"
+            aria-label={t("developer:common.edit")}
             onClick={toggleEdit}
           >
             <Edit className="w-4 h-4" />
@@ -52,20 +54,26 @@ export function PackageDescriptionForm({
         )}
       </div>
       {!edit && (
-        <p
-          className="mt-4 whitespace-pre-wrap"
-          style={{ wordWrap: "break-word" }}
-        >
+        <Markdown className="mt-4">
           {pkg.description}
-        </p>
+        </Markdown>
       )}
       {edit && (
         <>
-          <Textarea
+          <MarkdownEditor
+            id="package-description"
+            aria-label={t("developer:description.title")}
             maxLength={1000}
             className="mt-4 mb-2"
             value={description}
+            disabled={pending}
             onChange={(e) => setDescription(e.target.value)}
+            labels={{
+              write: t("developer:markdown.write"),
+              preview: t("developer:markdown.preview"),
+              hint: t("developer:markdown.hint"),
+              emptyPreview: t("developer:markdown.emptyPreview"),
+            }}
           />
           <div className="flex gap-2">
             <Button onClick={handleSave} disabled={pending}>
@@ -78,6 +86,7 @@ export function PackageDescriptionForm({
             </Button>
             <Button
               variant="outline"
+              disabled={pending}
               onClick={() => {
                 toggleEdit();
                 setDescription(pkg.description);
