@@ -28,11 +28,17 @@ export default async function Page(props: {
     notFound();
   }
 
-  const beutlVersions = [...new Set(
-    (await findAppReleaseAssetVersions({}))
-      .map(({ version }) => SemVer.valid(version))
-      .filter((version): version is string => version !== null),
-  )].sort(SemVer.rcompare);
+  let beutlVersions: string[] = [];
+  try {
+    beutlVersions = [...new Set(
+      (await findAppReleaseAssetVersions({}))
+        .map(({ version }) => SemVer.valid(version))
+        .filter((version): version is string => version !== null),
+    )].sort(SemVer.rcompare);
+  } catch (error) {
+    // Suggestions are optional; manual target-version entry remains available.
+    console.error("Failed to load Beutl version suggestions", error);
+  }
 
   return (
     <>
