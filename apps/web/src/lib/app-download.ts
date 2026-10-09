@@ -26,7 +26,9 @@ export type AppDownload = {
 
 /**
  * `arch: null` means the visitor's architecture is unknown; `"other"` means it
- * is known to be one no build is made for, such as a 32-bit system.
+ * is known to be one no build is made for, such as a 32-bit system. Only a
+ * known architecture gets a file: every build runs on just one, so a guess
+ * could hand someone a file their machine cannot run.
  */
 export type DetectedPlatform = {
   os: AppDownloadOs | null;
@@ -54,16 +56,6 @@ const VARIANTS: { os: AppDownloadOs; type: AppDownloadType; standalone: boolean 
 const LISTED_FIRST: Record<AppDownloadOs, AppDownloadArch> = {
   win: "x64",
   osx: "arm64",
-  linux: "x64",
-};
-
-/*
-  The architecture to assume when it cannot be detected. None is assumed for a
-  Mac: its user agent names an Intel CPU on Apple silicon too, and neither build
-  runs on the other's hardware, so an undetected Mac is shown the list.
-*/
-const ASSUMED_ARCH: Partial<Record<AppDownloadOs, AppDownloadArch>> = {
-  win: "x64",
   linux: "x64",
 };
 
@@ -128,12 +120,8 @@ export function pickPrimaryDownload<T extends AppDownload>(
   downloads: T[],
   platform: DetectedPlatform,
 ): T | null {
-  const { os } = platform;
-  if (os === null) {
-    return null;
-  }
-  const arch = platform.arch ?? ASSUMED_ARCH[os];
-  if (arch === undefined || arch === "other") {
+  const { os, arch } = platform;
+  if (os === null || arch === null || arch === "other") {
     return null;
   }
   const primary = VARIANTS.find((variant) => variant.os === os)!;
@@ -185,7 +173,8 @@ export function detectPlatform(
       ? "win"
       : /macintosh|mac os x/i.test(agent)
         ? "osx"
-        : /linux|x11/i.test(agent)
+        // X11 alone also means FreeBSD and other systems no build runs on.
+        : /linux/i.test(agent)
           ? "linux"
           : null);
   if (os === null) {
@@ -195,11 +184,22 @@ export function detectPlatform(
   if (os === "osx") {
     return { os, arch: null };
   }
+  return { os, arch: archFromUserAgent(agent) };
+}
+
+/*
+  Browsers on Windows and Linux name a 64-bit CPU in their user agent. A
+  Windows agent that names none is a 32-bit system, as Firefox reports one;
+  Firefox on Linux names 32-bit CPUs outright.
+*/
+function archFromUserAgent(agent: string): DetectedPlatform["arch"] {
   if (/arm64|aarch64/i.test(agent)) {
-    return { os, arch: "arm64" };
+    return "arm64";
   }
-  // Firefox on Linux names the real CPU, including 32-bit ones.
-  return { os, arch: /i[3-6]86|armv[67]/i.test(agent) ? "other" : null };
+  if (/win64|wow64|x86_64|amd64|\bx64\b/i.test(agent)) {
+    return "x64";
+  }
+  return /windows nt|i[3-6]86|armv[67]/i.test(agent) ? "other" : null;
 }
 
 type HighEntropyValues = { architecture?: string; bitness?: string };

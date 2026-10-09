@@ -32,6 +32,8 @@ const AGENTS = {
   windows:
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
   windowsArm: "Mozilla/5.0 (Windows NT 10.0; ARM64; rv:143.0) Gecko/20100101 Firefox/143.0",
+  windows32: "Mozilla/5.0 (Windows NT 10.0; rv:143.0) Gecko/20100101 Firefox/143.0",
+  windowsWow64: "Mozilla/5.0 (Windows NT 10.0; WOW64; rv:143.0) Gecko/20100101 Firefox/143.0",
   mac: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
   linux: "Mozilla/5.0 (X11; Linux x86_64; rv:143.0) Gecko/20100101 Firefox/143.0",
   linuxArm: "Mozilla/5.0 (X11; Linux aarch64; rv:143.0) Gecko/20100101 Firefox/143.0",
@@ -41,6 +43,7 @@ const AGENTS = {
     "Mozilla/5.0 (Linux; Android 16; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36",
   iphone:
     "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1",
+  freebsd: "Mozilla/5.0 (X11; FreeBSD amd64; rv:143.0) Gecko/20100101 Firefox/143.0",
   chromebook:
     "Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
 };
@@ -72,17 +75,21 @@ const key = ({ os, arch, type, standalone }: AppDownload) =>
 
 describe("platform detection", () => {
   it.each([
-    ["windows", { os: "win", arch: null }],
+    ["windows", { os: "win", arch: "x64" }],
     ["windowsArm", { os: "win", arch: "arm64" }],
+    // A 32-bit browser on 64-bit Windows can run the x64 build.
+    ["windowsWow64", { os: "win", arch: "x64" }],
+    ["windows32", { os: "win", arch: "other" }],
     // Safari names an Intel CPU on Apple silicon, so the architecture stays open.
     ["mac", { os: "osx", arch: null }],
-    ["linux", { os: "linux", arch: null }],
+    ["linux", { os: "linux", arch: "x64" }],
     ["linuxArm", { os: "linux", arch: "arm64" }],
     ["linux32", { os: "linux", arch: "other" }],
     ["linuxArm32", { os: "linux", arch: "other" }],
     ["android", { os: null, arch: null }],
     ["iphone", { os: null, arch: null }],
     ["chromebook", { os: null, arch: null }],
+    ["freebsd", { os: null, arch: null }],
   ] as const)("reads %s from the user agent", (agent, expected) => {
     expect(detectPlatform(AGENTS[agent])).toEqual(expected);
   });
@@ -138,7 +145,7 @@ describe("platform detection", () => {
     ).resolves.toEqual({ os: "win", arch: "arm64" });
     await expect(refinePlatform({ userAgent: AGENTS.linux })).resolves.toEqual({
       os: "linux",
-      arch: null,
+      arch: "x64",
     });
   });
 
@@ -185,11 +192,11 @@ describe("registered downloads", () => {
   });
 
   it.each([
-    [{ os: "win", arch: null }, "win/x64/installer/standalone"],
+    [{ os: "win", arch: "x64" }, "win/x64/installer/standalone"],
     [{ os: "win", arch: "arm64" }, "win/arm64/installer/standalone"],
     [{ os: "osx", arch: "arm64" }, "osx/arm64/app/standalone"],
     [{ os: "osx", arch: "x64" }, "osx/x64/app/standalone"],
-    [{ os: "linux", arch: null }, "linux/x64/flatpak/standalone"],
+    [{ os: "linux", arch: "x64" }, "linux/x64/flatpak/standalone"],
   ] as const)("offers the self-contained build for %o", (platform, expected) => {
     const primary = pickPrimaryDownload(toAppDownloads(REGISTERED), platform);
     expect(primary && key(primary)).toBe(expected);
@@ -203,10 +210,13 @@ describe("registered downloads", () => {
     expect(pickPrimaryDownload(downloads, { os: null, arch: null })).toBeNull();
   });
 
-  it("guesses no build for a Mac whose CPU is unknown", () => {
-    // Neither Mac build runs on the other's hardware.
-    expect(pickPrimaryDownload(toAppDownloads(REGISTERED), { os: "osx", arch: null })).toBeNull();
-  });
+  it.each(["win", "osx", "linux"] as const)(
+    "guesses no build for %s when the CPU is unknown",
+    (os) => {
+      // Every build runs on one architecture only.
+      expect(pickPrimaryDownload(toAppDownloads(REGISTERED), { os, arch: null })).toBeNull();
+    },
+  );
 });
 
 describe("latest release for the landing page", () => {
@@ -283,7 +293,7 @@ describe("download button", () => {
     renderToStaticMarkup(createElement(DownloadCta, props(overrides)));
 
   it("links straight to the file for the platform read from the request", () => {
-    const html = render({ initialPlatform: { os: "win", arch: null } });
+    const html = render({ initialPlatform: { os: "win", arch: "x64" } });
 
     expect(html).toContain(`href="${asset("win", "x64", "installer", true).url}"`);
     expect(html).toContain("Download for Windows");
