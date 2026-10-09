@@ -20,6 +20,7 @@ import {
   DropdownMenuTrigger,
 } from "@beutl/ui/ui/dropdown-menu";
 import { Separator } from "@beutl/ui/ui/separator";
+import { Markdown } from "@beutl/ui/ui/markdown";
 import { Loader2, MoreVertical } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -312,16 +313,13 @@ export function ClientPage({
       )}
 
       <div className="flex max-lg:flex-col mt-6">
-        <div className="lg:basis-2/3 lg:pr-6">
+        <div className="min-w-0 lg:basis-2/3 lg:pr-6">
           <h3 className="font-bold text-xl mt-6 border-b pb-2">
             {t("store:description")}
           </h3>
-          <p
-            className="mt-4 whitespace-pre-wrap"
-            style={{ wordWrap: "break-word" }}
-          >
+          <Markdown className="mt-4">
             {pkg.description}
-          </p>
+          </Markdown>
           {selectedRelease && (
             <>
               <h3 className="font-bold text-xl mt-6 border-b pb-2">
@@ -329,14 +327,10 @@ export function ClientPage({
                   ? t("store:latestRelease")
                   : t("store:selectedRelease")}
               </h3>
-              <p
-                className="mt-4 whitespace-pre-wrap"
-                style={{ wordWrap: "break-word" }}
-              >
+              <p className="mt-4 mb-3 font-semibold break-words">
                 {selectedRelease.title}
-                <br />
-                {selectedRelease.description}
               </p>
+              <Markdown>{selectedRelease.description}</Markdown>
             </>
           )}
         </div>
