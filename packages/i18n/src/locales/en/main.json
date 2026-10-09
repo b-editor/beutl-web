@@ -1,7 +1,6 @@
 {
   "download": "Download for free",
   "github": "GitHub",
-  "viewOnGitHub": "View on GitHub",
   "description": "Keyframes, node graphs, shaders, audio. Free and open source software with the tools a video project needs.",
 
   "heroEyebrow": "Free & Open Source · Windows / macOS / Linux",
@@ -117,7 +116,7 @@
 
   "crossPlatformEyebrow": "Cross-Platform",
   "crossPlatformHeadline": "Available for Windows, macOS, and Linux",
-  "crossPlatformText": "Download the app for your operating system from the releases page.",
+  "crossPlatformText": "Download the app for your operating system from the download section at the bottom of this page.",
   "platformWindows": "Windows",
   "platformMacos": "macOS",
   "platformLinux": "Linux",
@@ -132,5 +131,17 @@
   "browseExtensions": "Browse extensions",
 
   "finalHeadline": "Download Beutl",
-  "finalText": "Find downloads for each operating system and release notes on the releases page. The source code is available on GitHub."
+  "finalText": "Choose the file for your operating system.",
+  "downloadForWindows": "Download for Windows",
+  "downloadForMacos": "Download for macOS",
+  "downloadForLinux": "Download for Linux",
+  "otherDownloads": "Other platforms and formats",
+  "downloadInstaller": "Installer ({{arch}})",
+  "downloadAppleSilicon": "Apple silicon",
+  "downloadIntelMac": "Intel",
+  "downloadFlatpak": "Flatpak",
+  "downloadDebian": "Debian / Ubuntu (.deb)",
+  "downloadZip": "ZIP",
+  "releaseNotes": "Release notes",
+  "moreDownloads": "Other formats and previous versions"
 }

@@ -162,6 +162,7 @@
         "src/lib/db/**",
         "src/lib/better-auth.ts",
         "src/lib/store-utils.ts",
+        "src/lib/app-release.ts",
         "src/lib/api/packages-db.ts"
       ],
       "rules": {

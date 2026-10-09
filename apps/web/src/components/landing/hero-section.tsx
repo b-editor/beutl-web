@@ -1,30 +1,24 @@
 import Link from "next/link";
-import { Download, Github } from "lucide-react";
+import { Github } from "lucide-react";
 import { cn } from "@beutl/core";
-import {
-  Eyebrow,
-  LP_BUTTON_GHOST,
-  LP_BUTTON_PRIMARY,
-  LP_CTA_ROW,
-  LP_WRAP,
-} from "./lp-parts";
+import DownloadCta, { type DownloadCtaProps } from "./download-cta";
+import { Eyebrow, LP_BUTTON_GHOST, LP_WRAP } from "./lp-parts";
 
 interface HeroTexts {
   eyebrow: string;
   titleLine1: string;
   titleLine2: string;
   lede: string;
-  download: string;
   github: string;
 }
 
 export default function HeroSection({
   texts,
-  downloadHref,
+  cta,
   githubHref,
 }: {
   texts: HeroTexts;
-  downloadHref: string;
+  cta: DownloadCtaProps;
   githubHref: string;
 }) {
   return (
@@ -42,16 +36,12 @@ export default function HeroSection({
           <p className="max-w-[44ch] text-[15px] leading-relaxed text-lp-muted [overflow-wrap:anywhere]">
             {texts.lede}
           </p>
-          <div className={LP_CTA_ROW}>
-            <Link href={downloadHref} className={LP_BUTTON_PRIMARY}>
-              <Download aria-hidden="true" />
-              {texts.download}
-            </Link>
+          <DownloadCta {...cta} className="mt-6">
             <Link href={githubHref} className={LP_BUTTON_GHOST}>
               <Github aria-hidden="true" />
               {texts.github}
             </Link>
-          </div>
+          </DownloadCta>
         </div>
       </div>
     </section>
