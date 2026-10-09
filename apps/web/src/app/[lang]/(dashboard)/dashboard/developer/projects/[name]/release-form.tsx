@@ -49,11 +49,13 @@ import {
   AlertDialogTitle,
 } from "@beutl/ui/ui/alert-dialog";
 import { useTranslation } from "@beutl/ui/i18n-client";
+import { TargetVersionInput } from "./target-version-input";
 
 export function ReleaseForm({
   pkg,
   lang,
-}: { pkg: Package; lang: string }) {
+  beutlVersions,
+}: { pkg: Package; lang: string; beutlVersions: string[] }) {
   const [edit, setEdit] = useState(false);
   const [open, setOpen] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState(false);
@@ -296,17 +298,19 @@ export function ReleaseForm({
           <Label className="mt-2" htmlFor="release-target-version">
             {t("developer:release.targetVersion")}
           </Label>
-          <Input
+          <TargetVersionInput
             id="release-target-version"
+            lang={lang}
+            versions={beutlVersions}
             placeholder={t("developer:release.targetVersion")}
             value={targetVersion.value}
             disabled={saving}
-            onChange={(e) =>
+            onValueChange={(value) =>
               setTargetVersion({
-                value: e.target.value,
+                value,
                 message:
-                  SemVer.valid(e.target.value) ||
-                    isValidNuGetVersionRange(e.target.value)
+                  SemVer.valid(value) ||
+                    isValidNuGetVersionRange(value)
                     ? ""
                     : t("developer:validation.versionIncorrect"),
               })

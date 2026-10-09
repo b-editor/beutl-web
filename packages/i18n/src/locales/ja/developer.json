@@ -105,6 +105,7 @@
     "titleAdmin": "価格設定 (管理者)"
   },
   "release": {
+    "beutlVersions": "Beutl のバージョン",
     "createRelease": "リリースを作成",
     "createSuccess": "リリースを作成しました",
     "defaultTitle": "新しいリリース",
