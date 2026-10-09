@@ -35,6 +35,8 @@ const AGENTS = {
   mac: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
   linux: "Mozilla/5.0 (X11; Linux x86_64; rv:143.0) Gecko/20100101 Firefox/143.0",
   linuxArm: "Mozilla/5.0 (X11; Linux aarch64; rv:143.0) Gecko/20100101 Firefox/143.0",
+  linux32: "Mozilla/5.0 (X11; Linux i686; rv:143.0) Gecko/20100101 Firefox/143.0",
+  linuxArm32: "Mozilla/5.0 (X11; Linux armv7l; rv:143.0) Gecko/20100101 Firefox/143.0",
   android:
     "Mozilla/5.0 (Linux; Android 16; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36",
   iphone:
@@ -76,6 +78,8 @@ describe("platform detection", () => {
     ["mac", { os: "osx", arch: null }],
     ["linux", { os: "linux", arch: null }],
     ["linuxArm", { os: "linux", arch: "arm64" }],
+    ["linux32", { os: "linux", arch: "other" }],
+    ["linuxArm32", { os: "linux", arch: "other" }],
     ["android", { os: null, arch: null }],
     ["iphone", { os: null, arch: null }],
     ["chromebook", { os: null, arch: null }],
@@ -111,6 +115,18 @@ describe("platform detection", () => {
         },
       }),
     ).resolves.toEqual({ os: "osx", arch: "x64" });
+  });
+
+  it("marks a 32-bit system as one no build fits", async () => {
+    await expect(
+      refinePlatform({
+        userAgent: AGENTS.windows,
+        userAgentData: {
+          platform: "Windows",
+          getHighEntropyValues: async () => ({ architecture: "x86", bitness: "32" }),
+        },
+      }),
+    ).resolves.toEqual({ os: "win", arch: "other" });
   });
 
   it("keeps the user agent's answer when the hints fail or are missing", async () => {
@@ -171,7 +187,7 @@ describe("registered downloads", () => {
   it.each([
     [{ os: "win", arch: null }, "win/x64/installer/standalone"],
     [{ os: "win", arch: "arm64" }, "win/arm64/installer/standalone"],
-    [{ os: "osx", arch: null }, "osx/arm64/app/standalone"],
+    [{ os: "osx", arch: "arm64" }, "osx/arm64/app/standalone"],
     [{ os: "osx", arch: "x64" }, "osx/x64/app/standalone"],
     [{ os: "linux", arch: null }, "linux/x64/flatpak/standalone"],
   ] as const)("offers the self-contained build for %o", (platform, expected) => {
@@ -182,7 +198,14 @@ describe("registered downloads", () => {
   it("offers nothing where no build fits", () => {
     const downloads = toAppDownloads(REGISTERED);
     expect(pickPrimaryDownload(downloads, { os: "linux", arch: "arm64" })).toBeNull();
+    expect(pickPrimaryDownload(downloads, { os: "win", arch: "other" })).toBeNull();
+    expect(pickPrimaryDownload(downloads, { os: "linux", arch: "other" })).toBeNull();
     expect(pickPrimaryDownload(downloads, { os: null, arch: null })).toBeNull();
+  });
+
+  it("guesses no build for a Mac whose CPU is unknown", () => {
+    // Neither Mac build runs on the other's hardware.
+    expect(pickPrimaryDownload(toAppDownloads(REGISTERED), { os: "osx", arch: null })).toBeNull();
   });
 });
 
@@ -260,15 +283,18 @@ describe("download button", () => {
     renderToStaticMarkup(createElement(DownloadCta, props(overrides)));
 
   it("links straight to the file for the platform read from the request", () => {
-    const html = render({ initialPlatform: { os: "osx", arch: null } });
+    const html = render({ initialPlatform: { os: "win", arch: null } });
 
-    expect(html).toContain(`href="${asset("osx", "arm64", "app", true).url}"`);
-    expect(html).toContain("Download for macOS");
+    expect(html).toContain(`href="${asset("win", "x64", "installer", true).url}"`);
+    expect(html).toContain("Download for Windows");
     expect(html).toMatch(/v2\.0\.0 · <a href="#download"[^>]*>Other platforms<\/a>/u);
   });
 
-  it("leads to the full list when no file fits the platform", () => {
-    const html = render({ initialPlatform: { os: "linux", arch: "arm64" } });
+  it.each([
+    { os: "linux", arch: "arm64" },
+    { os: "osx", arch: null },
+  ] as const)("leads to the full list when no file is known to fit %o", (initialPlatform) => {
+    const html = render({ initialPlatform });
 
     expect(html).toContain('href="#download"');
     expect(html).toContain("Download for free");

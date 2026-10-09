@@ -24,10 +24,13 @@ export type AppDownload = {
   url: string;
 };
 
-/** `arch: null` means the visitor's architecture is unknown, not that none fits. */
+/**
+ * `arch: null` means the visitor's architecture is unknown; `"other"` means it
+ * is known to be one no build is made for, such as a 32-bit system.
+ */
 export type DetectedPlatform = {
   os: AppDownloadOs | null;
-  arch: AppDownloadArch | null;
+  arch: AppDownloadArch | "other" | null;
 };
 
 export const UNKNOWN_PLATFORM: DetectedPlatform = { os: null, arch: null };
@@ -47,14 +50,20 @@ const VARIANTS: { os: AppDownloadOs; type: AppDownloadType; standalone: boolean 
   { os: "linux", type: "zip", standalone: true },
 ];
 
-/*
-  The architecture to assume when it cannot be detected. Every Mac sold since
-  2023 is Apple silicon, and browsers on those Macs still claim an Intel CPU in
-  their user agent, so the user agent alone never settles it.
-*/
-const DEFAULT_ARCH: Record<AppDownloadOs, AppDownloadArch> = {
+/** Each platform's more common build, listed before the other. */
+const LISTED_FIRST: Record<AppDownloadOs, AppDownloadArch> = {
   win: "x64",
   osx: "arm64",
+  linux: "x64",
+};
+
+/*
+  The architecture to assume when it cannot be detected. None is assumed for a
+  Mac: its user agent names an Intel CPU on Apple silicon too, and neither build
+  runs on the other's hardware, so an undetected Mac is shown the list.
+*/
+const ASSUMED_ARCH: Partial<Record<AppDownloadOs, AppDownloadArch>> = {
+  win: "x64",
   linux: "x64",
 };
 
@@ -75,6 +84,7 @@ function isHttpsUrl(value: string): boolean {
   try {
     return new URL(value).protocol === "https:";
   } catch {
+    // An unparsable URL is not one to link to; the row is skipped, not reported.
     return false;
   }
 }
@@ -107,7 +117,7 @@ export function toAppDownloads(
   }
 
   const archRank = (download: AppDownload) =>
-    download.arch === DEFAULT_ARCH[download.os] ? 0 : 1;
+    download.arch === LISTED_FIRST[download.os] ? 0 : 1;
   return downloads.sort(
     (a, b) => variantIndex(a) - variantIndex(b) || archRank(a) - archRank(b),
   );
@@ -122,7 +132,10 @@ export function pickPrimaryDownload<T extends AppDownload>(
   if (os === null) {
     return null;
   }
-  const arch = platform.arch ?? DEFAULT_ARCH[os];
+  const arch = platform.arch ?? ASSUMED_ARCH[os];
+  if (arch === undefined || arch === "other") {
+    return null;
+  }
   const primary = VARIANTS.find((variant) => variant.os === os)!;
   return (
     downloads.find(
@@ -182,7 +195,11 @@ export function detectPlatform(
   if (os === "osx") {
     return { os, arch: null };
   }
-  return { os, arch: /arm64|aarch64/i.test(agent) ? "arm64" : null };
+  if (/arm64|aarch64/i.test(agent)) {
+    return { os, arch: "arm64" };
+  }
+  // Firefox on Linux names the real CPU, including 32-bit ones.
+  return { os, arch: /i[3-6]86|armv[67]/i.test(agent) ? "other" : null };
 }
 
 type HighEntropyValues = { architecture?: string; bitness?: string };
@@ -197,9 +214,13 @@ export type NavigatorLike = {
   };
 };
 
-function archFromClientHints({ architecture, bitness }: HighEntropyValues): AppDownloadArch | null {
-  if (bitness !== undefined && bitness !== "64") {
-    return null;
+function archFromClientHints({
+  architecture,
+  bitness,
+}: HighEntropyValues): DetectedPlatform["arch"] {
+  // Every build is 64-bit, so a 32-bit system has none to run.
+  if (bitness && bitness !== "64") {
+    return "other";
   }
   return architecture === "arm" ? "arm64" : architecture === "x86" ? "x64" : null;
 }
@@ -225,6 +246,7 @@ export async function refinePlatform(navigator: NavigatorLike): Promise<Detected
     ]);
     return { os: detected.os, arch: archFromClientHints(values) ?? detected.arch };
   } catch {
+    // The hints only sharpen the guess; without them the user agent's answer stands.
     return detected;
   }
 }
