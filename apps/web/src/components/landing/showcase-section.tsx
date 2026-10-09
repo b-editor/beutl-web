@@ -7,8 +7,8 @@ import ShowcaseMedia, { type ShowcaseSource } from "./showcase-media";
   the moment the video takes over.
 */
 const POSTER = "/img/showcase-poster.png";
-const WIDTH = 2048;
-const HEIGHT = 1152;
+const WIDTH = 1920;
+const HEIGHT = 1080;
 
 /*
   The poster is the video's own first frame, so the picture does not change when

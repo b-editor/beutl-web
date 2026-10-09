@@ -8,8 +8,8 @@
   "heroTitleLine2": "Make it yours.",
   "heroLede": "Keyframes, node graphs, shaders, audio. Free and open source software with the tools a video project needs.",
 
-  "showcaseLabel": "The Beutl editor: creating a project, adding a text element from the library, typing and resizing the text, keyframing its character spacing, shaping the easing curve in the graph editor, and playing the result.",
-  "showcaseCaption": "From a new project to placing text and animating it with keyframes and easing.",
+  "showcaseLabel": "The Beutl editor: refining a prepared typographic animation with a clipping reveal, keyframes, symmetric spline handles, an eased zoom, and text alignment, then playing the finished result.",
+  "showcaseCaption": "Refine the reveal, motion, and layout to finish a typographic animation.",
 
   "tocTimeline": "Timeline",
   "tocNodes": "Node Graph",
