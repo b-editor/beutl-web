@@ -1,7 +1,6 @@
 {
   "download": "無料でダウンロード",
   "github": "GitHub",
-  "viewOnGitHub": "GitHubを見る",
   "description": "キーフレーム、ノードグラフ、シェーダ、オーディオまで。映像制作に必要な機能を一通り揃えた、無料・オープンソースのソフトです。",
 
   "heroEyebrow": "無料・オープンソース · Windows / macOS / Linux",
@@ -117,7 +116,7 @@
 
   "crossPlatformEyebrow": "クロスプラットフォーム",
   "crossPlatformHeadline": "Windows・macOS・Linuxに対応",
-  "crossPlatformText": "それぞれのOS向けにアプリを配布しています。ダウンロードページから、お使いの環境に合うファイルを選べます。",
+  "crossPlatformText": "それぞれのOS向けにアプリを配布しています。ページ下部のダウンロードから、お使いの環境に合うファイルを選べます。",
   "platformWindows": "Windows",
   "platformMacos": "macOS",
   "platformLinux": "Linux",
@@ -132,5 +131,16 @@
   "browseExtensions": "拡張機能を見る",
 
   "finalHeadline": "Beutlをダウンロード",
-  "finalText": "リリースページに各OSのダウンロードと変更履歴を掲載しています。ソースコードはGitHubで公開しています。"
+  "finalText": "お使いのOSに合ったファイルを選んでください。",
+  "downloadForWindows": "Windows版をダウンロード",
+  "downloadForMacos": "macOS版をダウンロード",
+  "downloadForLinux": "Linux版をダウンロード",
+  "otherDownloads": "ほかのOS・形式",
+  "downloadInstaller": "インストーラー（{{arch}}）",
+  "downloadAppleSilicon": "Appleシリコン",
+  "downloadIntelMac": "Intel",
+  "downloadFlatpak": "Flatpak",
+  "downloadZip": "ZIP",
+  "releaseNotes": "リリースノート",
+  "moreDownloads": "その他の形式・過去のバージョン"
 }

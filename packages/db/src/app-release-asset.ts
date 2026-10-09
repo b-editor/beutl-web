@@ -14,6 +14,26 @@ export async function findAppReleaseAssetVersions({
   });
 }
 
+export async function findAppReleaseAssetsByVersion({
+  version,
+  prisma,
+}: {
+  version: string;
+  prisma?: PrismaTransaction;
+}) {
+  const db = prisma ?? await getDb();
+  return await db.appReleaseAsset.findMany({
+    where: { version },
+    select: {
+      os: true,
+      arch: true,
+      type: true,
+      standalone: true,
+      url: true,
+    },
+  });
+}
+
 export async function findAppReleaseAsset({
   version,
   type,
