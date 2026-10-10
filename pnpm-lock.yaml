@@ -295,18 +295,12 @@ importers:
       '@types/semver':
         specifier: ^7.8.0
         version: 7.8.0
-      dotenv:
-        specifier: 18.0.7
-        version: 18.0.7
       oxlint:
         specifier: ^1.87.0
         version: 1.87.0
       postcss:
         specifier: 8.5.29
         version: 8.5.29
-      prisma:
-        specifier: ^7.10.0
-        version: 7.10.0(@types/node@24.19.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@6.0.3)
       tailwindcss:
         specifier: ^4.3.3
         version: 4.3.3
@@ -417,6 +411,13 @@ importers:
       '@prisma/client':
         specifier: ^7.10.0
         version: 7.10.0(prisma@7.10.0(@types/node@24.19.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@6.0.3))(typescript@6.0.3)
+    devDependencies:
+      dotenv:
+        specifier: 18.0.7
+        version: 18.0.7
+      prisma:
+        specifier: ^7.10.0
+        version: 7.10.0(@types/node@24.19.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@6.0.3)
 
   packages/email:
     dependencies:

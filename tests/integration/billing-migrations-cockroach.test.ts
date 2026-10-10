@@ -88,7 +88,7 @@ function splitSql(sql: string): string[] {
 
 async function migrationSql(name: TargetMigration): Promise<string> {
   return readFile(
-    new URL(`../../apps/web/prisma/migrations/${name}/migration.sql`, import.meta.url),
+    new URL(`../../packages/db/prisma/migrations/${name}/migration.sql`, import.meta.url),
     "utf8",
   );
 }
@@ -225,7 +225,7 @@ describeWithCockroach(
       `);
       const migration = await readFile(
         new URL(
-          "../../apps/web/prisma/migrations/20260826050000_harden_topup_checkout_recovery/migration.sql",
+          "../../packages/db/prisma/migrations/20260826050000_harden_topup_checkout_recovery/migration.sql",
           import.meta.url,
         ),
         "utf8",
@@ -280,7 +280,7 @@ describeWithCockroach(
       );
       const startMigration = await readFile(
         new URL(
-          "../../apps/web/prisma/migrations/20260825160000_durable_storage_upload_start/migration.sql",
+          "../../packages/db/prisma/migrations/20260825160000_durable_storage_upload_start/migration.sql",
           import.meta.url,
         ),
         "utf8",
@@ -294,7 +294,7 @@ describeWithCockroach(
 
       const repairMigration = await readFile(
         new URL(
-          "../../apps/web/prisma/migrations/20260826000000_repair_storage_upload_start_default/migration.sql",
+          "../../packages/db/prisma/migrations/20260826000000_repair_storage_upload_start_default/migration.sql",
           import.meta.url,
         ),
         "utf8",
@@ -345,7 +345,7 @@ describeWithCockroach(
       `);
       const migration = await readFile(
         new URL(
-          "../../apps/web/prisma/migrations/20260827000000_split_storage_multipart_cleanup/migration.sql",
+          "../../packages/db/prisma/migrations/20260827000000_split_storage_multipart_cleanup/migration.sql",
           import.meta.url,
         ),
         "utf8",
@@ -355,7 +355,7 @@ describeWithCockroach(
       await runSql(resource.prisma, migration);
       const hardeningMigration = await readFile(
         new URL(
-          "../../apps/web/prisma/migrations/20260827010000_harden_storage_multipart_cleanup/migration.sql",
+          "../../packages/db/prisma/migrations/20260827010000_harden_storage_multipart_cleanup/migration.sql",
           import.meta.url,
         ),
         "utf8",

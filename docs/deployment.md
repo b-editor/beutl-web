@@ -62,7 +62,7 @@ Resolve conflicting identities after verifying their owners, then retry the
 migration. Do not assign ownership by row order or automatically rename an
 existing publisher. If Prisma recorded the duplicate-name preflight as failed,
 run `vp exec prisma migrate resolve --rolled-back 20260928010000_unique_profile_user_names`
-from `apps/web` before retrying `vp exec prisma migrate deploy`.
+from `packages/db` before retrying `vp exec prisma migrate deploy`.
 Keep the `Profile_userName_lower_key` expression index
 when generating later migrations; it is maintained in SQL rather than the
 Prisma model.

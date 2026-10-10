@@ -2,10 +2,10 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 const migration = new URL(
-  "../../apps/web/prisma/migrations/20260908000000_generalize_subscription_plans/migration.sql",
+  "../../packages/db/prisma/migrations/20260908000000_generalize_subscription_plans/migration.sql",
   import.meta.url,
 );
-const schema = new URL("../../apps/web/prisma/schema.prisma", import.meta.url);
+const schema = new URL("../../packages/db/prisma/schema.prisma", import.meta.url);
 
 // One Subscription table keyed by (userId, planId) serves AI Pro and the
 // storage plan; the tier column lets a plan sell several sizes without another
@@ -72,7 +72,7 @@ describe("subscription plan generalization migration", () => {
     // transaction, so a rejected insert would block the deletion outright.
     const sql = await readFile(
       new URL(
-        "../../apps/web/prisma/migrations/20260908010000_allow_storage_checkout_cleanup/migration.sql",
+        "../../packages/db/prisma/migrations/20260908010000_allow_storage_checkout_cleanup/migration.sql",
         import.meta.url,
       ),
       "utf8",

@@ -7,7 +7,7 @@ describe("storage receipt migration contract", () => {
     const migration = readFileSync(
       resolve(
         process.cwd(),
-        "apps/web/prisma/migrations/20260825170000_retain_storage_upload_receipts/migration.sql",
+        "packages/db/prisma/migrations/20260825170000_retain_storage_upload_receipts/migration.sql",
       ),
       "utf8",
     );
@@ -20,13 +20,13 @@ describe("storage receipt migration contract", () => {
 
   it("keeps completed receipts attached to File lifetime", () => {
     const schema = readFileSync(
-      resolve(process.cwd(), "apps/web/prisma/schema.prisma"),
+      resolve(process.cwd(), "packages/db/prisma/schema.prisma"),
       "utf8",
     );
     const migration = readFileSync(
       resolve(
         process.cwd(),
-        "apps/web/prisma/migrations/20260825170000_retain_storage_upload_receipts/migration.sql",
+        "packages/db/prisma/migrations/20260825170000_retain_storage_upload_receipts/migration.sql",
       ),
       "utf8",
     );
@@ -39,7 +39,7 @@ describe("storage receipt migration contract", () => {
     const migration = readFileSync(
       resolve(
         process.cwd(),
-        "apps/web/prisma/migrations/20260825000000_add_ai_storage_cleanup_upload_id/migration.sql",
+        "packages/db/prisma/migrations/20260825000000_add_ai_storage_cleanup_upload_id/migration.sql",
       ),
       "utf8",
     );

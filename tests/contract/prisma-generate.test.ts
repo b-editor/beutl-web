@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -25,17 +25,17 @@ model Example {
 async function fixture() {
   const root = await realpath(await mkdtemp(join(tmpdir(), "beutl prisma-generate ")));
   roots.push(root);
-  const web = join(root, "apps/web");
-  const schemaDir = join(web, "prisma");
+  const db = join(root, "packages/db");
+  const schemaDir = join(db, "prisma");
   const store = join(root, "node_modules/.pnpm/client-fixture/node_modules");
   const client = join(store, "@prisma/client");
-  const prisma = join(web, "node_modules/prisma");
-  await Promise.all([schemaDir, client, prisma, join(web, "node_modules/@prisma"),
-    join(web, "node_modules/.bin"), join(root, "scripts"), join(root, "reports")]
+  const prisma = join(db, "node_modules/prisma");
+  await Promise.all([schemaDir, client, prisma, join(db, "node_modules/@prisma"),
+    join(root, "scripts"), join(root, "reports")]
     .map((path) => mkdir(path, { recursive: true })));
-  await writeFile(join(web, "package.json"), JSON.stringify({ name: "fixture-web" }));
+  await writeFile(join(db, "package.json"), JSON.stringify({ name: "fixture-db" }));
   await writeFile(join(client, "package.json"), JSON.stringify({ name: "@prisma/client" }));
-  await symlink(client, join(web, "node_modules/@prisma/client"), "junction");
+  await symlink(client, join(db, "node_modules/@prisma/client"), "junction");
   await writeFile(join(prisma, "package.json"), JSON.stringify({
     name: "prisma", main: "types.cjs", bin: { prisma: "index.cjs" },
     exports: { ".": "./types.cjs", "./package.json": "./package.json" },
@@ -47,7 +47,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const root = process.env.FIXTURE_ROOT;
-const canonical = path.join(root, 'apps/web/prisma/schema.prisma');
+const canonical = path.join(root, 'packages/db/prisma/schema.prisma');
+assert.equal(process.cwd(), path.join(root, 'packages/db'), 'Generation must run from the database package');
 assert.equal(fs.readFileSync(canonical, 'utf8'), fs.readFileSync(path.join(root, 'expected.prisma'), 'utf8'),
   'The checked-in schema must not change while Prisma is running');
 const index = process.argv.indexOf('--schema');
@@ -64,13 +65,11 @@ Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
 if (process.env.FAIL_PRISMA === '1') process.exit(23);
 `;
   await writeFile(join(prisma, "index.cjs"), cli);
-  await writeFile(join(web, "node_modules/.bin/prisma"), cli);
-  await chmod(join(web, "node_modules/.bin/prisma"), 0o755);
   await copyFile(join(repo, "scripts/prisma-generate.mjs"), join(root, "scripts/prisma-generate.mjs"));
   return {
     root,
     generate: (fail = false) => run(process.execPath, [join(root, "scripts/prisma-generate.mjs")], {
-      cwd: web,
+      cwd: root,
       env: { ...process.env, FIXTURE_ROOT: root, FAIL_PRISMA: fail ? "1" : "0" },
     }),
     reports: async () => Promise.all((await readdir(join(root, "reports")))
@@ -100,7 +99,7 @@ describe("Prisma generation during workspace install", () => {
     const test = await fixture();
     const results = await Promise.allSettled([test.generate(), test.generate()]);
     for (const result of results) expect(result.status, result.status === "rejected" ? String(result.reason) : "").toBe("fulfilled");
-    expect(await readFile(join(test.root, "apps/web/prisma/schema.prisma"), "utf8")).toBe(schema);
+    expect(await readFile(join(test.root, "packages/db/prisma/schema.prisma"), "utf8")).toBe(schema);
     const reports = await test.reports();
     expect(reports).toHaveLength(2);
     expect(new Set(reports.map((x) => x.input)).size).toBe(2);
@@ -113,6 +112,6 @@ describe("Prisma generation during workspace install", () => {
     const reports = await test.reports();
     expect(reports).toHaveLength(1);
     await expect(readFile(reports[0].input)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await readFile(join(test.root, "apps/web/prisma/schema.prisma"), "utf8")).toBe(schema);
+    expect(await readFile(join(test.root, "packages/db/prisma/schema.prisma"), "utf8")).toBe(schema);
   });
 });

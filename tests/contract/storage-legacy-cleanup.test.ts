@@ -773,8 +773,8 @@ describe("legacy storage cleanup contracts", () => {
   });
 
   it("enforces a unique screenshot order per package", async () => {
-    const schema = await readFile(new URL("../../apps/web/prisma/schema.prisma", import.meta.url), "utf8");
-    const migration = await readFile(new URL("../../apps/web/prisma/migrations/20260831010000_unique_package_screenshot_order/migration.sql", import.meta.url), "utf8");
+    const schema = await readFile(new URL("../../packages/db/prisma/schema.prisma", import.meta.url), "utf8");
+    const migration = await readFile(new URL("../../packages/db/prisma/migrations/20260831010000_unique_package_screenshot_order/migration.sql", import.meta.url), "utf8");
     const action = await readFile(new URL("../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/projects/[name]/actions/screenshot.ts", import.meta.url), "utf8");
     const packageDb = await readFile(new URL("../../packages/db/src/package.ts", import.meta.url), "utf8");
     const reorder = packageDb.slice(
