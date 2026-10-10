@@ -1,7 +1,8 @@
-import git from "isomorphic-git";
 import type { ObjectStore } from "git-fs-s3";
 import type { GitObjectBucket } from "./git-object-store";
 import { readGitRepository } from "./git-http";
+import { GitObjectReader } from "./object-reader";
+import { collectGitObjects } from "./object-graph";
 
 /**
  * The object a small blob points to. Over-matching only keeps an object
@@ -28,29 +29,20 @@ export async function referencedLfsOids(bucket: GitObjectBucket, repoId: string)
  * makes a needed object look unreachable.
  */
 export async function reachableHistory(
-  { store, prefix, fs, repo }: ReturnType<typeof readGitRepository>,
+  repository: ReturnType<typeof readGitRepository>,
+  reader = new GitObjectReader(repository),
 ): Promise<{ objects: Set<string>; lfs: Set<string> }> {
+  const { store, prefix, fs, repo } = repository;
   await fs.detectLooseObjects(repo.gitdir);
-  await fs.prefetchPacks(repo.gitdir);
-  const pending = await refTips(store, `${prefix}${repo.gitdir}/`);
-  const seen = new Set<string>();
   const lfs = new Set<string>();
-  for (let oid = pending.pop(); oid !== undefined; oid = pending.pop()) {
-    if (seen.has(oid)) continue;
-    seen.add(oid);
-    // A missing object throws NotFoundError, so a partial history cannot pass.
-    const read = await git.readObject({ ...repo, oid, format: "parsed" });
-    if (read.type === "blob") {
-      // Blobs come back as content bytes even when parsing is requested.
-      const pointer = lfsPointerOid(typeof read.object === "string" ? new TextEncoder().encode(read.object) : read.object);
+  const objects = await collectGitObjects(reader, await refTips(store, `${prefix}${repo.gitdir}/`), {
+    async onBlob(oid, size) {
+      if (size > 1024) return;
+      const pointer = lfsPointerOid(await reader.read(oid, 1024));
       if (pointer) lfs.add(pointer);
-    } else if (read.format !== "parsed") throw new Error(`Git object ${oid} could not be parsed`);
-    else if (read.type === "commit") pending.push(read.object.tree, ...read.object.parent);
-    else if (read.type === "tag") pending.push(read.object.object);
-    // A submodule entry names a commit in another repository.
-    else if (read.type === "tree") pending.push(...read.object.filter((entry) => entry.type !== "commit").map((entry) => entry.oid));
-  }
-  return { objects: seen, lfs };
+    },
+  });
+  return { objects, lfs };
 }
 
 /**

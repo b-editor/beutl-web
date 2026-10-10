@@ -2,7 +2,7 @@ import "server-only";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { runWithDbProvider } from "@beutl/db";
 import { createStorageOperations } from "@beutl/api/storage/files";
-export type { StorageWriteSource, AiResultStorageCopyOutcome } from "@beutl/api/storage/files";
+export type { StorageWriteSource, StorageUploadFile, AiResultStorageCopyOutcome } from "@beutl/api/storage/files";
 
 function operations() {
   return createStorageOperations({

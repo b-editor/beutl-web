@@ -140,6 +140,9 @@ export {
   rewriteTemplateReferences,
 } from "./nupkg";
 export type { NupkgFile, NupkgOptions } from "./nupkg";
+export { createNupkgStream } from "./nupkg-stream";
+export type { NupkgStreamFile } from "./nupkg-stream";
+export { blobStream } from "./blob-stream";
 export {
   AI_DEFAULT_OPERATION_MODELS,
   AI_OPERATIONS,

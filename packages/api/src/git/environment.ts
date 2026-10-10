@@ -61,9 +61,10 @@ export function gitRepositoryObject(env: GitEnvironment, repoId: string) {
     forward: (request: Request, access: GitAccess) =>
       stub.fetch(new Request(request, { headers: accessHeaders(request.headers, access) })),
     /** Read-only history views; 404 when the ref, path or object does not exist. */
-    browse: (access: GitAccess, view: "refs" | "path" | "log" | "file", params: Record<string, string> = {}) =>
+    browse: (access: GitAccess, view: "refs" | "path" | "log" | "file", params: Record<string, string> = {},
+      options: { headers?: HeadersInit; method?: "GET" | "HEAD" } = {}) =>
       stub.fetch(new Request(`${INTERNAL_ORIGIN}/internal/git/browse/${view}?${new URLSearchParams(params)}`, {
-        headers: accessHeaders(undefined, access),
+        method: options.method, headers: accessHeaders(options.headers, access),
       })),
     /** LFS bodies stay in the Worker; the object only records reservations and receipts. */
     media: (access: GitAccess, oid: string, action: "status" | GitMediaAction, body?: unknown) =>

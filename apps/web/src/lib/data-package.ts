@@ -1,12 +1,15 @@
 import "server-only";
+import { createHash } from "node:crypto";
 import {
-  buildNupkg,
+  createNupkgStream,
+  blobStream,
   MATERIAL_TAG,
   rewriteTemplateReferences,
   sanitizePayloadPath,
   TEMPLATE_TAG,
 } from "@beutl/core";
-import type { NupkgFile } from "@beutl/core";
+import type { NupkgStreamFile } from "@beutl/core";
+import type { StorageUploadFile } from "@beutl/api/storage/files";
 import type { Translator } from "@beutl/i18n";
 
 const MATERIAL_EXTENSIONS = [
@@ -43,7 +46,7 @@ export async function buildDataPackageNupkgFile({
   description: string;
   username: string;
   t: Translator;
-}): Promise<{ ok: true; file: File; tags: string[] } | { ok: false; message: string }> {
+}): Promise<{ ok: true; file: StorageUploadFile; tags: string[] } | { ok: false; message: string }> {
   const materialFiles: File[] = [];
   const templateFiles: File[] = [];
   for (const file of files) {
@@ -101,11 +104,11 @@ export async function buildDataPackageNupkgFile({
     return { ok: false, message: t("developer:upload.invalidFileName") };
   }
 
-  const nupkgFiles: NupkgFile[] = [];
+  const nupkgFiles: NupkgStreamFile[] = [];
   for (const [index, file] of materialFiles.entries()) {
     nupkgFiles.push({
       path: materialEntries[index].packagePath,
-      data: new Uint8Array(await file.arrayBuffer()),
+      stream: () => blobStream(file),
     });
   }
   for (const file of templateFiles) {
@@ -125,10 +128,10 @@ export async function buildDataPackageNupkgFile({
         message: t("developer:upload.invalidFile", { name: file.name }),
       };
     }
-    nupkgFiles.push({
-      path: packagePath,
-      data: new TextEncoder().encode(rewritten),
-    });
+    const bytes = new TextEncoder().encode(rewritten);
+    nupkgFiles.push({ path: packagePath, stream: () => new ReadableStream({
+      start(controller) { controller.enqueue(bytes); controller.close(); },
+    }) });
   }
 
   // A release starts with an empty description, which NuGet requires; catching it here
@@ -137,28 +140,27 @@ export async function buildDataPackageNupkgFile({
     return { ok: false, message: t("developer:upload.descriptionRequired") };
   }
 
-  let nupkg: Uint8Array<ArrayBuffer>;
+  const metadata = { id, version, title, description, tags, authors: username };
+  const stream = () => createNupkgStream(metadata, nupkgFiles);
+  // Count a streamed first pass to reserve the exact stored size before upload.
+  // Subsequent passes reuse immutable inputs and deterministic ZIP metadata.
+  let size = 0;
+  const hash = createHash("sha256");
+  let archive: ReadableStream<Uint8Array>;
   try {
-    nupkg = buildNupkg({
-      id,
-      version,
-      title,
-      description,
-      tags,
-      authors: username,
-      files: nupkgFiles,
-    });
+    archive = stream();
   } catch {
-    // sanitizePayloadPath rejects names a package cannot carry (e.g. a colon),
-    // which are legal filenames on Unix.
+    // NuGet metadata and entry-path validation failures are reported as invalid input.
     return { ok: false, message: t("developer:upload.invalidFileName") };
   }
-
-  return {
-    ok: true,
-    file: new File([nupkg], `${id}.${version}.nupkg`, {
-      type: "application/octet-stream",
-    }),
-    tags,
-  };
+  const reader = archive.getReader();
+  try {
+    for (;;) {
+      const next = await reader.read(); if (next.done) break;
+      size += next.value.byteLength; hash.update(next.value);
+    }
+  } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
+  return { ok: true, file: {
+    name: `${id}.${version}.nupkg`, type: "application/octet-stream", size, stream, sha256: hash.digest("hex"),
+  }, tags };
 }

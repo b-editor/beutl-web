@@ -164,6 +164,10 @@ describe("legacy storage cleanup contracts", () => {
     const createClient = vi.fn(async () => memory.prisma as never);
     setDbProvider(createClient);
     const bytes = new Uint8Array(1024 * 1024).fill(37);
+    let stored: Uint8Array | undefined;
+    bucket.put.mockImplementation(async (_key: string, body: ArrayBuffer | ReadableStream<Uint8Array>) => {
+      stored = new Uint8Array(await new Response(body).arrayBuffer());
+    });
     const result = await runWithSharedDb(() => createDedicatedStorageFile({
       file: new File([bytes], "screenshot.png", { type: "image/png" }),
       userId: "u",
@@ -173,8 +177,8 @@ describe("legacy storage cleanup contracts", () => {
     expect(result.kind).toBe("created");
     expect(createClient).toHaveBeenCalledTimes(1);
     expect(bucket.put).toHaveBeenCalledTimes(1);
-    const [objectKey, stored] = bucket.put.mock.calls[0] as unknown as [string, ArrayBuffer];
-    expect(new Uint8Array(stored)).toEqual(bytes);
+    const [objectKey] = bucket.put.mock.calls[0] as unknown as [string];
+    expect(stored).toEqual(bytes);
     expect(memory.state.files.get(result.record.id)).toMatchObject({
       objectKey,
       size: BigInt(bytes.length),

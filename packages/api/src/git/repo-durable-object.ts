@@ -170,13 +170,15 @@ export class GitRepositoryDurableObject {
       .get(`${BROWSE}file`, async (c) => {
         const ref = c.req.query("ref") ?? "", path = c.req.query("path") ?? "";
         if (!isGitRevision(ref) || !isGitTreePath(path) || path === "") return c.text("Invalid ref or path", 400);
-        const { entry, bytes } = await browseFile(await this.browsable(c.get("repoId")), ref, path);
+        const { entry, response } = await browseFile(await this.browsable(c.get("repoId")), ref, path,
+          { method: c.req.method, range: c.req.header("range") });
         // The entry rides along so the Worker needs no second lookup; names may be any Unicode.
-        return new Response((bytes ?? null) as Uint8Array<ArrayBuffer> | null, { headers: {
+        const headers = new Headers(response.headers);
+        for (const [name, value] of Object.entries({
           "Content-Type": "application/octet-stream", "Cache-Control": "no-store",
           "x-beutl-git-entry": encodeURIComponent(JSON.stringify(entry)),
-          ...(bytes ? { "Content-Length": String(bytes.byteLength) } : {}),
-        } });
+        })) headers.set(name, value);
+        return new Response(response.body, { status: response.status, headers });
       })
       .use("/internal/git/media/*", active, scope("read", "write"))
       .get(`${MEDIA}/status`, async (c) => {
@@ -223,11 +225,11 @@ export class GitRepositoryDurableObject {
     return readGitRepository(this.objectBucket(), repoId, { store: this.browseCache.store, looseObjectHints: true });
   }
 
-  /** The stored repository with its packs in memory, for reads that touch many objects. */
+  /** Learn which loose-object probes can be skipped; load packs only when a view needs them. */
   private async browsable(repoId: string) {
     const opened = this.browseRepository(repoId);
     // Also learns whether any loose objects exist, so reads stop looking for them.
-    await opened.fs.prefetchPacks(opened.repo.gitdir);
+    await opened.fs.detectLooseObjects(opened.repo.gitdir);
     return opened;
   }
 
