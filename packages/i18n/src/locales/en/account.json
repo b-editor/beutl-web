@@ -28,6 +28,9 @@
     "emailUpdated": "Email address updated",
     "clickOnTheLink": "Click on the link in the email we sent you to confirm your new email address.",
     "emailSent": "We have sent a link to change your email address",
+    "approvalSent": "We sent an approval link to your current email address. After approval, we will send a verification link to your new address.",
+    "approveChange": "Approve changing your email address to {{email}}. If you did not request this change, do not approve it.",
+    "verificationSent": "Your current email address has approved the change. Check your new email address for the verification link.",
     "emailUpdateFailed": "Failed to change email address",
     "emailExists": "This email address is already in use"
   },

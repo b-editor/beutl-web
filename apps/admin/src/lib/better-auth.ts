@@ -6,6 +6,7 @@ import { magicLink } from "better-auth/plugins";
 import { getDb } from "@beutl/db";
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { onUserCreated } from "@beutl/next/auth-hooks";
+import { authEmailRateLimitHook } from "@beutl/next/auth-email-rate-limit";
 import { sendMagicLinkEmail } from "@beutl/next/magic-link-email";
 import type { Session, User } from "better-auth";
 import { cache } from "react";
@@ -86,6 +87,7 @@ async function createAuthWithPrisma() {
       },
     },
     advanced: {
+      ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] },
       // クッキー名の既定は "better-auth.<name>" で web と同一。Domain 共有を有効に
       // すると両 Worker のクッキーが同名・同ドメイン・同パスで衝突するため、
       // 管理 Worker 側は接頭辞を分ける。共有したいのはセッションだけなので
@@ -119,6 +121,7 @@ async function createAuthWithPrisma() {
           }
         : {}),
     },
+    hooks: { before: authEmailRateLimitHook },
     databaseHooks: {
       // サインアップ導線は塞いでいるが、better-auth には requestSignUp や
       // idToken 経由でユーザーが作られうる経路が残る。web と同じフックを共有し、
