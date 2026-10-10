@@ -1,8 +1,7 @@
 diff --git a/dist/index.js b/dist/index.js
-index 705490b9bbc1191c6af9c807c7da0a76b4618f4b..890889ffd8e367b72fc180e5becafb293e35a92d 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -1387,7 +1387,7 @@ var GatewayImageModel = class GatewayImageModel {
+@@ -1389,7 +1389,7 @@
  					n,
  					...size && { size },
  					...aspectRatio && { aspectRatio },
@@ -11,7 +10,7 @@ index 705490b9bbc1191c6af9c807c7da0a76b4618f4b..890889ffd8e367b72fc180e5becafb29
  					...providerOptions && { providerOptions },
  					...files && { files: files.map((file) => maybeEncodeImageFile(file)) },
  					...mask && { mask: maybeEncodeImageFile(mask) }
-@@ -1658,7 +1658,7 @@ var GatewayVideoModel = class {
+@@ -1660,7 +1660,7 @@
  			...resolution && { resolution },
  			...duration && { duration },
  			...fps && { fps },
@@ -21,10 +20,9 @@ index 705490b9bbc1191c6af9c807c7da0a76b4618f4b..890889ffd8e367b72fc180e5becafb29
  			...providerOptions && { providerOptions },
  			...image && { image: maybeEncodeVideoFile(image) },
 diff --git a/src/gateway-image-model.ts b/src/gateway-image-model.ts
-index 53379973c6bf6561f97f412db35a097c85363a0b..aaa5880f0d36d9b77db9e60edeb6ca731e8fdb1e 100644
 --- a/src/gateway-image-model.ts
 +++ b/src/gateway-image-model.ts
-@@ -85,7 +85,7 @@ export class GatewayImageModel implements ImageModelV4 {
+@@ -85,7 +85,7 @@
            n,
            ...(size && { size }),
            ...(aspectRatio && { aspectRatio }),
@@ -34,10 +32,9 @@ index 53379973c6bf6561f97f412db35a097c85363a0b..aaa5880f0d36d9b77db9e60edeb6ca73
            ...(files && {
              files: files.map(file => maybeEncodeImageFile(file)),
 diff --git a/src/gateway-video-model.ts b/src/gateway-video-model.ts
-index 9c1a4e9f542565f4f609f4177ebcd9cff1ebec35..3646e8724b65083477153f8a152252ab222d38b3 100644
 --- a/src/gateway-video-model.ts
 +++ b/src/gateway-video-model.ts
-@@ -352,7 +352,7 @@ export class GatewayVideoModel implements VideoModelV4 {
+@@ -352,7 +352,7 @@
        ...(resolution && { resolution }),
        ...(duration && { duration }),
        ...(fps && { fps }),
