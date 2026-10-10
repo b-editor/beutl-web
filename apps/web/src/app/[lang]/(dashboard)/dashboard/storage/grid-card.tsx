@@ -1,6 +1,6 @@
 "use client";
 
-import type { Row } from "@tanstack/react-table";
+import type { StorageRow } from "./table";
 import { Folder, Globe, Package } from "lucide-react";
 import { forwardRef, type HTMLAttributes, useState } from "react";
 import { Checkbox } from "@beutl/ui/ui/checkbox";
@@ -20,11 +20,11 @@ import {
   type FolderHandlers,
 } from "./file-actions";
 import { useVisibilitySpec } from "./visibility-badge";
-import type { StorageFile, StorageFolder } from "./types";
+import type { StorageFolder } from "./types";
 import { contentImageSources } from "@/lib/content-image";
 
 type FileCardProps = {
-  row: Row<StorageFile>;
+  row: StorageRow;
   lang: string;
   busy: boolean;
   handlers: FileListHandlers;

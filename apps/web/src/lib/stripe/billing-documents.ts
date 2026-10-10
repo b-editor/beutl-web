@@ -6,8 +6,8 @@ import { getExpandableId, hasStripeOwnerMetadata } from "./ownership";
 import type Stripe from "stripe";
 
 type BillingDocumentStripeClient = {
-  invoices: Pick<Stripe.InvoicesResource, "list">;
-  charges: Pick<Stripe.ChargesResource, "list">;
+  invoices: Pick<Stripe.InvoiceResource, "list">;
+  charges: Pick<Stripe.ChargeResource, "list">;
 };
 
 // Stripe が 1 ページで返す上限。月次請求なら 100 件で 8 年分あり、それより古い

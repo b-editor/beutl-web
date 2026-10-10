@@ -1,4 +1,5 @@
 import Stripe from "stripe";
+import { createStripeClient } from "../stripe-client";
 import {
   claimPackagePaymentRefundAttempt,
   completePackagePaymentRefundAttempt,
@@ -47,7 +48,7 @@ export async function reconcilePackagePaymentRefunds(
   if (!stripeClient && !secretKey) {
     return { inspected: 0, claimed: 0, refunded: 0, pending: 0, interventionRequired: 0 };
   }
-  const stripe = stripeClient ?? new Stripe(secretKey!);
+  const stripe = stripeClient ?? createStripeClient(secretKey!);
   const due = await listDuePackagePaymentRefundAttempts({ now });
   const result: PackagePaymentRefundReconcileResult = {
     inspected: due.length,
@@ -86,7 +87,7 @@ export async function reconcilePackagePaymentRefundAttempt({
   stripeClient?: PackagePaymentRefundStripeClient;
 }): Promise<PackagePaymentRefundAttemptReconcileResult> {
   if (!stripeClient && !secretKey) return { status: "not-configured" };
-  const stripe = stripeClient ?? new Stripe(secretKey!);
+  const stripe = stripeClient ?? createStripeClient(secretKey!);
   const leaseToken = crypto.randomUUID();
   const claimed = await claimPackagePaymentRefundAttempt({
     id,

@@ -15,6 +15,7 @@ import {
   isZeroCostStripeCheckoutSessionAmount,
 } from "@beutl/core";
 import Stripe from "stripe";
+import { createStripeClient } from "../stripe-client";
 import {
   getCanonicalPaymentRefundState,
   type CanonicalPaymentRefundState,
@@ -250,7 +251,7 @@ async function resolvePaymentIntent({
   }
 
   if (session.status === "open") {
-    const expired = await stripe.checkout.sessions.expire(session.id, {
+    const expired = await stripe.checkout.sessions.expire(session.id, {}, {
       idempotencyKey: `beutl:ai-top-up-expire:${attempt.id}`,
     });
     if (
@@ -520,7 +521,7 @@ export async function reconcileTopUpRefunds(
   if (!stripeSecretKey) {
     throw new Error("STRIPE_SECRET_KEY is required for top-up refund processing");
   }
-  const stripe = new Stripe(stripeSecretKey, {
+  const stripe = createStripeClient(stripeSecretKey, {
     httpClient: Stripe.createFetchHttpClient(),
     maxNetworkRetries: 2,
   });

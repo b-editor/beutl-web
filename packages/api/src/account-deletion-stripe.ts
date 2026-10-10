@@ -1,4 +1,5 @@
 import Stripe from "stripe";
+import { createStripeClient } from "./stripe-client";
 import { scheduleStripeCheckoutCleanup, setTopUpCheckoutSession } from "@beutl/db";
 import { isStripeResourceMissingError, subscriptionPlanOf } from "@beutl/core";
 
@@ -32,7 +33,7 @@ export async function closeStripeCustomerForAdminAccountDeletion({
 }): Promise<AdminStripeClosureResult> {
   if (!stripeCustomerId) return { status: "not-linked", customerId: null };
   if (!secretKey) throw new Error("Stripe secret key is not configured");
-  const stripe = stripeClient ?? new Stripe(secretKey);
+  const stripe = stripeClient ?? createStripeClient(secretKey);
   let customer: Stripe.Customer | Stripe.DeletedCustomer;
   try {
     customer = await stripe.customers.retrieve(stripeCustomerId);

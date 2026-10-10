@@ -24,6 +24,7 @@
     "./storage/uploads": "./src/storage/uploads.ts",
     "./storage/files": "./src/storage/files.ts",
     "./runtime": "./src/runtime.ts",
+    "./stripe-client": "./src/stripe-client.ts",
     "./v3/ai/images": "./src/v3/ai/images.ts"
   },
   "dependencies": {
@@ -45,7 +46,7 @@
     "music-metadata": "^11.16.1",
     "negotiator": "^1.1.0",
     "semver": "^7.8.5",
-    "stripe": "^20.4.1",
+    "stripe": "^23.0.0",
     "zod": "^4.6.5"
   },
   "scripts": {

@@ -1,4 +1,5 @@
 import Stripe from "stripe";
+import { createStripeClient } from "./stripe-client";
 import {
   claimStripeCustomerProvisioning,
   createVerifiedCustomerMappingIfAbsent,
@@ -19,7 +20,7 @@ export async function reconcileStripeCustomerProvisioning(
   stripeClient?: Pick<Stripe, "customers">,
 ) {
   if (!stripeClient && !secretKey) return { inspected: 0, settled: 0, cleaned: 0, pending: 0, interventionRequired: 0 };
-  const stripe = stripeClient ?? new Stripe(secretKey!);
+  const stripe = stripeClient ?? createStripeClient(secretKey!);
   const rows = await listDueStripeCustomerProvisioningCleanups({ now });
   let settled = 0;
   let cleaned = 0;

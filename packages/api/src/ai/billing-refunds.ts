@@ -13,6 +13,7 @@ import {
   startRetryableTransaction,
 } from "@beutl/db";
 import Stripe from "stripe";
+import { createStripeClient } from "../stripe-client";
 import {
   getCanonicalPaymentRefundState,
   type CanonicalPaymentRefundState,
@@ -523,7 +524,7 @@ export async function reconcileBillingRefunds(
   if (!stripeSecretKey) {
     throw new Error("STRIPE_SECRET_KEY is required for billing refund processing");
   }
-  const stripe = new Stripe(stripeSecretKey, {
+  const stripe = createStripeClient(stripeSecretKey, {
     httpClient: Stripe.createFetchHttpClient(),
     maxNetworkRetries: 2,
   });
