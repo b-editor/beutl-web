@@ -1,11 +1,18 @@
 import "server-only";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { runWithDbProvider } from "@beutl/db";
 import { createStorageOperations } from "@beutl/api/storage/files";
 export type { StorageWriteSource, AiResultStorageCopyOutcome } from "@beutl/api/storage/files";
 
 function operations() {
   return createStorageOperations({
     waitUntil: (task) => getCloudflareContext().ctx?.waitUntil?.(task),
+    runWithBackgroundDb: async (work) => {
+      const { withOwnPrismaClient } = await import("@/prisma");
+      return await withOwnPrismaClient((prisma) =>
+        runWithDbProvider(async () => prisma, work),
+      );
+    },
   });
 }
 

@@ -21,7 +21,7 @@ vi.mock("@prisma/client", async (importOriginal) => ({
   },
 }));
 
-import { getDb } from "@beutl/db";
+import { getDb, runWithSharedDb } from "@beutl/db";
 
 let withOwnPrismaClient: typeof import("../../apps/web/src/prisma").withOwnPrismaClient;
 
@@ -50,6 +50,45 @@ describe("work that outlives the response", () => {
   beforeEach(() => {
     state.afterCallbacks.length = 0;
     state.clients.length = 0;
+  });
+
+  it("shares an action client and disconnects it only after the response", async () => {
+    const client = await runWithSharedDb(async () => {
+      const [first, second] = await Promise.all([getDb(), getDb()]);
+      expect(first).toBe(second);
+      return first as unknown as FakeClient;
+    });
+
+    expect(state.clients).toHaveLength(1);
+    expect(state.afterCallbacks).toHaveLength(1);
+    expect(client.ended).toBe(false);
+    await closeResponse();
+    expect(client.ended).toBe(true);
+  });
+
+  it("retains the action's client for storage work already started in its scope", async () => {
+    let resume!: () => void;
+    const pending = new Promise<void>((resolve) => { resume = resolve; });
+    let deferred!: Promise<FakeClient>;
+    const actionClient = await runWithSharedDb(async () => {
+      const client = await getDb() as unknown as FakeClient;
+      deferred = (async () => {
+        await pending;
+        return await getDb() as unknown as FakeClient;
+      })();
+      return client;
+    });
+
+    // The subsequent render leaves the action scope and owns a separate client.
+    const renderClient = await getDb() as unknown as FakeClient;
+    expect(renderClient).not.toBe(actionClient);
+    resume();
+    expect(await deferred).toBe(actionClient);
+    expect(actionClient.ended).toBe(false);
+    expect(state.clients).toHaveLength(2);
+    await closeResponse();
+    expect(actionClient.ended).toBe(true);
+    expect(renderClient.ended).toBe(true);
   });
 
   it("finishes a background recompute after the request's client closes", async () => {

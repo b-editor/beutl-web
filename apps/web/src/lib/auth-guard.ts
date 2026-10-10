@@ -1,5 +1,6 @@
 import "server-only";
 import type { ActionResult } from "@beutl/core";
+import { runWithSharedDb } from "@beutl/db";
 import { auth } from "@/lib/better-auth";
 import type { BetterAuthSession, BetterAuthUser } from "@/lib/better-auth";
 import { headers } from "next/headers";
@@ -15,8 +16,8 @@ export interface SafeSession {
   user: SafeUser;
 }
 
-// 1 リクエスト中に layout / page / server action が別々にガードを呼ぶため、
-// React の cache でセッション取得をリクエスト単位に 1 回へまとめる。
+// React の cache は layout / page の描画中のセッション取得をまとめる。
+// Server Action には効かないため、DB クライアントは authenticated のスコープで共有する。
 const getSession = cache(async () => {
   const headersList = await headers();
   return auth.api.getSession({ headers: headersList });
@@ -37,16 +38,21 @@ export async function authOrSignIn(): Promise<SafeSession> {
 export async function authenticated<TResult>(
   fnc: (session: SafeSession) => Promise<TResult>,
 ) {
-  const result = await getSession();
-  if (!result?.user?.id) {
-    const actionResult: ActionResult = {
-      message: "Unauthenticated",
-      success: false,
-    };
-    return actionResult;
-  }
+  // Authentication, the mutation and its audit/storage helpers otherwise each
+  // create a Prisma client outside a React render. Response cleanup still owns
+  // this client; storage callbacks that run later acquire an independent client.
+  return await runWithSharedDb(async () => {
+    const result = await getSession();
+    if (!result?.user?.id) {
+      const actionResult: ActionResult = {
+        message: "Unauthenticated",
+        success: false,
+      };
+      return actionResult;
+    }
 
-  return await fnc(result as SafeSession);
+    return await fnc(result as SafeSession);
+  });
 }
 
 export async function throwIfUnauth() {

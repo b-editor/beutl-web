@@ -47,7 +47,10 @@ export type AiResultStorageCopyOutcome =
   | { kind: "unavailable" };
 
 /** Shared quota, ownership and retry-safe storage writes for Web and API callers. */
-export function createStorageOperations(execution?: { waitUntil?(task: Promise<unknown>): void }) {
+export function createStorageOperations(execution?: {
+  waitUntil?(task: Promise<unknown>): void;
+  runWithBackgroundDb?(work: () => Promise<unknown>): Promise<unknown>;
+}) {
   const DEDICATED_STORAGE_WRITE_DEADLINE_MILLISECONDS = 30 * 1000;
   const DEDICATED_STORAGE_UNKNOWN_PERSIST_MILLISECONDS = 2 * 1000;
 
@@ -468,14 +471,23 @@ export function createStorageOperations(execution?: { waitUntil?(task: Promise<u
       });
       const observeLateProviderResult = () => {
         const lateCleanup = providerPut.then(async () => {
-          await recordLateDedicatedStorageWriteResult({
+          const persist = () => recordLateDedicatedStorageWriteResult({
             id: reservation.reservation.id,
             userId,
             objectKey,
             now: new Date(),
-          }).catch((lateError) => {
-            console.error("Failed to persist late dedicated storage cleanup", objectKey, lateError);
           });
+          try {
+            // The Web response may already have disconnected its shared client.
+            // Let that runtime own a fresh scope for this deferred transaction.
+            if (execution?.runWithBackgroundDb) {
+              await execution.runWithBackgroundDb(persist);
+            } else {
+              await persist();
+            }
+          } catch (lateError) {
+            console.error("Failed to persist late dedicated storage cleanup", objectKey, lateError);
+          }
         });
         const context = { ctx: execution };
         context.ctx?.waitUntil?.(lateCleanup);
