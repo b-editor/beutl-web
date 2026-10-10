@@ -83,7 +83,8 @@ English/Japanese description in sync with the recording.
 ## Continuous integration and deployment
 
 [GitHub Actions](.github/workflows/ci.yml) runs the Vitest suite on pull requests
-and pushes to `main`. After tests pass on `main`, it deploys `beutl-ai-images`,
+and pushes to `main`. After tests and builds pass on `main`, it applies pending
+Prisma migrations to the production database, then deploys `beutl-ai-images`,
 `beutl-web` (including public APIs), and `beutl-admin` in that order using the
 existing deployment tooling. Web and Admin are built without Cloudflare
 credentials. Immediately before each Worker deployment, the run's commit must
@@ -95,6 +96,9 @@ Set these repository secrets under **Settings → Secrets and variables → Acti
 - `CLOUDFLARE_API_TOKEN`: a token authorized to deploy Workers and access the
   configured R2, Hyperdrive, and Durable Object resources in the target account.
 - `CLOUDFLARE_ACCOUNT_ID`: the target Cloudflare account ID.
+- `DATABASE_URL`: a direct connection string to the production CockroachDB
+  database with permission to apply Prisma migrations. A missing secret or
+  failed migration stops the workflow before any Worker is deployed.
 - `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`: a fixed base64 AES key for the Web and
   Admin builds, created once with `openssl rand -base64 32`. Next derives
   Server Action IDs from it and from each file's path in the CI checkout, so
@@ -103,8 +107,8 @@ Set these repository secrets under **Settings → Secrets and variables → Acti
   actions once.
 
 Keep application secrets and runtime variables configured in Cloudflare as
-described in [Deployment configuration](docs/deployment.md). Database migrations
-are separate release steps and are not run by this workflow.
+described in [Deployment configuration](docs/deployment.md). Apply pending
+database migrations before deploying Workers manually as well.
 
 ## Deployment
 

@@ -76,6 +76,8 @@ describeWithCockroach("authentication-email security on CockroachDB", () => {
       ('legacy', 'legacy@example.com', 'legacy-deletion', current_timestamp() + INTERVAL '1 hour', 'ACCOUNT_DELETE')`);
     await client.query('ALTER TABLE "Session" SET (schema_locked = true)');
     await client.query('ALTER TABLE "ConfirmationToken" SET (schema_locked = true)');
+    // Prisma applies Cockroach migrations with the legacy schema changer.
+    await client.query("SET use_declarative_schema_changer = 'off'");
     const migration = await readFile(
       new URL(
         "../../apps/web/prisma/migrations/20261010000000_secure_email_changes_and_sends/migration.sql",
@@ -137,11 +139,13 @@ describeWithCockroach("authentication-email security on CockroachDB", () => {
       authorizedSessionId: "original-session",
     });
 
-  it("migrates locked tables, invalidates old email links and preserves account-deletion links", () => {
+  it("migrates locked tables, invalidates old email links and preserves account-deletion links", async () => {
     expect(migratedPurposes).toEqual(["ACCOUNT_DELETE"]);
     expect(tableDefinition).toContain("schema_locked = true");
     expect(tableDefinition).toContain("ON DELETE CASCADE");
     expect(tableDefinition).toContain("ConfirmationToken_sessionId_idx");
+    const { rows } = await client.query('SHOW CREATE TABLE "Session"');
+    expect(rows[0].create_statement).toContain("schema_locked = true");
   });
 
   it("allows only five concurrent sends against shared counters", async () => {
