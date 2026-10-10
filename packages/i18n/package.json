@@ -10,7 +10,7 @@
   "dependencies": {
     "i18next": "^25.10.10",
     "negotiator": "^1.1.0",
-    "react-i18next": "^16.6.6",
+    "react-i18next": "^17.0.16",
     "zod": "^4.6.5"
   },
   "devDependencies": {
