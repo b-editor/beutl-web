@@ -29,6 +29,7 @@ import {
   deleteDevPackageScreenshotAndFile,
   deleteUnreferencedFilesWithStorageCleanup,
   deleteUnreferencedFileWithStorageCleanup,
+  runWithSharedDb,
   setDbProvider,
 } from "@beutl/db";
 import { reconcileAiStorageCleanups, setR2BucketProvider } from "@beutl/api";
@@ -149,6 +150,29 @@ describe("legacy storage cleanup contracts", () => {
       completedFileId: result.record.id,
       creationLeaseUntil: null,
       creationLeaseToken: null,
+    });
+    expect(memory.state.aiStorageCleanups.size).toBe(0);
+  });
+
+  it("stores a 1 MiB developer image on one scoped client", async () => {
+    const createClient = vi.fn(async () => memory.prisma as never);
+    setDbProvider(createClient);
+    const bytes = new Uint8Array(1024 * 1024).fill(37);
+    const result = await runWithSharedDb(() => createDedicatedStorageFile({
+      file: new File([bytes], "screenshot.png", { type: "image/png" }),
+      userId: "u",
+      quota: { quotaBytes: BigInt(2 * bytes.length), fileCountLimit: 10 },
+    }));
+
+    expect(result.kind).toBe("created");
+    expect(createClient).toHaveBeenCalledTimes(1);
+    expect(bucket.put).toHaveBeenCalledTimes(1);
+    const [objectKey, stored] = bucket.put.mock.calls[0] as unknown as [string, ArrayBuffer];
+    expect(new Uint8Array(stored)).toEqual(bytes);
+    expect(memory.state.files.get(result.record.id)).toMatchObject({
+      objectKey,
+      size: BigInt(bytes.length),
+      visibility: "DEDICATED",
     });
     expect(memory.state.aiStorageCleanups.size).toBe(0);
   });
