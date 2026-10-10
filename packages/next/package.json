@@ -6,6 +6,7 @@
   "exports": {
     "./audit-log": "./src/audit-log.ts",
     "./auth-hooks": "./src/auth-hooks.ts",
+    "./auth-email-rate-limit": "./src/auth-email-rate-limit.ts",
     "./language": "./src/language.ts",
     "./magic-link-email": "./src/magic-link-email.ts",
     "./local-redirect": "./src/local-redirect.ts",
@@ -19,11 +20,12 @@
     "@beutl/db": "workspace:*",
     "@beutl/email": "workspace:*",
     "@beutl/i18n": "workspace:*",
+    "better-auth": "^1.7.7",
     "server-only": "^0.0.1"
   },
   "devDependencies": {
     "next": "16.3.8",
-    "typescript": "^5.9.3"
+    "typescript": "^6.0.3"
   },
   "peerDependencies": {
     "next": "^15.5.0 || ^16.0.0"

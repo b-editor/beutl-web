@@ -1,6 +1,6 @@
 # Dependency patches
 
-## @ai-sdk/gateway 4.0.103
+## @ai-sdk/gateway 4.0.110
 
 The image and video adapters serialize seeds using a truthiness check, which
 silently omits the valid seed `0`. The patch changes both checks to test for
@@ -24,7 +24,7 @@ both the CommonJS and ESM builds of `dist/server/web/adapter.js`.
 `tests/contract/next-middleware-rsc-rewrite.test.ts` runs the installed adapter
 with `localeMiddleware` and checks empty, non-empty and absent `_rsc` values.
 Remove this patch when upgrading to a Next version that passes these tests
-without it (Next 16.4.0 and canary still use the truthy check).
+without it (Next 16.4.0 still uses the truthy check).
 
 The root `pnpm.patchedDependencies` entry and lockfile apply the patches during
 installation; they must remain committed with them.

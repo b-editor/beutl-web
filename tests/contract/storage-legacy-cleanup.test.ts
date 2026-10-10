@@ -3,6 +3,12 @@ import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
 
 vi.mock("server-only", () => ({}));
+vi.mock("@/prisma", () => ({
+  withOwnPrismaClient: async (work: (prisma: unknown) => Promise<unknown>) => {
+    const { getDb } = await import("@beutl/db");
+    return work(await getDb());
+  },
+}));
 const getContext = vi.hoisted(() => vi.fn());
 
 let createStorageFile: typeof import("../../apps/web/src/lib/storage").createStorageFile;
@@ -29,6 +35,7 @@ import {
   deleteDevPackageScreenshotAndFile,
   deleteUnreferencedFilesWithStorageCleanup,
   deleteUnreferencedFileWithStorageCleanup,
+  runWithSharedDb,
   setDbProvider,
 } from "@beutl/db";
 import { reconcileAiStorageCleanups, setR2BucketProvider } from "@beutl/api";
@@ -149,6 +156,29 @@ describe("legacy storage cleanup contracts", () => {
       completedFileId: result.record.id,
       creationLeaseUntil: null,
       creationLeaseToken: null,
+    });
+    expect(memory.state.aiStorageCleanups.size).toBe(0);
+  });
+
+  it("stores a 1 MiB developer image on one scoped client", async () => {
+    const createClient = vi.fn(async () => memory.prisma as never);
+    setDbProvider(createClient);
+    const bytes = new Uint8Array(1024 * 1024).fill(37);
+    const result = await runWithSharedDb(() => createDedicatedStorageFile({
+      file: new File([bytes], "screenshot.png", { type: "image/png" }),
+      userId: "u",
+      quota: { quotaBytes: BigInt(2 * bytes.length), fileCountLimit: 10 },
+    }));
+
+    expect(result.kind).toBe("created");
+    expect(createClient).toHaveBeenCalledTimes(1);
+    expect(bucket.put).toHaveBeenCalledTimes(1);
+    const [objectKey, stored] = bucket.put.mock.calls[0] as unknown as [string, ArrayBuffer];
+    expect(new Uint8Array(stored)).toEqual(bytes);
+    expect(memory.state.files.get(result.record.id)).toMatchObject({
+      objectKey,
+      size: BigInt(bytes.length),
+      visibility: "DEDICATED",
     });
     expect(memory.state.aiStorageCleanups.size).toBe(0);
   });
@@ -743,8 +773,8 @@ describe("legacy storage cleanup contracts", () => {
   });
 
   it("enforces a unique screenshot order per package", async () => {
-    const schema = await readFile(new URL("../../apps/web/prisma/schema.prisma", import.meta.url), "utf8");
-    const migration = await readFile(new URL("../../apps/web/prisma/migrations/20260831010000_unique_package_screenshot_order/migration.sql", import.meta.url), "utf8");
+    const schema = await readFile(new URL("../../packages/db/prisma/schema.prisma", import.meta.url), "utf8");
+    const migration = await readFile(new URL("../../packages/db/prisma/migrations/20260831010000_unique_package_screenshot_order/migration.sql", import.meta.url), "utf8");
     const action = await readFile(new URL("../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/projects/[name]/actions/screenshot.ts", import.meta.url), "utf8");
     const packageDb = await readFile(new URL("../../packages/db/src/package.ts", import.meta.url), "utf8");
     const reorder = packageDb.slice(

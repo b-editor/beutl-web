@@ -34,7 +34,7 @@ describeWithCockroach("per-model request options on locked Cockroach tables", ()
       await client.query('ALTER TABLE "AiOperationModel" SET (schema_locked = true)');
 
       const sql = await readFile(new URL(
-        "../../apps/web/prisma/migrations/20260923010000_add_ai_model_request_options/migration.sql",
+        "../../packages/db/prisma/migrations/20260923010000_add_ai_model_request_options/migration.sql",
         import.meta.url,
       ), "utf8");
       const statements = sql.replace(/--[^\n]*/g, "").split(";").filter((part) => part.trim());

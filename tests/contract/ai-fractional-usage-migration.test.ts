@@ -2,11 +2,11 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 const migrationUrl = new URL(
-  "../../apps/web/prisma/migrations/20260921020000_fractional_ai_usage_units/migration.sql",
+  "../../packages/db/prisma/migrations/20260921020000_fractional_ai_usage_units/migration.sql",
   import.meta.url,
 );
 const schemaUrl = new URL(
-  "../../apps/web/prisma/schema.prisma",
+  "../../packages/db/prisma/schema.prisma",
   import.meta.url,
 );
 

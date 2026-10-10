@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const migration = readFileSync(
   new URL(
-    "../../apps/web/prisma/migrations/20260923010000_add_ai_model_request_options/migration.sql",
+    "../../packages/db/prisma/migrations/20260923010000_add_ai_model_request_options/migration.sql",
     import.meta.url,
   ),
   "utf8",

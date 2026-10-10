@@ -3,39 +3,39 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 const migrationUrl = new URL(
-  "../../apps/web/prisma/migrations/20260808120000_replace_subscription_credits_with_monthly_usage/migration.sql",
+  "../../packages/db/prisma/migrations/20260808120000_replace_subscription_credits_with_monthly_usage/migration.sql",
   import.meta.url,
 );
 const hardeningMigrationUrl = new URL(
-  "../../apps/web/prisma/migrations/20260809150000_harden_stripe_billing_state/migration.sql",
+  "../../packages/db/prisma/migrations/20260809150000_harden_stripe_billing_state/migration.sql",
   import.meta.url,
 );
 const packagePaymentMigrationUrl = new URL(
-  "../../apps/web/prisma/migrations/20260809171000_track_package_payment_state/migration.sql",
+  "../../packages/db/prisma/migrations/20260809171000_track_package_payment_state/migration.sql",
   import.meta.url,
 );
 const ownershipMigrationUrl = new URL(
-  "../../apps/web/prisma/migrations/20260809180000_add_stripe_ownership_and_account_deletion_saga/migration.sql",
+  "../../packages/db/prisma/migrations/20260809180000_add_stripe_ownership_and_account_deletion_saga/migration.sql",
   import.meta.url,
 );
 const versionedOfferMigrationUrl = new URL(
-  "../../apps/web/prisma/migrations/20260811120000_version_paid_ai_billing_offers/migration.sql",
+  "../../packages/db/prisma/migrations/20260811120000_version_paid_ai_billing_offers/migration.sql",
   import.meta.url,
 );
 const topUpRefundProcessingMigrationUrl = new URL(
-  "../../apps/web/prisma/migrations/20260811130000_add_top_up_refund_processing/migration.sql",
+  "../../packages/db/prisma/migrations/20260811130000_add_top_up_refund_processing/migration.sql",
   import.meta.url,
 );
 const relaxedOwnershipMigrationUrl = new URL(
-  "../../apps/web/prisma/migrations/20260811120500_relax_customer_ownership_fk/migration.sql",
+  "../../packages/db/prisma/migrations/20260811120500_relax_customer_ownership_fk/migration.sql",
   import.meta.url,
 );
 const cancelAtMigrationUrl = new URL(
-  "../../apps/web/prisma/migrations/20260811121000_track_subscription_cancel_at/migration.sql",
+  "../../packages/db/prisma/migrations/20260811121000_track_subscription_cancel_at/migration.sql",
   import.meta.url,
 );
 const canonicalRefundMigrationUrl = new URL(
-  "../../apps/web/prisma/migrations/20260811131000_track_canonical_refunds_and_pro_compensation/migration.sql",
+  "../../packages/db/prisma/migrations/20260811131000_track_canonical_refunds_and_pro_compensation/migration.sql",
   import.meta.url,
 );
 const billingMigrationGuideUrl = new URL(

@@ -26,6 +26,8 @@ export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
     environment: "node",
+    // Preserve the Vitest 4 mock-history behavior after upgrading to Vitest 5.
+    clearMocks: false,
   },
   resolve: {
     alias: [

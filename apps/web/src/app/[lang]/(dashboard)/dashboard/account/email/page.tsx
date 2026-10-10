@@ -1,6 +1,5 @@
 import { authOrSignIn } from "@/lib/auth-guard";
 import { Form } from "./components";
-import { updateEmail } from "./actions";
 import { Separator } from "@beutl/ui/ui/separator";
 import { getTranslation } from "@beutl/i18n";
 import { findEmailByUserId } from "@beutl/db";
@@ -8,9 +7,7 @@ import { findEmailByUserId } from "@beutl/db";
 export default async function Page(
   props: {
     searchParams: Promise<{
-      token?: string;
-      identifier?: string;
-      status?: "emailUpdated" | "emailExists" | "emailUpdateFailed";
+      status?: "emailUpdated" | "emailExists" | "emailUpdateFailed" | "emailVerificationSent" | "emailRateLimited";
     }>;
     params: Promise<{ lang: string }>;
   }
@@ -24,15 +21,10 @@ export default async function Page(
   const searchParams = await props.searchParams;
 
   const {
-    token,
-    identifier,
     status
   } = searchParams;
 
-  const session = await authOrSignIn();
-  if (token && identifier) {
-    await updateEmail(token, identifier);
-  }
+  const session = await authOrSignIn(true);
 
   const user = await findEmailByUserId({ userId: session.user.id });
   if (!user) {

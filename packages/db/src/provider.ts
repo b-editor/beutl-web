@@ -5,8 +5,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 // PrismaClient の生成方法を注入する。デフォルトは未設定で、getDb() はエラーを投げる。
 // 各アプリは起動時に setDbProvider() を呼ぶこと。
 //
-// NOTE: PrismaClient の memoization はしない。Hyperdrive は maxUses:1 の
-// per-request 接続モデルのため、毎リクエスト新規生成を維持する。
+// NOTE: PrismaClient をグローバルには保持しない。Hyperdrive は maxUses:1 の
+// per-request 接続モデルのため、共有は一つの呼び出しのスコープ内だけに限る。
 // NOTE: provider はモジュールスコープではなく globalThis に保持する。
 // Next.js (特に dev の Turbopack) は instrumentation と SSR で別々にバンドルするため、
 // モジュール変数だと setDbProvider() と getDb() が別インスタンスを参照してしまい
@@ -21,7 +21,7 @@ function providerScope(): AsyncLocalStorage<DbProvider> {
   return (global[SCOPE_KEY] ??= new AsyncLocalStorage<DbProvider>()) as AsyncLocalStorage<DbProvider>;
 }
 
-/** Bind a provider to one scheduled invocation without changing concurrent requests. */
+/** Bind a provider to one invocation without changing concurrent requests. */
 export function runWithDbProvider<T>(fn: DbProvider, callback: () => Promise<T>): Promise<T> {
   return providerScope().run(fn, callback);
 }
@@ -30,7 +30,7 @@ export function setDbProvider(fn: () => Promise<PrismaClient>): void {
   (globalThis as Record<string, unknown>)[GLOBAL_KEY] = fn;
 }
 
-export async function getDb(): Promise<PrismaClient> {
+function getDbProvider(): DbProvider {
   const provider = (providerScope().getStore() ?? (globalThis as Record<string, unknown>)[GLOBAL_KEY]) as
     | DbProvider
     | undefined;
@@ -39,7 +39,21 @@ export async function getDb(): Promise<PrismaClient> {
       "Db provider is not set. Call setDbProvider() before using @beutl/db.",
     );
   }
-  return provider();
+  return provider;
+}
+
+/** Share one lazy client for an operation, retaining the runtime's cleanup policy. */
+export function runWithSharedDb<T>(callback: () => Promise<T>): Promise<T> {
+  const provider = getDbProvider();
+  let client: Promise<PrismaClient> | undefined;
+  return runWithDbProvider(
+    () => client ??= Promise.resolve().then(provider),
+    callback,
+  );
+}
+
+export async function getDb(): Promise<PrismaClient> {
+  return getDbProvider()();
 }
 
 export type { PrismaClient } from "@prisma/client";

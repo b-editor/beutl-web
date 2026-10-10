@@ -18,9 +18,10 @@ const mocks = vi.hoisted(() => ({
   updateCustomerEmailIfExist: vi.fn(),
   updateUserEmail: vi.fn(),
   validateConfirmationToken: vi.fn(),
+  getAuthoritativeSession: vi.fn(),
 }));
 
-vi.mock("@/lib/auth-guard", () => ({ authenticated: vi.fn() }));
+vi.mock("@/lib/auth-guard", () => ({ authenticated: vi.fn(), getAuthoritativeSession: mocks.getAuthoritativeSession }));
 vi.mock("@beutl/next/language", () => ({
   getLanguage: vi.fn(async () => "en"),
 }));
@@ -79,9 +80,12 @@ describe("email update billing synchronization", () => {
       tokenData: {
         identifier: "new@example.com",
         userId: "user-1",
+        sourceEmail: "old@example.com",
+        sessionId: "session-1",
       },
     };
     mocks.consumeConfirmationToken.mockResolvedValue(tokenResult);
+    mocks.getAuthoritativeSession.mockResolvedValue({ user: { id: "user-1" }, session: { id: "session-1" } });
     mocks.validateConfirmationToken.mockResolvedValue(tokenResult);
     mocks.startTransaction.mockImplementation(
       async (callback: (tx: unknown) => Promise<unknown>) => {

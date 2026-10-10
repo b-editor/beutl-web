@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 
 const migrationPath =
-  "../../apps/web/prisma/migrations/20260825160000_durable_storage_upload_start/migration.sql";
+  "../../packages/db/prisma/migrations/20260825160000_durable_storage_upload_start/migration.sql";
 const repairPath =
-  "../../apps/web/prisma/migrations/20260826000000_repair_storage_upload_start_default/migration.sql";
+  "../../packages/db/prisma/migrations/20260826000000_repair_storage_upload_start_default/migration.sql";
 const IMMUTABLE_MIGRATION_SHA256 =
   "9f41da3afecacedb55a946cb93a04c28721d11ca0445818fb43e32072d60c1d0";
 
@@ -36,7 +36,7 @@ describe("durable storage-upload start migration contract", () => {
 
   it("keeps the Prisma model aligned with the repaired database default", async () => {
     const schema = await readFile(
-      new URL("../../apps/web/prisma/schema.prisma", import.meta.url),
+      new URL("../../packages/db/prisma/schema.prisma", import.meta.url),
       "utf8",
     );
     const model = schema.slice(

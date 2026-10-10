@@ -14,18 +14,25 @@ type ConfirmationTokenData = {
   expires: Date;
   userId: string;
   purpose: ConfirmationTokenPurpose;
+  sessionId?: string | null;
+  sourceEmail?: string | null;
 };
 
 type IssueConfirmationTokenOptions = {
   identifier: string;
   userId: string;
   purpose: ConfirmationTokenPurpose;
+  sessionId?: string;
+  sourceEmail?: string;
+  prisma?: PrismaTransaction;
 };
 
 type ConsumeConfirmationTokenOptions = {
   token: string;
   identifier: string;
   purpose: ConfirmationTokenPurpose;
+  authorizedUserId?: string;
+  authorizedSessionId?: string;
   prisma?: PrismaTransaction;
 };
 
@@ -68,17 +75,26 @@ export async function issueConfirmationToken({
   identifier,
   userId,
   purpose,
+  sessionId,
+  sourceEmail,
+  prisma,
 }: IssueConfirmationTokenOptions) {
   const token = randomString(32);
-  const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const emailChange = purpose === "EMAIL_UPDATE" || purpose === "EMAIL_UPDATE_APPROVAL";
+  const expires = new Date(Date.now() + (emailChange ? 1 : 24) * 60 * 60 * 1000);
   const hash = await hashConfirmationToken(token);
-  await createConfirmationToken({
-    token: hash,
-    identifier,
-    userId,
-    expires,
-    purpose,
-  });
+  await createConfirmationToken(
+    {
+      token: hash,
+      identifier,
+      userId,
+      expires,
+      purpose,
+      ...(sessionId ? { sessionId } : {}),
+      ...(sourceEmail ? { sourceEmail } : {}),
+    },
+    prisma,
+  );
   return token;
 }
 
@@ -86,10 +102,16 @@ export async function consumeConfirmationToken({
   token,
   identifier,
   purpose,
+  authorizedUserId,
+  authorizedSessionId,
   prisma,
 }: ConsumeConfirmationTokenOptions): Promise<ConsumeConfirmationTokenResult> {
   const result = await validateConfirmationToken({ token, identifier, purpose, prisma });
   if (!result.valid) return result;
+  const emailChange = purpose === "EMAIL_UPDATE" || purpose === "EMAIL_UPDATE_APPROVAL";
+  if (emailChange && (!authorizedSessionId || authorizedUserId !== result.tokenData.userId)) {
+    return { valid: false, reason: "invalid" };
+  }
 
   const consumed = await consumeConfirmationTokenByIdentifierToken({
     identifier,
@@ -97,6 +119,13 @@ export async function consumeConfirmationToken({
     purpose,
     userId: result.tokenData.userId,
     now: new Date(),
+    ...(emailChange
+      ? {
+          sessionId: result.tokenData.sessionId!,
+          sourceEmail: result.tokenData.sourceEmail!,
+          authorizedSessionId,
+        }
+      : {}),
     prisma,
   });
   return consumed
@@ -111,14 +140,28 @@ export async function validateConfirmationToken({
   prisma,
 }: ConsumeConfirmationTokenOptions): Promise<ValidateConfirmationTokenResult> {
   const hash = await hashConfirmationToken(token);
-  const tokenData = await findConfirmationTokenByIdentifierToken({
-    identifier,
-    token: hash,
-  }, prisma);
+  const tokenData = await findConfirmationTokenByIdentifierToken(
+    {
+      identifier,
+      token: hash,
+    },
+    prisma,
+  );
 
   if (!tokenData || tokenData.purpose !== purpose) {
     return { valid: false, reason: "invalid" };
   }
+
+  if (
+    (purpose === "EMAIL_UPDATE" || purpose === "EMAIL_UPDATE_APPROVAL") &&
+    (!tokenData.sessionId ||
+      !tokenData.sourceEmail ||
+      !tokenData.session ||
+      tokenData.session.userId !== tokenData.userId ||
+      tokenData.session.expiresAt.valueOf() <= Date.now() ||
+      tokenData.user.email !== tokenData.sourceEmail)
+  )
+    return { valid: false, reason: "invalid" };
 
   if (tokenData.expires.valueOf() <= Date.now()) {
     return { valid: false, reason: "expired", tokenData };

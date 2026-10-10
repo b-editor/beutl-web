@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 const migrationUrl = new URL(
-  "../../apps/web/prisma/migrations/20260813110000_relock_ai_settings/migration.sql",
+  "../../packages/db/prisma/migrations/20260813110000_relock_ai_settings/migration.sql",
   import.meta.url,
 );
 

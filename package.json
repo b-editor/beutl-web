@@ -30,11 +30,11 @@
   "devDependencies": {
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
-    "@types/node": "^22.20.5",
+    "@types/node": "^24.19.2",
     "fflate": "^0.8.3",
-    "happy-dom": "20.14.5",
-    "hono": "^4.13.12",
-    "vitest": "^4.1.11"
+    "happy-dom": "20.14.6",
+    "hono": "^4.13.13",
+    "vitest": "^5.0.3"
   },
   "pnpm": {
     "overrides": {
@@ -43,28 +43,32 @@
       "@types/react-dom": "19.3.0",
       "minimatch@3": "3.1.5",
       "minimatch@9": "9.0.9",
-      "brace-expansion@1": "1.1.18",
-      "brace-expansion@2": "2.1.4",
-      "brace-expansion@5": "5.0.9",
-      "undici": "7.29.0",
-      "postcss": "8.5.28",
+      "brace-expansion@1": "1.1.21",
+      "brace-expansion@2": "2.1.7",
+      "brace-expansion@5": "5.0.12",
+      "undici": "7.30.0",
+      "postcss": "8.5.29",
       "lodash": "4.18.1",
-      "fast-xml-parser": "5.7.0",
-      "fast-xml-builder": "1.1.7",
-      "yaml": "2.9.0",
+      "fast-xml-parser": "5.11.2",
+      "fast-xml-builder": "1.3.1",
+      "yaml": "2.9.1",
       "body-parser": "2.3.0",
       "qs": "6.16.0",
       "path-to-regexp@8": "8.4.2",
       "ws@7": "7.5.13",
-      "sharp": "0.35.4",
+      "sharp": "0.35.5",
       "form-data": "4.0.6",
       "defu": "6.1.7",
-      "fast-uri": "3.1.6",
-      "mysql2": "3.22.0",
-      "@simplewebauthn/server": "13.3.2"
+      "fast-uri": "3.1.8",
+      "mysql2": "3.24.5",
+      "@simplewebauthn/server": "13.3.3",
+      "deepmerge-ts": "8.0.2",
+      "proxy-addr": "2.0.8",
+      "source-map-js": "1.2.2",
+      "glob@10": "10.5.0"
     },
     "patchedDependencies": {
-      "@ai-sdk/gateway@4.0.103": "patches/@ai-sdk__gateway@4.0.103.patch",
+      "@ai-sdk/gateway@4.0.110": "patches/@ai-sdk__gateway@4.0.110.patch",
       "next@16.3.8": "patches/next@16.3.8.patch"
     }
   },

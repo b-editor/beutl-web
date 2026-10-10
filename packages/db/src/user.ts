@@ -67,19 +67,23 @@ export async function existsUserById({
 export async function updateUserEmail({
   userId,
   email,
+  expectedEmail,
   prisma,
 }: {
   userId: string;
   email: string;
+  expectedEmail?: string;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma || await getDb();
   await db.user.update({
     where: {
       id: userId,
+      ...(expectedEmail ? { email: expectedEmail } : {}),
     },
     data: {
       email: email,
+      emailVerified: true,
     }
   });
 }

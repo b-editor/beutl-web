@@ -7,6 +7,7 @@ import { getLanguage } from "@beutl/next/language";
 import { existsUserByEmail } from "@beutl/db";
 import { headers } from "next/headers";
 import { resolveSafeReturnUrl } from "@beutl/next/local-redirect";
+import { isAuthEmailRateLimitError } from "@beutl/next/auth-email-rate-limit";
 
 const emailSchema = (z: Zod) =>
   z.object({
@@ -54,17 +55,19 @@ export async function signInWithEmailAction(
   // Better Auth magic link を送信
   const auth = await getAuth();
   // Magic link APIを呼び出す
-  const response = await auth.api.signInMagicLink({
-    body: {
-      email: email,
-      callbackURL: safeReturnUrl || `/${lang}/dashboard`,
-      errorCallbackURL: "/account/error",
-    },
-    headers: await headers(),
-  });
-
-  if (!response.status) {
-    return { message: t("auth:errors.magicLink") };
+  try {
+    const response = await auth.api.signInMagicLink({
+      body: {
+        email: email,
+        callbackURL: safeReturnUrl || `/${lang}/dashboard`,
+        errorCallbackURL: "/account/error",
+      },
+      headers: await headers(),
+    });
+    if (!response.status) return { message: t("auth:errors.magicLink") };
+  } catch (error) {
+    if (isAuthEmailRateLimitError(error)) return { message: t("auth:errors.emailRateLimited") };
+    throw error;
   }
 
   // メール送信後、確認ページにリダイレクト

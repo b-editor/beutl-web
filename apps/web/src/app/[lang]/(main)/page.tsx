@@ -1,13 +1,17 @@
 import Link from "next/link";
-import { Download } from "lucide-react";
+import { headers } from "next/headers";
 import { getTranslation } from "@beutl/i18n";
 import { cn } from "@beutl/core";
 import EasingDemo, { type EasingName } from "@/components/easing-demo";
 import EffectsDemo from "@/components/effects-demo";
 import FeaturesToc from "@/components/features-toc";
 import BentoSection from "@/components/landing/bento-section";
+import type { DownloadCtaProps } from "@/components/landing/download-cta";
+import DownloadSection, { DOWNLOAD_SECTION_ID } from "@/components/landing/download-section";
 import HeroSection from "@/components/landing/hero-section";
 import ShowcaseSection from "@/components/landing/showcase-section";
+import { detectPlatform } from "@/lib/app-download";
+import { retrieveLatestAppReleaseForLanding } from "@/lib/app-release";
 import { retrieveLatestPackagesForLanding } from "@/lib/store-utils";
 import {
   AudioMock,
@@ -20,18 +24,10 @@ import {
   TextMock,
   TimelineMock,
 } from "@/components/landing/feature-mocks";
-import {
-  Chip,
-  FeatureSection,
-  LP_BUTTON_GHOST,
-  LP_BUTTON_PRIMARY,
-  LP_CTA_ROW,
-  LP_SECTION,
-  LP_WRAP,
-} from "@/components/landing/lp-parts";
+import { Chip, FeatureSection, LP_BUTTON_GHOST } from "@/components/landing/lp-parts";
 
 const LANDING_PACKAGE_COUNT = 2;
-const DOWNLOAD_HREF = "https://github.com/b-editor/beutl/releases/latest";
+const RELEASES_HREF = "https://github.com/b-editor/beutl/releases";
 const GITHUB_HREF = "https://github.com/b-editor/beutl";
 
 const EASINGS: { easing: EasingName; color: string }[] = [
@@ -72,22 +68,44 @@ export default async function Home(props: {
   params: Promise<{ lang: string }>;
 }) {
   const { lang } = await props.params;
-  const [{ t }, packages] = await Promise.all([
+  const [{ t }, packages, release, requestHeaders] = await Promise.all([
     getTranslation(lang),
     retrieveLatestPackagesForLanding(LANDING_PACKAGE_COUNT),
+    retrieveLatestAppReleaseForLanding(),
+    headers(),
   ]);
+
+  // Without a registered release the button keeps its old destination.
+  const downloadCta: DownloadCtaProps = {
+    version: release?.version ?? null,
+    downloads: release?.downloads ?? [],
+    initialPlatform: detectPlatform(
+      requestHeaders.get("user-agent"),
+      requestHeaders.get("sec-ch-ua-platform"),
+    ),
+    fallbackHref: release ? `#${DOWNLOAD_SECTION_ID}` : `${RELEASES_HREF}/latest`,
+    otherDownloadsHref: `#${DOWNLOAD_SECTION_ID}`,
+    texts: {
+      download: t("main:download"),
+      downloadFor: {
+        win: t("main:downloadForWindows"),
+        osx: t("main:downloadForMacos"),
+        linux: t("main:downloadForLinux"),
+      },
+      otherDownloads: t("main:otherDownloads"),
+    },
+  };
 
   return (
     <main className="bg-lp-bg text-lp-text">
       <HeroSection
-        downloadHref={DOWNLOAD_HREF}
+        cta={downloadCta}
         githubHref={GITHUB_HREF}
         texts={{
           eyebrow: t("main:heroEyebrow"),
           titleLine1: t("main:heroTitleLine1"),
           titleLine2: t("main:heroTitleLine2"),
           lede: t("main:heroLede"),
-          download: t("main:download"),
           github: t("main:github"),
         }}
       />
@@ -220,27 +238,12 @@ export default async function Home(props: {
         <PackagesMock t={t} lang={lang} packages={packages} />
       </FeatureSection>
 
-      <section className={LP_SECTION}>
-        <div className={cn(LP_WRAP, "flex flex-wrap items-center justify-between gap-6")}>
-          <div>
-            <h2 className="text-2xl font-semibold tracking-tight">
-              {t("main:finalHeadline")}
-            </h2>
-            <p className="mt-3 max-w-[48ch] text-sm leading-relaxed text-lp-muted">
-              {t("main:finalText")}
-            </p>
-          </div>
-          <div className={cn(LP_CTA_ROW, "mt-0")}>
-            <Link href={DOWNLOAD_HREF} className={LP_BUTTON_PRIMARY}>
-              <Download aria-hidden="true" />
-              {t("main:download")}
-            </Link>
-            <Link href={GITHUB_HREF} className={LP_BUTTON_GHOST}>
-              {t("main:viewOnGitHub")}
-            </Link>
-          </div>
-        </div>
-      </section>
+      <DownloadSection
+        t={t}
+        version={release?.version ?? null}
+        downloads={release?.downloads ?? []}
+        releasesHref={RELEASES_HREF}
+      />
     </main>
   );
 }

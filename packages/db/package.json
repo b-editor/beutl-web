@@ -6,8 +6,15 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "scripts": {
+    "generate": "node ../../scripts/prisma-generate.mjs"
+  },
   "dependencies": {
     "@beutl/core": "workspace:*",
     "@prisma/client": "^7.10.0"
+  },
+  "devDependencies": {
+    "dotenv": "18.0.7",
+    "prisma": "^7.10.0"
   }
 }

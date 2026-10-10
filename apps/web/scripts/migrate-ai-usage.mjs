@@ -13,7 +13,7 @@ if ([...args].some((arg) => arg !== "--check" && arg !== "--writers-stopped")) {
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
 
 const appDirectory = fileURLToPath(new URL("../", import.meta.url));
-const migrationsDirectory = new URL("../prisma/migrations/", import.meta.url);
+const migrationsDirectory = new URL("../../../packages/db/prisma/migrations/", import.meta.url);
 const migrations = [];
 for (const entry of (
   await readdir(migrationsDirectory, { withFileTypes: true })
@@ -29,8 +29,13 @@ for (const entry of (
   });
 }
 
-const require = createRequire(import.meta.url);
-const prismaCli = require.resolve("prisma/build/index.js");
+const requireFromDb = createRequire(
+  new URL("../../../packages/db/package.json", import.meta.url),
+);
+const prismaCli = requireFromDb.resolve("prisma/build/index.js");
+const prismaConfig = fileURLToPath(
+  new URL("../../../packages/db/prisma.config.ts", import.meta.url),
+);
 const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
 try {
   await client.connect();
@@ -42,7 +47,7 @@ try {
     deploy: () =>
       execFileSync(
         process.execPath,
-        [prismaCli, "migrate", "deploy", "--schema", "prisma/schema.prisma"],
+        [prismaCli, "migrate", "deploy", "--config", prismaConfig],
         { cwd: appDirectory, env: process.env, stdio: "inherit" },
       ),
   });

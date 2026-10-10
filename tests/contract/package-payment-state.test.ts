@@ -267,7 +267,7 @@ describe("package payment migration cutover", () => {
   it("marks old-Worker library writes as payment-managed by default", () => {
     const migration = readFileSync(
       new URL(
-        "../../apps/web/prisma/migrations/20260809171000_track_package_payment_state/migration.sql",
+        "../../packages/db/prisma/migrations/20260809171000_track_package_payment_state/migration.sql",
         import.meta.url,
       ),
       "utf8",
@@ -282,7 +282,7 @@ describe("package payment migration cutover", () => {
   it("adds the package payment amount columns as nullable without backfilling in SQL", () => {
     const migration = readFileSync(
       new URL(
-        "../../apps/web/prisma/migrations/20260817000000_store_package_payment_amount/migration.sql",
+        "../../packages/db/prisma/migrations/20260817000000_store_package_payment_amount/migration.sql",
         import.meta.url,
       ),
       "utf8",

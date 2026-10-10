@@ -2,7 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 const migrationsUrl = new URL(
-  "../../apps/web/prisma/migrations/",
+  "../../packages/db/prisma/migrations/",
   import.meta.url,
 );
 

@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { resolve } from "node:path";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { withFreshCockroachMigrationOption } from "./cockroach-migration-url.mjs";
 import { assertFreshCockroachDatabase } from "./fresh-cockroach-preflight.mjs";
 import pg from "pg";
@@ -28,12 +29,18 @@ try {
 } finally {
   await client.end().catch(() => undefined);
 }
-const prismaBin = resolve("node_modules/.bin/prisma");
+const requireFromDb = createRequire(
+  new URL("../../../packages/db/package.json", import.meta.url),
+);
+const prismaCli = requireFromDb.resolve("prisma/build/index.js");
+const prismaConfig = fileURLToPath(
+  new URL("../../../packages/db/prisma.config.ts", import.meta.url),
+);
 execFileSync(
-  prismaBin,
-  ["migrate", "deploy", "--schema", "prisma/schema.prisma"],
+  process.execPath,
+  [prismaCli, "migrate", "deploy", "--config", prismaConfig],
   {
-    cwd: process.cwd(),
+    cwd: fileURLToPath(new URL("../", import.meta.url)),
     env: { ...process.env, DATABASE_URL: migrationUrl },
     stdio: "inherit",
   },

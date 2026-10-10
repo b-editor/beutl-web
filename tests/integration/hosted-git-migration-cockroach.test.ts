@@ -12,6 +12,9 @@ const requireFromWeb = createRequire(
   new URL("../../apps/web/package.json", import.meta.url),
 );
 const { Client } = requireFromWeb("pg");
+const requireFromDb = createRequire(
+  new URL("../../packages/db/package.json", import.meta.url),
+);
 const execFileAsync = promisify(execFile);
 const connectionString = process.env.TEST_DATABASE_URL;
 const describeWithCockroach = connectionString ? describe : describe.skip;
@@ -29,7 +32,7 @@ describeWithCockroach("hosted Git migration on locked Cockroach tables", () => {
       await client.query(`SET search_path TO "${schema}"`);
 
       const migration = await readFile(new URL(
-        "../../apps/web/prisma/migrations/20261003000000_add_hosted_git/migration.sql",
+        "../../packages/db/prisma/migrations/20261003000000_add_hosted_git/migration.sql",
         import.meta.url,
       ), "utf8");
       const migrations = join(root, "migrations");
@@ -46,9 +49,9 @@ describeWithCockroach("hosted Git migration on locked Cockroach tables", () => {
       await writeFile(join(hostedGit, "migration.sql"), migration);
       const config = join(root, "prisma.config.ts");
       await writeFile(config, `
-        import { defineConfig } from ${JSON.stringify(pathToFileURL(requireFromWeb.resolve("prisma/config")).href)};
+        import { defineConfig } from ${JSON.stringify(pathToFileURL(requireFromDb.resolve("prisma/config")).href)};
         export default defineConfig({
-          schema: ${JSON.stringify(fileURLToPath(new URL("../../apps/web/prisma/schema.prisma", import.meta.url)))},
+          schema: ${JSON.stringify(fileURLToPath(new URL("../../packages/db/prisma/schema.prisma", import.meta.url)))},
           migrations: { path: ${JSON.stringify(migrations)} },
           datasource: { url: process.env.TEST_DATABASE_URL },
         });
@@ -56,7 +59,7 @@ describeWithCockroach("hosted Git migration on locked Cockroach tables", () => {
       const url = new URL(connectionString!);
       url.searchParams.set("schema", schema);
       const runPrisma = (command: string) => execFileAsync(process.execPath, [
-        requireFromWeb.resolve("prisma/build/index.js"), "migrate", command, "--config", config,
+        requireFromDb.resolve("prisma/build/index.js"), "migrate", command, "--config", config,
       ], { env: { ...process.env, TEST_DATABASE_URL: url.toString() } });
       const status = await runPrisma("status").catch((error) => {
         if (!error.stdout) throw error;

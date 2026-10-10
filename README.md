@@ -52,7 +52,13 @@ must not be committed.
 The workspace root's `postinstall` generates the shared Prisma Client once after
 dependency installation. Keep this hook at the root: per-app hooks run in parallel
 and would write to the same generated client. The generator uses a temporary schema
-and leaves `apps/web/prisma/schema.prisma` unchanged.
+and leaves `packages/db/prisma/schema.prisma` unchanged.
+
+`packages/db` owns the Prisma schema, migration history, configuration, and CLI.
+Run `vp run --filter @beutl/db generate` to regenerate the shared client, or
+`vp exec --filter @beutl/db prisma validate` to validate the schema. Direct Prisma
+commands run from this package and load its `.env`; `migrate:fresh-cockroach` and
+`migrate:ai-usage` retain their existing `apps/web/.env` loading.
 
 ## Common commands
 
@@ -70,6 +76,15 @@ and leaves `apps/web/prisma/schema.prisma` unchanged.
 CockroachDB integration tests require `TEST_DATABASE_URL`. The live OpenRouter
 pricing test is opt-in through `TEST_OPENROUTER_PRICING=1`; these tests are
 skipped when their respective variables are absent.
+
+## Landing-page recording
+
+The editor demonstration is maintained in [beutl-demos](https://github.com/b-editor/beutl-demos).
+After reviewing and recording a new capture there, run its `scripts/demo.py web-assets`
+command with this checkout as `--web`. Commit `apps/web/public/img/showcase.mp4`,
+`showcase.webm`, and `showcase-poster.png` together. Both videos are 1920×1080 at
+30 fps, and the poster is the first frame. Keep the showcase dimensions and the
+English/Japanese description in sync with the recording.
 
 ## Continuous integration and deployment
 
