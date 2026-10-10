@@ -18,18 +18,19 @@ export interface SafeSession {
 
 // React の cache は layout / page の描画中のセッション取得をまとめる。
 // Server Action には効かないため、DB クライアントは authenticated のスコープで共有する。
-const getSession = cache(async () => {
+const getSession = cache(async (authoritative = false) => {
   const headersList = await headers();
-  return auth.api.getSession({ headers: headersList });
+  return auth.api.getSession({
+    headers: headersList,
+    ...(authoritative ? { query: { disableCookieCache: true } } : {}),
+  });
 });
 
-export async function authOrSignIn(): Promise<SafeSession> {
-  const result = await getSession();
+export async function authOrSignIn(authoritative = false): Promise<SafeSession> {
+  const result = await getSession(authoritative);
   if (!result?.user?.id) {
     const headersList = await headers();
-    redirect(
-      `/account/sign-in?returnUrl=${encodeURIComponent(headersList.get("x-url") || "/")}`,
-    );
+    redirect(`/account/sign-in?returnUrl=${encodeURIComponent(headersList.get("x-url") || "/")}`);
   }
 
   return result as SafeSession;
@@ -37,12 +38,13 @@ export async function authOrSignIn(): Promise<SafeSession> {
 
 export async function authenticated<TResult>(
   fnc: (session: SafeSession) => Promise<TResult>,
+  authoritative = false,
 ) {
   // Authentication, the mutation and its audit/storage helpers otherwise each
   // create a Prisma client outside a React render. Response cleanup still owns
   // this client; storage callbacks that run later acquire an independent client.
   return await runWithSharedDb(async () => {
-    const result = await getSession();
+    const result = await getSession(authoritative);
     if (!result?.user?.id) {
       const actionResult: ActionResult = {
         message: "Unauthenticated",
@@ -53,6 +55,11 @@ export async function authenticated<TResult>(
 
     return await fnc(result as SafeSession);
   });
+}
+
+/** Sensitive operations must consult the session store even with a valid cache cookie. */
+export async function getAuthoritativeSession(): Promise<SafeSession | null> {
+  return (await getSession(true)) as SafeSession | null;
 }
 
 export async function throwIfUnauth() {

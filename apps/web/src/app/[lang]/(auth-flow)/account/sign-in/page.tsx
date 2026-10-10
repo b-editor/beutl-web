@@ -24,7 +24,7 @@ export default async function Page(
 
   const returnUrl = await resolveSafeReturnUrl(searchParams.returnUrl);
 
-  const session = await auth.api.getSession({ headers: await headers() });
+  const session = await auth.api.getSession({ headers: await headers(), query: { disableCookieCache: true } });
   if (session) {
     await localRedirect(returnUrl || `/${lang}/dashboard`);
   }

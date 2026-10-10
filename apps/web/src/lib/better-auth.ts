@@ -6,6 +6,7 @@ import { findProfileForDiscover, getDb } from "@beutl/db";
 import { profileDisplayName } from "@beutl/core";
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { onUserCreated } from "@beutl/next/auth-hooks";
+import { authEmailRateLimitHook } from "@beutl/next/auth-email-rate-limit";
 import { sendMagicLinkEmail } from "@beutl/next/magic-link-email";
 import type { Session, User } from "better-auth";
 import { nextCookies } from "better-auth/next-js";
@@ -92,7 +93,9 @@ async function createAuthWithPrisma() {
         trustedProviders: ["google", "github"],
       },
     },
+    hooks: { before: authEmailRateLimitHook },
     advanced: {
+      ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] },
       // BETTER_AUTH_COOKIE_DOMAIN を設定したときだけ Domain 付きのセッションクッキーを
       // 発行し、管理画面 (apps/admin, admin.beutl.beditor.net) と共有する。
       // 値には共有に必要な最小のドメインを指定する (本番では beutl.beditor.net)。
@@ -166,7 +169,7 @@ export const auth = {
     return instance.handler(request);
   },
   api: {
-    getSession: async (options: { headers: Headers }) => {
+    getSession: async (options: { headers: Headers; query?: { disableCookieCache?: boolean } }) => {
       const instance = await getAuth();
       return instance.api.getSession(options);
     },

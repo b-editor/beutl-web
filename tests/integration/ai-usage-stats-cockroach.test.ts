@@ -319,7 +319,10 @@ describeWithCockroach("AI usage aggregates on CockroachDB", () => {
     expect(Number.isSafeInteger(adjustments.granted)).toBe(true);
     expect(Number.isSafeInteger(adjustments.revoked)).toBe(true);
     expect(Number.isSafeInteger(balances.accountCount)).toBe(true);
-    expect(Number.isSafeInteger(subscriptions)).toBe(true);
+    expect(Number.isSafeInteger(subscriptions.total)).toBe(true);
+    for (const count of Object.values(subscriptions.byTier)) {
+      expect(Number.isSafeInteger(count)).toBe(true);
+    }
 
     // The ranking must come back sorted by the aggregate, not by insertion.
     const reserved = topUsers.map((user) => user.reservedUnits);
