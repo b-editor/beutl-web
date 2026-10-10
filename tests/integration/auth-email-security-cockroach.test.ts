@@ -80,7 +80,7 @@ describeWithCockroach("authentication-email security on CockroachDB", () => {
     await client.query("SET use_declarative_schema_changer = 'off'");
     const migration = await readFile(
       new URL(
-        "../../apps/web/prisma/migrations/20261010000000_secure_email_changes_and_sends/migration.sql",
+        "../../packages/db/prisma/migrations/20261010000000_secure_email_changes_and_sends/migration.sql",
         import.meta.url,
       ),
       "utf8",

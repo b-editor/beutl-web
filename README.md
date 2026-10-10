@@ -52,7 +52,13 @@ must not be committed.
 The workspace root's `postinstall` generates the shared Prisma Client once after
 dependency installation. Keep this hook at the root: per-app hooks run in parallel
 and would write to the same generated client. The generator uses a temporary schema
-and leaves `apps/web/prisma/schema.prisma` unchanged.
+and leaves `packages/db/prisma/schema.prisma` unchanged.
+
+`packages/db` owns the Prisma schema, migration history, configuration, and CLI.
+Run `vp run --filter @beutl/db generate` to regenerate the shared client, or
+`vp exec --filter @beutl/db prisma validate` to validate the schema. Direct Prisma
+commands run from this package and load its `.env`; `migrate:fresh-cockroach` and
+`migrate:ai-usage` retain their existing `apps/web/.env` loading.
 
 ## Common commands
 

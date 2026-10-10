@@ -70,7 +70,7 @@ describeWithCockroach("AI usage cutover on locked Cockroach tables", () => {
         AI_USAGE_MIGRATIONS.map(async (name: string) => {
           const sql = await readFile(
             new URL(
-              `../../apps/web/prisma/migrations/${name}/migration.sql`,
+              `../../packages/db/prisma/migrations/${name}/migration.sql`,
               import.meta.url,
             ),
             "utf8",

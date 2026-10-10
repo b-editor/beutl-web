@@ -45,7 +45,7 @@ describeWithCockroach("publisher and native authorization identities on Cockroac
     vi.stubEnv("JWT_ISSUER", "");
     vi.stubEnv("JWT_AUDIENCE", "");
     migration = await readFile(new URL(
-      "../../apps/web/prisma/migrations/20260928010000_unique_profile_user_names/migration.sql",
+      "../../packages/db/prisma/migrations/20260928010000_unique_profile_user_names/migration.sql",
       import.meta.url,
     ), "utf8");
     await client.query(`CREATE TABLE "Profile" (

@@ -3,7 +3,7 @@
 # dependencies
 node_modules/
 # Scratch schemas left by an interrupted Prisma generation.
-/apps/web/prisma/.prisma-generate-*.prisma
+/packages/db/prisma/.prisma-generate-*.prisma
 /.pnp
 .pnp.js
 .yarn/install-state.gz

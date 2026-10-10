@@ -1,8 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
-const migration = readFile(new URL("../../apps/web/prisma/migrations/20261004000000_add_git_access_tokens/migration.sql", import.meta.url), "utf8");
-const schema = readFile(new URL("../../apps/web/prisma/schema.prisma", import.meta.url), "utf8");
+const migration = readFile(new URL("../../packages/db/prisma/migrations/20261004000000_add_git_access_tokens/migration.sql", import.meta.url), "utf8");
+const schema = readFile(new URL("../../packages/db/prisma/schema.prisma", import.meta.url), "utf8");
 
 describe("Git access token migration", () => {
   it("creates indexes and the repository key only while both tables are unlocked, then relocks them", async () => {

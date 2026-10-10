@@ -17,16 +17,16 @@ const require = createRequire(import.meta.url);
 const appRoot = resolve(import.meta.dirname, "..");
 
 // @prisma/client の package.json の実体パスを解決 (シンボリックリンクを辿る)
-// @prisma/client は apps/web の依存なので、apps/web からの require.resolve で実体を引く
-const webPkg = resolve(appRoot, "apps", "web", "package.json");
+// スキーマと Prisma CLI を所有する @beutl/db から実体を引く
+const dbRoot = resolve(appRoot, "packages", "db");
 const clientPkg = require.resolve("@prisma/client/package.json", {
-  paths: [dirname(webPkg)],
+  paths: [dbRoot],
 });
 const clientDir = dirname(clientPkg);
 // @prisma/client の親 node_modules の .prisma/client が生成先
 const prismaDir = join(clientDir, "..", "..", ".prisma", "client");
 
-const schemaPath = join(appRoot, "apps", "web", "prisma", "schema.prisma");
+const schemaPath = join(dbRoot, "prisma", "schema.prisma");
 const schema = await readFile(schemaPath, "utf8");
 
 const output = relative(dirname(schemaPath), prismaDir).replace(/\\/g, "/");
@@ -44,11 +44,11 @@ if (!replaced) throw new Error("Could not locate the Prisma Client output in sch
 const tmpSchemaPath = join(dirname(schemaPath), `.prisma-generate-${randomUUID()}.prisma`);
 await writeFile(tmpSchemaPath, tmpSchema, { flag: "wx" });
 try {
-  const prismaPkg = require.resolve("prisma/package.json", { paths: [dirname(webPkg)] });
+  const prismaPkg = require.resolve("prisma/package.json", { paths: [dbRoot] });
   const prismaMetadata = JSON.parse(await readFile(prismaPkg, "utf8"));
   const prismaCli = resolve(dirname(prismaPkg), prismaMetadata.bin.prisma);
   execFileSync(process.execPath, [prismaCli, "generate", "--schema", tmpSchemaPath], {
-    cwd: dirname(webPkg),
+    cwd: dbRoot,
     stdio: "inherit",
   });
 } finally {
