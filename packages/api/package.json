@@ -37,7 +37,7 @@
     "@prisma/client": "^7.10.0",
     "ai": "^7.0.137",
     "aws4fetch": "^1.0.20",
-    "country-to-currency": "^2.0.3",
+    "country-to-currency": "^3.0.1",
     "fast-xml-parser": "5.11.2",
     "git-fs-s3": "0.3.13",
     "hono": "^4.13.13",
