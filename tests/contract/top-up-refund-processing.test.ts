@@ -355,7 +355,7 @@ describe("durable top-up refund processing", () => {
       noRefundRequired: 1,
       errors: 0,
     });
-    expect(checkoutExpire).toHaveBeenCalledWith("cs_1", {
+    expect(checkoutExpire).toHaveBeenCalledWith("cs_1", {}, {
       idempotencyKey: "beutl:ai-top-up-expire:attempt-1",
     });
     expect(refundCreate).not.toHaveBeenCalled();

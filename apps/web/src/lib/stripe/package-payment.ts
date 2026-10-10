@@ -16,8 +16,8 @@ import { PACKAGE_PURCHASE_METADATA_VALUE } from "./store-checkout";
 import type Stripe from "stripe";
 
 type PackagePaymentStripeClient = {
-  customers: Pick<Stripe.CustomersResource, "retrieve">;
-  refunds: Pick<Stripe.RefundsResource, "create">;
+  customers: Pick<Stripe.CustomerResource, "retrieve">;
+  refunds: Pick<Stripe.RefundResource, "create">;
 };
 
 type PackagePaymentOwnerResolution =

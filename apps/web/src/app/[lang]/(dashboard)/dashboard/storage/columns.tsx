@@ -1,6 +1,6 @@
 "use client";
 
-import type { Column, ColumnDef, Row, Table } from "@tanstack/react-table";
+import type { StorageColumn, StorageColumnDef, StorageRow, StorageTable } from "./table";
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { Button } from "@beutl/ui/ui/button";
 import { Checkbox } from "@beutl/ui/ui/checkbox";
@@ -41,7 +41,7 @@ function ColumnHeader({
   lang,
   align = "left",
 }: {
-  column: Column<StorageFile, unknown>;
+  column: StorageColumn;
   labelKey: string;
   lang: string;
   align?: "left" | "right";
@@ -78,7 +78,7 @@ function SelectAllCheckbox({
   lang,
   visible,
 }: {
-  table: Table<StorageFile>;
+  table: StorageTable;
   lang: string;
   visible: boolean;
 }) {
@@ -100,7 +100,7 @@ function SelectRowCheckbox({
   lang,
   visible,
 }: {
-  row: Row<StorageFile>;
+  row: StorageRow;
   lang: string;
   visible: boolean;
 }) {
@@ -151,7 +151,7 @@ export function getColumns({
   handlers: FileListHandlers;
   showCheckboxes: boolean;
   locationOf: (file: StorageFile) => string;
-}): ColumnDef<StorageFile>[] {
+}): StorageColumnDef[] {
   return [
     {
       id: "select",
@@ -171,7 +171,7 @@ export function getColumns({
         <ColumnHeader column={column} labelKey="storage:fileName" lang={lang} />
       ),
       cell: ({ row }) => <NameCell file={row.original} lang={lang} />,
-      sortingFn: "alphanumeric",
+      sortFn: "alphanumeric",
       filterFn: "includesString",
     },
     {
@@ -180,12 +180,12 @@ export function getColumns({
       header: ({ column }) => (
         <ColumnHeader column={column} labelKey="storage:location" lang={lang} />
       ),
-      cell: ({ getValue }) => (
+      cell: ({ cell }) => (
         <span
           className="block truncate text-muted-foreground"
-          title={getValue<string>()}
+          title={cell.getValue<string>()}
         >
-          {getValue<string>()}
+          {cell.getValue<string>()}
         </span>
       ),
       enableSorting: false,
@@ -201,10 +201,10 @@ export function getColumns({
           align="right"
         />
       ),
-      cell: ({ getValue }) => (
-        <span className="tabular-nums">{formatBytes(getValue<number>())}</span>
+      cell: ({ cell }) => (
+        <span className="tabular-nums">{formatBytes(cell.getValue<number>())}</span>
       ),
-      sortingFn: "basic",
+      sortFn: "basic",
     },
     {
       id: "visibility",
@@ -236,7 +236,7 @@ export function getColumns({
           {formatDateTime(row.original.createdAt, lang)}
         </time>
       ),
-      sortingFn: "basic",
+      sortFn: "basic",
     },
     {
       // Never shown; exists so the "type" chip can filter through the table.

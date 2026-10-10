@@ -6,6 +6,7 @@ import {
   resumeSettledTopUpCheckoutInterventions,
 } from "@beutl/db";
 import Stripe from "stripe";
+import { createStripeClient } from "../stripe-client";
 
 const TOP_UP_DUPLICATE_REFUND_MAX_ATTEMPTS = 12;
 const RETRY_DELAY_MS = 5 * 60_000;
@@ -29,7 +30,7 @@ export async function reconcileTopUpDuplicateRefunds(
       interventionRequired: 0,
     };
   }
-  const stripe = stripeClient ?? new Stripe(secretKey!);
+  const stripe = stripeClient ?? createStripeClient(secretKey!);
   const leaseToken = crypto.randomUUID();
   const rows = await claimTopUpDuplicateRefundAttempts({
     now,

@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 import Stripe from "stripe";
+import { createStripeClient } from "@beutl/api/stripe-client";
 
 const TERMINAL_STATUSES = new Set(["canceled", "incomplete_expired"]);
 
@@ -52,7 +53,7 @@ async function main() {
 
   const adapter = new PrismaPg({ connectionString });
   const prisma = new PrismaClient({ adapter });
-  const stripe = new Stripe(stripeSecret, {
+  const stripe = createStripeClient(stripeSecret, {
     httpClient: Stripe.createFetchHttpClient(),
   });
 

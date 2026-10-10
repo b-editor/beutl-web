@@ -91,7 +91,7 @@ export async function listLegacyCompletePackageCheckoutSessions({ stripe, custom
 type StripeClientLike = {
   checkout: {
     sessions: {
-      list: Stripe.Checkout.SessionsResource["list"];
+      list: Stripe.Checkout.SessionResource["list"];
     };
   };
 };

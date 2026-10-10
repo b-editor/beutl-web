@@ -41,6 +41,7 @@ import { DEFAULT_MODEL_PROVIDER } from "@/lib/ai-operation-model-changes";
 import { AI_DEFAULT_OPERATION_MODELS } from "@beutl/core";
 import { revalidatePath } from "next/cache";
 import Stripe from "stripe";
+import { createStripeClient } from "@beutl/api/stripe-client";
 import { getUnusableImageModels, getUnusableVideoModels } from "./queries";
 
 function parsePackageRefundInterventionInput(input: unknown) {
@@ -273,7 +274,7 @@ export async function terminalizeOrphanTopUpResolution(
     let current: Awaited<ReturnType<typeof claimTopUpCheckoutResolutionOperatorLease>> = null;
     let releaseLease = true;
     try {
-      const stripe = new Stripe(secret);
+      const stripe = createStripeClient(secret);
       const now = new Date();
       current = await startRetryableTransaction(async (tx) =>
         await claimTopUpCheckoutResolutionOperatorLease({

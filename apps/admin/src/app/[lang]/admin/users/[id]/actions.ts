@@ -46,7 +46,7 @@ function subscriptionPlanLabel(planId: string): string {
   return { pro: "AI Pro", storage: "storage" }[planId] ?? planId;
 }
 import { revalidatePath } from "next/cache";
-import Stripe from "stripe";
+import { createStripeClient } from "@beutl/api/stripe-client";
 import { claimPackageCheckoutInterventionById, reschedulePackageCheckoutIntervention } from "@beutl/db";
 import { resolveLegacyPackageCheckoutMultiple } from "@beutl/api";
 
@@ -64,7 +64,7 @@ export async function resolvePackageCheckoutMultiple(input: unknown): Promise<Ac
     const secret = process.env.STRIPE_SECRET_KEY;
     if (!secret) return { success: false, message: "Stripe is not configured" };
     try {
-      const result = await resolveLegacyPackageCheckoutMultiple({ stripe: new Stripe(secret), attempt, discoveryToken, recoveryLeaseToken: leaseToken, operatorUserId: session.user.id, choice: choice === "all-refund" ? { kind: "all-refund" } : { kind: "choose", sessionId: choice } });
+      const result = await resolveLegacyPackageCheckoutMultiple({ stripe: createStripeClient(secret), attempt, discoveryToken, recoveryLeaseToken: leaseToken, operatorUserId: session.user.id, choice: choice === "all-refund" ? { kind: "all-refund" } : { kind: "choose", sessionId: choice } });
       try { await addAuditLog({ userId: session.user.id, action: auditLogActions.admin.packageCheckoutResolution, details: `attemptId: ${attempt.id}, discoveryToken: ${discoveryToken}, choice: ${choice}, refunds: ${result.refundCount}` }); } catch (error) { /* durable resolution operatorUserId remains authoritative */ console.error("Package checkout resolution audit log failed", error); }
       return { success: true, message: `Resolution scheduled (${result.refundCount} refunds)` };
     } catch (error) {

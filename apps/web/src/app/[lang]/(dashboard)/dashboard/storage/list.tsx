@@ -13,12 +13,10 @@ import {
 } from "./actions";
 import {
   type PaginationState,
-  type Row,
   type RowSelectionState,
   type SortingState,
   flexRender,
-  getCoreRowModel,
-  useReactTable,
+  useTable,
 } from "@tanstack/react-table";
 import {
   ArrowDown,
@@ -114,6 +112,7 @@ import {
 } from "@/lib/storage-upload";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import type { StorageFile, StorageFolder } from "./types";
+import { storageTableFeatures, type StorageRow } from "./table";
 import { COLUMN_CLASS, getColumns } from "./columns";
 import { contentUrl, FILE_KINDS, isDedicated, RAW } from "./file-kind";
 import { FilePreviewDialog, type PreviewFile } from "@/components/dashboard/file-preview";
@@ -877,7 +876,8 @@ export function List({
   );
   // Sorting, filtering, and paging happen on the server; the table only
   // renders the page it was given and reports the user's wishes to the URL.
-  const table = useReactTable({
+  const table = useTable({
+    features: storageTableFeatures,
     data: tableData,
     columns,
     getRowId: (file) => file.id,
@@ -889,7 +889,6 @@ export function List({
     onSortingChange: setSorting,
     onPaginationChange: setPagination,
     onRowSelectionChange: setRowSelection,
-    getCoreRowModel: getCoreRowModel(),
     state: {
       sorting,
       pagination: { pageIndex: page - 1, pageSize: PAGE_SIZE },
@@ -924,7 +923,7 @@ export function List({
   // ---- selection by pointer and keyboard ---------------------------------
   // The last row clicked without shift; shift-click selects from here.
   const anchorRef = useRef<string | null>(null);
-  const selectByPointer = (event: MouseEvent, row: Row<StorageFile>) => {
+  const selectByPointer = (event: MouseEvent, row: StorageRow) => {
     const additive = event.metaKey || event.ctrlKey;
     if (event.shiftKey && anchorRef.current !== null) {
       const start = fileRows.findIndex((r) => r.id === anchorRef.current);
@@ -1030,7 +1029,7 @@ export function List({
     "data-drop-active": dropTargetId === dropKey(targetId) ? "true" : undefined,
   });
 
-  const fileItemProps = (row: Row<StorageFile>): ItemProps => ({
+  const fileItemProps = (row: StorageRow): ItemProps => ({
     tabIndex: 0,
     "aria-selected": row.getIsSelected(),
     draggable: true,

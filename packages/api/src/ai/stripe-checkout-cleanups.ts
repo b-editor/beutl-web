@@ -1,4 +1,5 @@
 import Stripe from "stripe";
+import { createStripeClient } from "../stripe-client";
 import {
   allowsStripePromotionCodes,
   isStripeInvalidRequestError,
@@ -299,7 +300,7 @@ export async function reconcileStripeCheckoutCleanups(
   stripeClient?: Pick<Stripe, "checkout" | "paymentIntents" | "invoicePayments" | "subscriptions" | "refunds">,
 ) {
   if (!stripeClient && !secretKey) return { inspected: 0, completed: 0, pending: 0, interventionRequired: 0, detachedInspected: 0, detachedRecovered: 0, detachedPending: 0, detachedIntervention: 0 };
-  const stripe = stripeClient ?? new Stripe(secretKey!);
+  const stripe = stripeClient ?? createStripeClient(secretKey!);
   const recoveryLeaseToken = crypto.randomUUID();
   const detached = await claimDetachedPackageCheckoutAttempt({
     now,

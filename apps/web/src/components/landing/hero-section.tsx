@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Github } from "lucide-react";
+import { GitHubLogo } from "@beutl/ui/logo";
 import { cn } from "@beutl/core";
 import DownloadCta, { type DownloadCtaProps } from "./download-cta";
 import { Eyebrow, LP_BUTTON_GHOST, LP_WRAP } from "./lp-parts";
@@ -38,7 +38,7 @@ export default function HeroSection({
           </p>
           <DownloadCta {...cta} className="mt-6">
             <Link href={githubHref} className={LP_BUTTON_GHOST}>
-              <Github aria-hidden="true" />
+              <GitHubLogo className="size-4" fill="currentColor" aria-hidden="true" />
               {texts.github}
             </Link>
           </DownloadCta>
