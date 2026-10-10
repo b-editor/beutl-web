@@ -46,4 +46,19 @@ describe("streamed NuGet packages", () => {
     expect(built.file.size).toBe(archive.byteLength);
     expect(built.file.sha256).toBe(createHash("sha256").update(archive).digest("hex"));
   });
+
+  it("reports invalid NuGet metadata as an input error", async () => {
+    await expect(buildDataPackageNupkgFile({
+      files: [new File(["material"], "a.png")], ...metadata, id: "invalid/id",
+      username: metadata.authors, t: ((key: string) => key) as never,
+    })).resolves.toEqual({ ok: false, message: "developer:upload.invalidFileName" });
+  });
+
+  it("propagates material read failures instead of reporting invalid file names", async () => {
+    const failure = new Error("Material source could not be read"), file = new File(["material"], "a.png");
+    vi.spyOn(file, "slice").mockImplementation(() => { throw failure; });
+    await expect(buildDataPackageNupkgFile({
+      files: [file], ...metadata, username: metadata.authors, t: ((key: string) => key) as never,
+    })).rejects.toBe(failure);
+  });
 });

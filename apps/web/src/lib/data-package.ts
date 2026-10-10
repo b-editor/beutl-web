@@ -146,17 +146,20 @@ export async function buildDataPackageNupkgFile({
   // Subsequent passes reuse immutable inputs and deterministic ZIP metadata.
   let size = 0;
   const hash = createHash("sha256");
+  let archive: ReadableStream<Uint8Array>;
   try {
-    const reader = stream().getReader();
-    try {
-      for (;;) {
-        const next = await reader.read(); if (next.done) break;
-        size += next.value.byteLength; hash.update(next.value);
-      }
-    } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
+    archive = stream();
   } catch {
+    // NuGet metadata and entry-path validation failures are reported as invalid input.
     return { ok: false, message: t("developer:upload.invalidFileName") };
   }
+  const reader = archive.getReader();
+  try {
+    for (;;) {
+      const next = await reader.read(); if (next.done) break;
+      size += next.value.byteLength; hash.update(next.value);
+    }
+  } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
   return { ok: true, file: {
     name: `${id}.${version}.nupkg`, type: "application/octet-stream", size, stream, sha256: hash.digest("hex"),
   }, tags };

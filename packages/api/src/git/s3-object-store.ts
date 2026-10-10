@@ -3,6 +3,7 @@ import { XMLParser } from "fast-xml-parser";
 import { createHash } from "node:crypto";
 import type { GitMultipartUpload, GitObjectBucket } from "./git-object-store";
 import { s3BucketOptionsFromEnv } from "../storage/bucket-from-env";
+import { knownLengthStream } from "./streams";
 
 export interface GitS3Environment {
   BEUTL_S3_ENDPOINT?: string;
@@ -154,7 +155,7 @@ export class S3GitObjectBucket implements GitObjectBucket {
   }
 
   async putStream(key: string, body: ReadableStream<Uint8Array>, length: number) {
-    await this.send("PUT", this.url(key), body, {
+    await this.send("PUT", this.url(key), knownLengthStream(body, length), {
       "Content-Type": "application/octet-stream", "Content-Length": String(length),
       "X-Amz-Content-Sha256": "UNSIGNED-PAYLOAD",
     });

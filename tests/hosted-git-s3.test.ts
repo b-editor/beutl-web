@@ -118,7 +118,8 @@ describe("Backblaze B2 S3 storage adapter", () => {
     expect(requests).toBe(1);
   });
 
-  it.each([4, 3, 5])("uses a fixed-length Worker stream and enforces the declared %i-byte part", async (length) => {
+  it.each(["part", "pack"].flatMap(kind => [4, 3, 5].map(length => ({ kind, length }))))(
+    "uses a fixed-length Worker stream and enforces the declared $length-byte $kind", async ({ kind, length }) => {
     const lengths: number[] = [];
     class FixedLength extends TransformStream<Uint8Array, Uint8Array> {
       constructor(expected: number) {
@@ -145,8 +146,10 @@ describe("Backblaze B2 S3 storage adapter", () => {
       const body = new ReadableStream<Uint8Array>({ start(controller) {
         controller.enqueue(new TextEncoder().encode("data")); controller.close();
       } });
-      const upload = bucket.resumeMultipartUpload("git-lfs/item", "upload").uploadPart(1, body, length);
-      if (length === 4) await expect(upload).resolves.toEqual({ partNumber: 1, etag: "part-etag" });
+      const upload = kind === "part"
+        ? bucket.resumeMultipartUpload("git-lfs/item", "upload").uploadPart(1, body, length)
+        : bucket.putStream("git/repos/item/repo.git/objects/pack/pack-1.pack", body, length);
+      if (length === 4) await expect(upload).resolves.toEqual(kind === "part" ? { partNumber: 1, etag: "part-etag" } : undefined);
       else await expect(upload).rejects.toThrow(length < 4 ? "too many bytes" : "too few bytes");
       expect(lengths).toEqual([length]);
     } finally { vi.unstubAllGlobals(); }
