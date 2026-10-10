@@ -35,9 +35,8 @@ export async function browseRefs({ store, prefix, repo }: Repository): Promise<G
  * The commit a revision names; annotated tags are peeled. A short name means
  * a branch before a tag; `refs/tags/…` and `refs/heads/…` name one exactly.
  */
-async function resolveCommit(repository: Repository, revision: string): Promise<string> {
+async function resolveCommit(repository: Repository, revision: string, reader: GitObjectReader): Promise<string> {
   const { store, prefix, repo } = repository;
-  const reader = new GitObjectReader(repository);
   let oid = /^[0-9a-f]{40}$/u.test(revision) ? revision : undefined;
   if (!oid) {
     const refs = await readRefs(store, `${prefix}${repo.gitdir}/`);
@@ -89,7 +88,7 @@ async function describeEntry(blobs: GitObjectReader,
 export async function browsePath(repository: Repository, revision: string, path: string,
   blobs = new GitObjectReader(repository)): Promise<GitPathView> {
   const { repo } = repository;
-  const commit = await resolveCommit(repository, revision);
+  const commit = await resolveCommit(repository, revision, blobs);
   let tree = (await git.readCommit({ ...repo, oid: commit })).commit.tree;
   const segments = path === "" ? [] : path.split("/");
   for (const [index, segment] of segments.entries()) {
@@ -115,7 +114,7 @@ export async function browseLog(repository: Repository, revision: string, cursor
   Promise<GitCommitPage> {
   const { repo } = repository;
   const reader = new GitObjectReader(repository);
-  let oid: string | undefined = cursor ?? await resolveCommit(repository, revision);
+  let oid: string | undefined = cursor ?? await resolveCommit(repository, revision, reader);
   const commits: GitCommitSummary[] = [];
   while (oid && commits.length < limit) {
     if ((await reader.info(oid))?.type !== "commit") throw new GitBrowseNotFoundError(`No commit ${oid}`);

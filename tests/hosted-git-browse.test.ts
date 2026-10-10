@@ -9,6 +9,9 @@ import { createServer, type Server } from "node:http";
 import { Readable } from "node:stream";
 import isomorphicGit from "../packages/api/node_modules/isomorphic-git/index.js";
 import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable-object";
+import { browsePath } from "../packages/api/src/git/browse";
+import { readGitRepository } from "../packages/api/src/git/git-http";
+import { GitObjectReader } from "../packages/api/src/git/object-reader";
 import { lfsKey, type LfsRecord } from "../packages/api/src/git/lfs";
 import {
   listRepositoryCommits,
@@ -164,6 +167,15 @@ describe("browsing a hosted repository", () => {
       const blobs = new Set(view.entries.map((entry) => entry.oid));
       expect(read.mock.calls.filter(([options]) => blobs.has(options.oid))).toEqual([]);
     } finally { read.mockRestore(); }
+  });
+
+  it("shares the supplied object reader between revision resolution and file metadata", async () => {
+    const repository = readGitRepository(bucket as never, repoId);
+    await repository.fs.detectLooseObjects(repository.repo.gitdir);
+    const reader = new GitObjectReader(repository), info = vi.spyOn(reader, "info");
+    const view = await browsePath(repository, "main", "large", reader);
+    expect(view.kind).toBe("tree");
+    expect(info).toHaveBeenCalledWith(commits.third);
   });
 
   it("returns HEAD and small ranges for ordinary files without buffering the complete body", async () => {
