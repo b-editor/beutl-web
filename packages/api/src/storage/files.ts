@@ -1,4 +1,6 @@
 import type { PrismaTransaction } from "@beutl/db";
+import { createHash } from "node:crypto";
+import { blobStream } from "@beutl/core";
 import {
   commitDedicatedStorageReservation,
   createDedicatedStorageReservation,
@@ -25,12 +27,55 @@ import { getR2Bucket } from "../ai/r2-provider";
 import { readAiOutputBytes } from "../ai/storage";
 import { sha256Hex } from "../ai/request-integrity";
 
+export type StorageUploadFile = Pick<File, "name" | "type" | "size"> & {
+  stream(): ReadableStream<Uint8Array>;
+  slice?: Blob["slice"];
+  sha256?: string;
+};
 export type StorageWriteSource = {
   name: string;
   mimeType: string;
   size: number;
-  bytes: () => Promise<ArrayBuffer>;
-};
+  sha256?: string;
+} & ({ stream: () => ReadableStream<Uint8Array> | Promise<ReadableStream<Uint8Array>>; bytes?: () => Promise<ArrayBuffer> }
+  | { bytes: () => Promise<ArrayBuffer>; stream?: () => ReadableStream<Uint8Array> | Promise<ReadableStream<Uint8Array>> });
+
+async function sourceHash(source: StorageWriteSource, bytes?: ArrayBuffer): Promise<string> {
+  if (source.sha256) {
+    if (!/^[0-9a-f]{64}$/u.test(source.sha256)) throw new Error("Invalid storage source checksum");
+    return source.sha256;
+  }
+  if (!source.stream) return createHash("sha256").update(new Uint8Array(bytes ?? await source.bytes!())).digest("hex");
+  const reader = (await source.stream()).getReader(), hash = createHash("sha256");
+  let length = 0;
+  try {
+    for (;;) {
+      const next = await reader.read(); if (next.done) break;
+      length += next.value.byteLength;
+      if (length > source.size) throw new Error("Storage source exceeds its declared size");
+      hash.update(next.value);
+    }
+    if (length !== source.size) throw new Error("Storage source is shorter than its declared size");
+    return hash.digest("hex");
+  } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
+}
+
+async function sourceBody(source: StorageWriteSource): Promise<ArrayBuffer | ReadableStream<Uint8Array>> {
+  if (!source.stream) return source.bytes!();
+  let length = 0;
+  const counted = (await source.stream()).pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      length += chunk.byteLength;
+      if (length > source.size) throw new Error("Storage source exceeds its declared size");
+      controller.enqueue(chunk);
+    },
+    flush() { if (length !== source.size) throw new Error("Storage source is shorter than its declared size"); },
+  }));
+  const Fixed = (globalThis as unknown as {
+    FixedLengthStream?: new (length: number) => ReadableWritablePair<Uint8Array, Uint8Array>;
+  }).FixedLengthStream;
+  return Fixed ? counted.pipeThrough(new Fixed(source.size)) : counted;
+}
 
 export type AiResultStorageCopyOutcome =
   | { kind: "created"; record: { id: string; name: string; folderId: string | null } }
@@ -214,12 +259,13 @@ export function createStorageOperations(execution?: { waitUntil?(task: Promise<u
   /** What a reserved storage write stores: the bytes are asked for only after
    * the quota has been reserved, so a refused write never reads them. */
 
-  function sourceOfFile(file: File): StorageWriteSource {
+  function sourceOfFile(file: StorageUploadFile): StorageWriteSource {
     return {
       name: file.name,
       mimeType: file.type,
       size: file.size,
-      bytes: () => file.arrayBuffer(),
+      stream: () => file.slice ? blobStream({ size: file.size, slice: file.slice.bind(file) }) : file.stream(),
+      sha256: file.sha256,
     };
   }
 
@@ -235,7 +281,7 @@ export function createStorageOperations(execution?: { waitUntil?(task: Promise<u
     quota,
     publish,
   }: {
-    file: File;
+    file: StorageUploadFile;
     userId: string;
     quota?: { quotaBytes: bigint; fileCountLimit: number };
     publish?: (
@@ -329,7 +375,17 @@ export function createStorageOperations(execution?: { waitUntil?(task: Promise<u
         name: result.name,
         mimeType: result.mimeType,
         size,
-        bytes: () => readAiOutputBytes({ objectKey: result.objectKey, maximumBytes: size }),
+        async stream() {
+          const bucket = getR2Bucket();
+          const object = await bucket.get?.(result.objectKey);
+          if (!object) throw new Error("AI result source was not found");
+          if (object.size !== undefined && object.size !== size) {
+            await object.body?.cancel(); throw new Error("AI result source size changed");
+          }
+          if (object.body) return object.body;
+          const bytes = await readAiOutputBytes({ objectKey: result.objectKey, maximumBytes: size });
+          return new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(bytes)); controller.close(); } });
+        },
       },
       userId,
       visibility: "PRIVATE",
@@ -397,38 +453,18 @@ export function createStorageOperations(execution?: { waitUntil?(task: Promise<u
     if (!leaseToken || !leaseUntil) {
       throw new Error("Dedicated storage reservation did not publish a write lease");
     }
-    let array: ArrayBuffer;
+    let hashHex: string, bytes: ArrayBuffer | undefined;
     try {
-      array = await source.bytes();
+      if (!source.stream) bytes = await source.bytes!();
+      hashHex = await sourceHash(source, bytes);
     } catch (error) {
       await releaseDedicatedStorageReservation({
-        id: reservation.reservation.id,
-        userId,
-        objectKey,
-        leaseToken,
-        expectedLeaseUntil: leaseUntil,
-        now: new Date(),
+        id: reservation.reservation.id, userId, objectKey, leaseToken,
+        expectedLeaseUntil: leaseUntil, now: new Date(),
       }).catch((releaseError) => console.error("Failed to release a dedicated storage reservation", reservation.reservation.id, releaseError));
       throw error;
     }
     const bucket = getR2Bucket();
-    let hashHex: string;
-    try {
-      const hashBuffer = await crypto.subtle.digest("SHA-256", array);
-      hashHex = Array.from(new Uint8Array(hashBuffer))
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("");
-    } catch (error) {
-      await releaseDedicatedStorageReservation({
-        id: reservation.reservation.id,
-        userId,
-        objectKey,
-        leaseToken,
-        expectedLeaseUntil: leaseUntil,
-        now: new Date(),
-      }).catch((releaseError) => console.error("Failed to release a dedicated storage reservation", reservation.reservation.id, releaseError));
-      throw error;
-    }
     let putSucceeded = false;
     let providerOutcomeUnknown = false;
     try {
@@ -454,7 +490,8 @@ export function createStorageOperations(execution?: { waitUntil?(task: Promise<u
       // therefore never reaches R2, and a crash after put leaves both the row and
       // its cleanup outbox durable for reconciliation.
       const providerPut = Promise.resolve()
-        .then(() => bucket.put(objectKey, array))
+        .then(async () => bucket.put(objectKey, bytes ?? await sourceBody(source),
+          source.stream ? { contentLength: source.size } : undefined))
         .then(
           () => ({ kind: "stored" as const }),
           (error: unknown) => ({ kind: "failed" as const, error }),

@@ -4,6 +4,7 @@ import { getUserIdFromPackageId } from "@beutl/db";
 import type { updateRelease as updateReleaseRecord } from "@beutl/db";
 import { isValidNuGetVersionRange } from "@beutl/core";
 import { createDedicatedStorageFile } from "@/lib/storage";
+import type { StorageUploadFile } from "@/lib/storage";
 import type { PrismaTransaction } from "@beutl/db";
 import type { Translator } from "@beutl/i18n";
 import SemVer from "semver";
@@ -74,7 +75,7 @@ async function sameUser<TResult>(
 
 async function createDedicatedFile(
   userId: string,
-  file: File,
+  file: StorageUploadFile,
   t: Translator,
   publish?: (tx: PrismaTransaction, record: { id: string; objectKey: string; size: bigint }) => Promise<void>,
 ) {

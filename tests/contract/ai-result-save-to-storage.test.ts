@@ -82,8 +82,8 @@ describe("keeping an AI result in storage", () => {
     memory = createInMemoryPrisma();
     objects = new Map();
     bucket = {
-      put: vi.fn(async (key: string, value: ArrayBuffer) => {
-        objects.set(key, new Uint8Array(value));
+      put: vi.fn(async (key: string, value: ArrayBuffer | ReadableStream<Uint8Array>) => {
+        objects.set(key, new Uint8Array(value instanceof ReadableStream ? await new Response(value).arrayBuffer() : value));
       }),
       get: vi.fn(async (key: string) => {
         const bytes = objects.get(key);

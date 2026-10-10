@@ -1,6 +1,4 @@
 import {
-  byteRangeHeaders,
-  parseByteRange,
   type GitCommitPage,
   type GitPathView,
   type GitRefList,
@@ -51,8 +49,11 @@ export async function readRepositoryFile(
   bucket: GitObjectBucket = new S3GitObjectBucket(env),
 ): Promise<{ entry: GitTreeEntry; response: Response } | null> {
   const repository = gitRepositoryObject(env, access.repoId);
-  const file = await repository.browse(access, "file", { ref, path });
-  if (!file.ok) {
+  const range = request.headers.get("range");
+  const file = await repository.browse(access, "file", { ref, path }, {
+    method: request.method === "HEAD" ? "HEAD" : "GET", headers: range ? { Range: range } : undefined,
+  });
+  if (!file.ok && file.status !== 416) {
     await file.body?.cancel();
     if (file.status === 404) return null;
     throw new Error(`Git file request returned HTTP ${file.status}`);
@@ -63,20 +64,5 @@ export async function readRepositoryFile(
     const response = await downloadLfsObject(request, { bucket, repository, access, oid: entry.lfs.oid });
     return { entry, response };
   }
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const range = parseByteRange(request.headers.get("range"), bytes.byteLength);
-  if (range === "unsatisfiable") {
-    return { entry, response: new Response(null, { status: 416, headers: byteRangeHeaders(null, bytes.byteLength) }) };
-  }
-  const body = range ? bytes.subarray(range.start, range.end + 1) : bytes;
-  return {
-    entry,
-    response: new Response(request.method === "HEAD" ? null : body as Uint8Array<ArrayBuffer>, {
-      status: range ? 206 : 200,
-      headers: {
-        "Accept-Ranges": "bytes",
-        ...(range ? byteRangeHeaders(range, bytes.byteLength) : { "Content-Length": String(bytes.byteLength) }),
-      },
-    }),
-  };
+  return { entry, response: file };
 }

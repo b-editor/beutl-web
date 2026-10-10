@@ -153,6 +153,13 @@ export class S3GitObjectBucket implements GitObjectBucket {
     });
   }
 
+  async putStream(key: string, body: ReadableStream<Uint8Array>, length: number) {
+    await this.send("PUT", this.url(key), body, {
+      "Content-Type": "application/octet-stream", "Content-Length": String(length),
+      "X-Amz-Content-Sha256": "UNSIGNED-PAYLOAD",
+    });
+  }
+
   async list({ prefix, delimiter, cursor, limit }: {
     prefix: string; delimiter?: string; cursor?: string; limit: number;
   }) {

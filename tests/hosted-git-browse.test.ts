@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { createServer, type Server } from "node:http";
 import { Readable } from "node:stream";
+import isomorphicGit from "../packages/api/node_modules/isomorphic-git/index.js";
 import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable-object";
 import { lfsKey, type LfsRecord } from "../packages/api/src/git/lfs";
 import {
@@ -24,6 +25,8 @@ const pointer = `version https://git-lfs.github.com/spec/v1\noid sha256:${media.
 const still = randomBytes(300);
 // Text that quotes a pointer without the version line is not one.
 const quoted = `see oid sha256:${media.oid}\nsize ${media.size}\n`;
+const largeFiles = Object.fromEntries(Array.from({ length: 8 }, (_, i) =>
+  [`large/file-${i}.bin`, Buffer.alloc(256 * 1024, i)]));
 
 class Bucket {
   objects = new Map<string, Uint8Array>();
@@ -110,7 +113,7 @@ beforeAll(async () => {
   commits.first = await commit({ "README.md": "# Project\n" }, "first");
   await git("tag", "-a", "v1", "-m", "release");
   commits.second = await commit({ "assets/clip.mp4": pointer, "assets/still.png": still, "project/Project.bep": "{}\n",
-    "project/notes.txt": quoted }, "add media\n\nbody");
+    "project/notes.txt": quoted, ...largeFiles }, "add media\n\nbody");
   commits.third = await commit({ "README.md": "# Project\n\nUpdated\n" }, "update readme");
   await git("switch", "-q", "-c", "feature");
   commits.feature = await commit({ "notes.txt": "feature\n" }, "feature");
@@ -140,13 +143,40 @@ describe("browsing a hosted repository", () => {
     const top = await readRepositoryPath(env, access, "main", "");
     expect(top).toMatchObject({ kind: "tree", commit: commits.third, path: "" });
     expect(top?.kind === "tree" && top.entries.map((entry) => [entry.name, entry.type])).toEqual([
-      ["assets", "tree"], ["project", "tree"], ["README.md", "blob"],
+      ["assets", "tree"], ["large", "tree"], ["project", "tree"], ["README.md", "blob"],
     ]);
     const assets = await readRepositoryPath(env, access, "main", "assets");
     expect(assets?.kind === "tree" && assets.entries).toEqual([
       { name: "clip.mp4", path: "assets/clip.mp4", type: "blob", oid: expect.any(String), size: pointer.length, lfs: media },
       { name: "still.png", path: "assets/still.png", type: "blob", oid: expect.any(String), size: still.length },
     ]);
+  });
+
+  it("lists pushed files by metadata without inflating their contents", async () => {
+    const read = vi.spyOn(isomorphicGit, "readObject");
+    try {
+      const view = await readRepositoryPath(env, access, "main", "large");
+      expect(view?.kind).toBe("tree");
+      if (view?.kind !== "tree") throw new Error("Missing large-file directory");
+      expect(view.entries.map((entry) => [entry.name, entry.size])).toEqual(
+        Object.entries(largeFiles).map(([name, bytes]) => [name.slice("large/".length), bytes.byteLength]),
+      );
+      const blobs = new Set(view.entries.map((entry) => entry.oid));
+      expect(read.mock.calls.filter(([options]) => blobs.has(options.oid))).toEqual([]);
+    } finally { read.mockRestore(); }
+  });
+
+  it("returns HEAD and small ranges for ordinary files without buffering the complete body", async () => {
+    const file = (method: string, range?: string) => readRepositoryFile(env, access,
+      new Request("http://dashboard.test/content", { method, headers: range ? { Range: range } : undefined }),
+      "main", "large/file-1.bin", bucket as never);
+    const head = await file("HEAD");
+    expect(head?.response.body).toBeNull();
+    expect(head?.response.headers.get("content-length")).toBe(String(256 * 1024));
+    const range = await file("GET", "bytes=0-0");
+    expect(range?.response.status).toBe(206);
+    expect(range?.response.headers.get("content-length")).toBe("1");
+    expect(new Uint8Array(await range!.response.arrayBuffer())).toEqual(new Uint8Array([1]));
   });
 
   it("names one file, follows annotated tags and commit IDs, and reports what does not exist", async () => {
