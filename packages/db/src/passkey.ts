@@ -58,6 +58,7 @@ export async function getPasskeysByUserId({
       id: true,
       credentialID: true,
       name: true,
+      aaguid: true,
       deviceType: true,
       backedUp: true,
       createdAt: true,

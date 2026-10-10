@@ -1,3 +1,4 @@
+import { getAuthenticatorName } from "@better-auth/passkey";
 import { Form, List, PasskeysList } from "./components";
 import { authOrSignIn } from "@/lib/auth-guard";
 import * as jose from "jose";
@@ -75,7 +76,7 @@ export default async function Page(
     id: passkey.credentialID,
     deviceType: passkey.deviceType as "singleDevice" | "multiDevice",
     backedUp: passkey.backedUp,
-    name: passkey.name ?? "Unnamed",
+    name: passkey.name || getAuthenticatorName(passkey.aaguid) || "Unnamed",
     createdAt: passkey.createdAt,
     usedAt: passkey.usedAt ?? passkey.createdAt,
   })) as ComponentProps<typeof PasskeysList>["authenticators"];
