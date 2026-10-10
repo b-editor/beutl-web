@@ -3,6 +3,12 @@ import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
 
 vi.mock("server-only", () => ({}));
+vi.mock("@/prisma", () => ({
+  withOwnPrismaClient: async (work: (prisma: unknown) => Promise<unknown>) => {
+    const { getDb } = await import("@beutl/db");
+    return work(await getDb());
+  },
+}));
 const getContext = vi.hoisted(() => vi.fn());
 
 let createStorageFile: typeof import("../../apps/web/src/lib/storage").createStorageFile;

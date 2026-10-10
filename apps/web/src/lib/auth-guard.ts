@@ -39,8 +39,8 @@ export async function authenticated<TResult>(
   fnc: (session: SafeSession) => Promise<TResult>,
 ) {
   // Authentication, the mutation and its audit/storage helpers otherwise each
-  // create a Prisma client outside a React render. Keep the provider's after()
-  // cleanup so pending storage work is not disconnected when the action returns.
+  // create a Prisma client outside a React render. Response cleanup still owns
+  // this client; storage callbacks that run later acquire an independent client.
   return await runWithSharedDb(async () => {
     const result = await getSession();
     if (!result?.user?.id) {
