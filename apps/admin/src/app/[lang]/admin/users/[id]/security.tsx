@@ -1,3 +1,4 @@
+import { getAuthenticatorName } from "@better-auth/passkey";
 import { getUserSecurityOverview, USER_SECURITY_RELATION_LIMIT } from "@beutl/db";
 import { getTranslation } from "@beutl/i18n";
 import { Badge } from "@beutl/ui/ui/badge";
@@ -81,7 +82,7 @@ export async function SecuritySection({
             <TableBody>
               {passkeys.map((passkey) => (
                 <TableRow key={passkey.id}>
-                  <TableCell>{passkey.name || "-"}</TableCell>
+                  <TableCell>{passkey.name || getAuthenticatorName(passkey.aaguid) || "-"}</TableCell>
                   <TableCell className="text-xs">
                     {passkey.deviceType}
                     {passkey.backedUp ? ` (${t("admin:users.security.backedUp")})` : ""}
