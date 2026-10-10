@@ -129,15 +129,16 @@ model Account {
 }
 
 model Session {
-  id        String   @id @default(uuid())
-  token     String   @unique(map: "Session_sessionToken_key")
-  userId    String
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  ipAddress String?
-  userAgent String?
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                String              @id @default(uuid())
+  token             String              @unique(map: "Session_sessionToken_key")
+  userId            String
+  expiresAt         DateTime
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  ipAddress         String?
+  userAgent         String?
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emailChangeTokens ConfirmationToken[]
 }
 
 model RefreshTokenFamily {
@@ -196,14 +197,26 @@ model Passkey {
 }
 
 model ConfirmationToken {
-  userId     String
-  identifier String
-  token      String
-  expires    DateTime
-  purpose    ConfirmationTokenPurpose
-  user       User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  identifier  String
+  token       String
+  expires     DateTime
+  purpose     ConfirmationTokenPurpose
+  sessionId   String?
+  sourceEmail String?
+  user        User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session     Session?                 @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@id([identifier, token])
+  @@index([sessionId])
+}
+
+model AuthEmailRateLimit {
+  key       String   @id
+  count     Int
+  expiresAt DateTime
+
+  @@index([expiresAt])
 }
 
 model Profile {
@@ -1168,6 +1181,7 @@ enum FeedbackStatus {
 
 enum ConfirmationTokenPurpose {
   EMAIL_UPDATE
+  EMAIL_UPDATE_APPROVAL
   ACCOUNT_DELETE
 }
 

@@ -36,7 +36,8 @@ describeWithCockroach("Storage quota serializable concurrency (set TEST_DATABASE
         "image" STRING,
         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp(),
         "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp(),
-        "emailVerified" BOOL DEFAULT false
+        "emailVerified" BOOL DEFAULT false,
+        "storageRevision" INT4 NOT NULL DEFAULT 0
       )
     `);
     await prisma.$executeRawUnsafe(`
@@ -52,6 +53,9 @@ describeWithCockroach("Storage quota serializable concurrency (set TEST_DATABASE
         "reservationKind" STRING NOT NULL DEFAULT 'multipart',
         "userId" STRING NOT NULL,
         "sha256" STRING,
+        "folderId" STRING,
+        "storageMoveLeaseToken" STRING,
+        "storageMoveLeaseUntil" TIMESTAMP(3),
         "visibility" "FileVisibility" NOT NULL,
         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp(),
         "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp()
@@ -78,6 +82,7 @@ describeWithCockroach("Storage quota serializable concurrency (set TEST_DATABASE
         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp(),
         "completedFileId" STRING UNIQUE,
         "abandonedAt" TIMESTAMP(3),
+        "lastActivityAt" TIMESTAMP(3),
         "startState" STRING NOT NULL DEFAULT 'active',
         "creationLeaseUntil" TIMESTAMP(3),
         "creationLeaseToken" STRING,
@@ -104,6 +109,38 @@ describeWithCockroach("Storage quota serializable concurrency (set TEST_DATABASE
         "notBefore" TIMESTAMP(3) NOT NULL,
         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp(),
         "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp()
+      )
+    `);
+    // File admission shares the account meter with current Git and LFS bytes.
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE "GitRepository" (
+        "id" STRING PRIMARY KEY, "ownerId" STRING,
+        "historyBytes" INT8 NOT NULL DEFAULT 0, "historyReservedBytes" INT8 NOT NULL DEFAULT 0
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE "GitLfsStorage" (
+        "repoId" STRING, "oid" STRING, "ownerId" STRING,
+        "size" INT8 NOT NULL, "verified" BOOL NOT NULL,
+        PRIMARY KEY ("repoId", "oid")
+      )
+    `);
+    // Committing a write re-reads the account's current storage entitlement.
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE "Subscription" (
+        "userId" STRING, "planId" STRING, "stripeSubscriptionId" STRING,
+        "status" STRING, "tier" STRING, "currentPeriodStart" TIMESTAMP(3), "currentPeriodEnd" TIMESTAMP(3),
+        "cancelAtPeriodEnd" BOOL DEFAULT false, "cancelAt" TIMESTAMP(3),
+        "stripeEventId" STRING, "stripeEventCreatedAt" TIMESTAMP(3), "stripeCanonicalObservedAt" TIMESTAMP(3),
+        "stripeObservationRank" STRING, "billingOfferId" STRING,
+        "createdAt" TIMESTAMP(3), "updatedAt" TIMESTAMP(3), PRIMARY KEY ("userId", "planId")
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE "SubscriptionGrant" (
+        "id" STRING PRIMARY KEY, "userId" STRING, "planId" STRING, "tier" STRING,
+        "startsAt" TIMESTAMP(3), "endsAt" TIMESTAMP(3), "reason" STRING, "grantedByUserId" STRING,
+        "revokedAt" TIMESTAMP(3), "revokedByUserId" STRING, "createdAt" TIMESTAMP(3), "updatedAt" TIMESTAMP(3)
       )
     `);
     setDbProvider(async () => prisma);

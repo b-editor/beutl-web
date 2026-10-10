@@ -1,4 +1,5 @@
 export * from "./provider";
+export * from "./auth-email-rate-limit";
 export * from "./transaction";
 export * from "./account-deletion";
 export * from "./account-deletion-subscription-checkout";

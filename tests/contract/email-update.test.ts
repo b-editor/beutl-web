@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   updateCustomerEmailIfExist: vi.fn(),
   updateUserEmail: vi.fn(),
   validateConfirmationToken: vi.fn(),
+  getAuthoritativeSession: vi.fn(),
 }));
 
 vi.mock("next/headers", () => ({ headers: vi.fn() }));
@@ -28,7 +29,7 @@ vi.mock("@beutl/email", () => ({
   sendEmail: vi.fn(),
   emailButton: vi.fn(() => ""),
 }));
-vi.mock("@/lib/auth-guard", () => ({ authenticated: vi.fn() }));
+vi.mock("@/lib/auth-guard", () => ({ authenticated: vi.fn(), getAuthoritativeSession: mocks.getAuthoritativeSession }));
 vi.mock("@beutl/i18n", () => ({ getTranslation: vi.fn() }));
 vi.mock("@beutl/next/language", () => ({ getLanguage: mocks.getLanguage }));
 vi.mock("@beutl/db", () => ({
@@ -84,9 +85,12 @@ describe("email update", () => {
       tokenData: {
         userId: "user-id",
         identifier: "new@example.com",
+        sourceEmail: "old@example.com",
+        sessionId: "session-id",
       },
     };
     mocks.consumeConfirmationToken.mockResolvedValue(tokenResult);
+    mocks.getAuthoritativeSession.mockResolvedValue({ user: { id: "user-id" }, session: { id: "session-id" } });
     mocks.validateConfirmationToken.mockResolvedValue(tokenResult);
     mocks.startTransaction.mockImplementation(
       async (callback: (transaction: unknown) => Promise<unknown>) =>

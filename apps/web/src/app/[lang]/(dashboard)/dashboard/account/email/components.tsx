@@ -15,7 +15,7 @@ export function Form({
   ...props
 }: ComponentProps<"form"> & {
   email: string;
-  status?: "emailUpdated" | "emailExists" | "emailUpdateFailed";
+  status?: "emailUpdated" | "emailExists" | "emailUpdateFailed" | "emailVerificationSent" | "emailRateLimited";
   lang: string;
 }) {
   const [state, dispatch] = useActionState(sendConfirmationEmail, {});
@@ -50,6 +50,18 @@ export function Form({
             <AlertDescription>
               {t("account:email.emailUpdated")}
             </AlertDescription>
+          </Alert>
+        )}
+        {status === "emailVerificationSent" && (
+          <Alert className="my-4">
+            <AlertTitle>{t("success")}</AlertTitle>
+            <AlertDescription>{t("account:email.verificationSent")}</AlertDescription>
+          </Alert>
+        )}
+        {status === "emailRateLimited" && (
+          <Alert variant="destructive" className="my-4">
+            <AlertTitle>{t("error")}</AlertTitle>
+            <AlertDescription>{t("auth:errors.emailRateLimited")}</AlertDescription>
           </Alert>
         )}
         {status === "emailExists" && (

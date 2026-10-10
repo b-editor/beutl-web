@@ -7,6 +7,7 @@ import { getLanguage } from "@beutl/next/language";
 import { existsUserByEmail } from "@beutl/db";
 import { headers } from "next/headers";
 import { resolveSafeReturnUrl } from "@beutl/next/local-redirect";
+import { isAuthEmailRateLimitError } from "@beutl/next/auth-email-rate-limit";
 
 const emailSchema = (z: Zod) =>
   z.object({
@@ -47,17 +48,19 @@ export async function signInWithEmailAction(
 
   // Better Auth magic link を送信
   const auth = await getAuth();
-  const response = await auth.api.signInMagicLink({
+  try {
+    const response = await auth.api.signInMagicLink({
     body: {
       email: email,
       callbackURL: safeReturnUrl || `/${lang}/admin`,
       errorCallbackURL: `/${lang}/account/sign-in`,
     },
     headers: await headers(),
-  });
-
-  if (!response.status) {
-    return { message: t("auth:errors.magicLink") };
+    });
+    if (!response.status) return { message: t("auth:errors.magicLink") };
+  } catch (error) {
+    if (isAuthEmailRateLimitError(error)) return { message: t("auth:errors.emailRateLimited") };
+    throw error;
   }
 
   redirect(`/${lang}/account/verify-request`);
