@@ -30,11 +30,11 @@
   "devDependencies": {
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
-    "@types/node": "^22.20.5",
+    "@types/node": "^24.19.2",
     "fflate": "^0.8.3",
     "happy-dom": "20.14.6",
     "hono": "^4.13.13",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.3"
   },
   "pnpm": {
     "overrides": {
