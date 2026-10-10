@@ -56,7 +56,6 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${{ secrets.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           if [[ -z "$CLOUDFLARE_API_TOKEN" || -z "$CLOUDFLARE_ACCOUNT_ID" ]]; then
             echo "::error::Set the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID repository secrets."
@@ -64,10 +63,6 @@ jobs:
           fi
           if [[ -z "$NEXT_SERVER_ACTIONS_ENCRYPTION_KEY" ]]; then
             echo "::error::Set the NEXT_SERVER_ACTIONS_ENCRYPTION_KEY repository secret."
-            exit 1
-          fi
-          if [[ -z "$DATABASE_URL" ]]; then
-            echo "::error::Set the DATABASE_URL repository secret to the production database connection string for migrations."
             exit 1
           fi
       - uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
@@ -100,19 +95,8 @@ jobs:
             echo "::error::Refusing to deploy $GITHUB_SHA because main is now at $current_main_sha."
             exit 1
           fi
-      - name: Apply production database migrations
-        run: vp exec --filter @beutl/web prisma migrate deploy
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
       - name: Deploy private image Worker
-        shell: bash
-        run: |
-          current_main_sha=$(git ls-remote --exit-code origin refs/heads/main | cut -f1)
-          if [[ "$GITHUB_SHA" != "$current_main_sha" ]]; then
-            echo "::error::Refusing to deploy $GITHUB_SHA because main is now at $current_main_sha."
-            exit 1
-          fi
-          vp run deploy:image-worker
+        run: vp run deploy:image-worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
