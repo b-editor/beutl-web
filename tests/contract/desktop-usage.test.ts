@@ -188,6 +188,45 @@ describe("desktop usage metrics", () => {
     expect(parseUsageSeries(data)[0].samples[0].value).toBe(0);
   });
 
+  it.each([-2.9103830456733704e-11, -1e-6])(
+    "normalizes duration residue %s to zero without accepting negative counts",
+    (value) => {
+      const data = reply("operation", "export", value);
+      expect(parseUsageSeries(data, "duration_ms")[0].samples[0].value).toBe(
+        0,
+      );
+      expect(() => parseUsageSeries(data, "count")).toThrow(
+        "Invalid usage sample",
+      );
+      expect(() => parseUsageSeries(data)).toThrow("Invalid usage sample");
+    },
+  );
+
+  it("preserves positive fractional duration samples", () => {
+    const data = reply("operation", "export", 1e-11);
+    expect(parseUsageSeries(data, "duration_ms")[0].samples[0].value).toBe(
+      1e-11,
+    );
+  });
+
+  it.each([
+    -1,
+    -1.000001e-6,
+    Infinity,
+    -Infinity,
+    NaN,
+    "Infinity",
+    "-Infinity",
+    "1",
+    false,
+  ])("rejects invalid duration sample %s", (value) => {
+    const data = reply();
+    (data.series[0].samples[0] as { value: unknown }).value = value;
+    expect(() => parseUsageSeries(data, "duration_ms")).toThrow(
+      "Invalid usage sample",
+    );
+  });
+
   it("ignores named future events without rejecting an otherwise valid report", () => {
     const data = reply("future.event");
     data.series.push(...reply().series);
@@ -250,6 +289,43 @@ describe("server-only Grafana queries", () => {
         Authorization: `Basic ${Buffer.from("tenant:private-token").toString("base64")}`,
       },
     });
+  });
+
+  it("keeps the report available for near-zero negative duration aggregates", async () => {
+    const timestampMs = 1791723600000;
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const query = new URL(String(input)).searchParams.get("q")!;
+      if (query.includes('event = "session.started"'))
+        return Response.json({});
+      const duration = query.includes(
+        "sum_over_time(span.beutl.usage.duration_ms)",
+      );
+      const data = reply(
+        "tool.command",
+        "CommitCommand",
+        duration ? -2.9103830456733704e-11 : 7,
+        timestampMs,
+      );
+      if (duration)
+        data.series[0].samples.push({
+          timestampMs: String(timestampMs + 3_600_000),
+          value: 12.5,
+        });
+      return Response.json(data);
+    });
+    const result = await fetchDesktopUsage(
+      "24h",
+      new Date("2026-10-12T03:13:00.719Z"),
+      env,
+      fetcher,
+    );
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") throw new Error("Expected report");
+    expect(result.report.rows).toHaveLength(1);
+    expect(result.report.rows[0]).toMatchObject({ count: 7, durationMs: 12.5 });
+    expect(
+      result.report.activity.reduce((sum, point) => sum + point.count, 0),
+    ).toBe(7);
   });
 
   it.each([301, 302, 303, 307, 308])(

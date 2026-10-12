@@ -3,6 +3,8 @@
 export const DESKTOP_USAGE_RANGES = ["1h", "6h", "24h", "7d"] as const;
 export type DesktopUsageRange = (typeof DESKTOP_USAGE_RANGES)[number];
 export const USAGE_PREFIX = "span.beutl.usage.";
+// Allow at most one nanosecond of negative floating-point residue in durations.
+const DURATION_ROUNDING_TOLERANCE_MS = 1e-6;
 const USAGE_EVENTS = [
   "session.started",
   "session.heartbeat",
@@ -91,7 +93,12 @@ const object = (value: unknown): value is Record<string, unknown> =>
 
 // The Tempo HTTP API uses protobuf JSON (series/labels/samples), not the
 // Prometheus data.result format. A malformed/partial reply is never an empty report.
-export function parseUsageSeries(value: unknown): ParsedSeries[] {
+export function parseUsageSeries(
+  value: unknown,
+  measure: "count" | "duration_ms" = "count",
+): ParsedSeries[] {
+  const minimumValue =
+    measure === "duration_ms" ? -DURATION_ROUNDING_TOLERANCE_MS : 0;
   if (
     !object(value) ||
     (value.status !== undefined &&
@@ -144,11 +151,11 @@ export function parseUsageSeries(value: unknown): ParsedSeries[] {
         !Number.isSafeInteger(timestampMs) ||
         typeof number !== "number" ||
         !Number.isFinite(number) ||
-        number < 0
+        number < minimumValue
       ) {
         throw new Error("Invalid usage sample");
       }
-      return { timestampMs, value: number };
+      return { timestampMs, value: Math.max(0, number) };
     });
     return { labels, samples };
   });
@@ -173,7 +180,7 @@ export function buildUsageReport(
       activity.set(time * 1000, 0);
   }
   for (const reply of replies) {
-    for (const series of parseUsageSeries(reply.data)) {
+    for (const series of parseUsageSeries(reply.data, reply.measure)) {
       const get = (key: string) => series.labels[USAGE_PREFIX + key] ?? "";
       const event = get("event") as UsageEvent;
       if (!event) throw new Error("Missing usage event label");
