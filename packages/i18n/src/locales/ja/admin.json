@@ -701,9 +701,42 @@
     "filteredByOwner": "所有者で絞り込んでいます。",
     "clearOwnerFilter": "絞り込みを解除"
   },
+  "desktopErrors": {
+    "level": "ログレベル",
+    "levels": {
+      "all": "すべて",
+      "error": "Error",
+      "critical": "Critical",
+      "fatal": "Fatal"
+    },
+    "total": "取得したエラーログ",
+    "groups_one": "エラー種別（{{count}} 種類）",
+    "groups_other": "エラー種別（{{count}} 種類）",
+    "occurrences_one": "{{count}} 件",
+    "occurrences_other": "{{count}} 件",
+    "coverage": "取得したログの期間：{{oldest}} — {{newest}}",
+    "truncated": "最新 {{count}} 件を表示しています。この期間にはさらに古いログがあります。",
+    "latest": "最終発生：{{time}}",
+    "records": "発生履歴（新しい順）",
+    "os": "OS",
+    "version": "アプリのバージョン",
+    "scope": "発生元",
+    "exceptionType": "例外型",
+    "unknownScope": "発生元の記録なし",
+    "message": "例外・ログメッセージ",
+    "stackTrace": "スタックトレース",
+    "noStackTrace": "このログにはスタックトレースが記録されていません。",
+    "empty": "この期間・レベルに該当するエラーログはありません。",
+    "notConfigured": "エラーログの接続先が未設定です。管理サーバーに Grafana Loki の接続設定を追加してください。",
+    "unavailable": "エラーログを取得できませんでした。時間をおいて再試行してください。解消しない場合は Loki の接続設定と読み取り権限を確認してください。"
+  },
   "desktopUsage": {
+    "tabs": {
+      "label": "デスクトップのレポート",
+      "usage": "使用状況",
+      "errors": "エラーログ"
+    },
     "title": "デスクトップの使用状況",
-    "description": "収集に同意したアプリから届いた使用状況です。タブ、タブ内の機能、編集操作、エフェクトを集計します。",
     "rangeLabel": "集計期間",
     "range": {
       "1h": "1時間",
@@ -720,10 +753,8 @@
     "exportSuccess": "書き出し成功率",
     "buckets": "確定済みの時間枠を表示（最大1時間の遅延）",
     "activity": "機能実行の推移",
-    "activityHint": "タブへの操作開始、コマンド、ボタン操作、設定変更、編集、再生、プロジェクト操作を合計。1回の操作が複数の計測項目に現れることがあります。",
     "tools": "操作されたツールタブ",
     "effects": "シーンで使用されたエフェクト",
-    "measurementHint": "タブは実際にフォーカス・ポインター操作が入った切替を集計。エフェクトは有効な種類を編集画面ごとに1回計測します。稼働時間にはアイドル時間を含みます。収集対象・通信・サンプリングの影響により、全ユーザーの正確な利用数を示すものではありません。",
     "features": "タブ内の機能・編集操作",
     "tool": "ツールタブ",
     "feature": "機能",

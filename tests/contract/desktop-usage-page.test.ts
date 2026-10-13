@@ -3,20 +3,21 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "../../apps/admin/node_modules/react-dom/server";
 import { DesktopUsageView } from "../../apps/admin/src/app/[lang]/admin/usage/view";
 import Page from "../../apps/admin/src/app/[lang]/admin/usage/page";
-import type {
-  UsageReport,
-  UsageRow,
-} from "../../apps/admin/src/lib/desktop-usage";
+import type { UsageReport, UsageRow } from "../../apps/admin/src/lib/desktop-usage";
 
 const guards = vi.hoisted(() => ({
   requireAdmin: vi.fn(),
   fetchUsage: vi.fn(),
+  fetchErrors: vi.fn(),
 }));
 vi.mock("../../apps/admin/src/lib/auth-guard", () => ({
   requireAdmin: guards.requireAdmin,
 }));
 vi.mock("../../apps/admin/src/lib/desktop-usage-server", () => ({
   fetchDesktopUsage: guards.fetchUsage,
+}));
+vi.mock("../../apps/admin/src/lib/desktop-errors-server", () => ({
+  fetchDesktopErrors: guards.fetchErrors,
 }));
 
 const row = (
@@ -73,6 +74,38 @@ describe("desktop usage page", () => {
       }),
     ).rejects.toThrow("redirect");
     expect(guards.fetchUsage).not.toHaveBeenCalled();
+  });
+
+  it("requires admin access before reading error logs, too", async () => {
+    guards.requireAdmin.mockRejectedValueOnce(new Error("redirect"));
+    guards.fetchErrors.mockClear();
+    await expect(
+      Page({
+        params: Promise.resolve({ lang: "ja" }),
+        searchParams: Promise.resolve({ tab: "errors" }),
+      }),
+    ).rejects.toThrow("redirect");
+    expect(guards.fetchErrors).not.toHaveBeenCalled();
+  });
+
+  it("fetches only the selected backend and validates error filters", async () => {
+    guards.fetchUsage.mockClear().mockResolvedValue({ status: "notConfigured" });
+    guards.fetchErrors.mockClear().mockResolvedValue({ status: "notConfigured" });
+    await Page({
+      params: Promise.resolve({ lang: "ja" }),
+      searchParams: Promise.resolve({ tab: ["errors", "usage"], range: "7d", level: "fatal" }),
+    });
+    expect(guards.fetchErrors).toHaveBeenLastCalledWith("7d", "fatal");
+    expect(guards.fetchUsage).not.toHaveBeenCalled();
+    await Page({
+      params: Promise.resolve({ lang: "ja" }),
+      searchParams: Promise.resolve({ tab: "errors", range: "unbounded", level: 'error" | json' }),
+    });
+    expect(guards.fetchErrors).toHaveBeenLastCalledWith("24h", "all");
+    guards.fetchErrors.mockClear();
+    await Page({ params: Promise.resolve({ lang: "ja" }), searchParams: Promise.resolve({}) });
+    expect(guards.fetchUsage).toHaveBeenCalledWith("24h");
+    expect(guards.fetchErrors).not.toHaveBeenCalled();
   });
 
   it("renders meaningful labels, counts and tool filters in both languages", async () => {
