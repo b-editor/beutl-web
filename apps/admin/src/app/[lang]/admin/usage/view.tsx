@@ -2,12 +2,12 @@ import Link from "next/link";
 import { getTranslation } from "@beutl/i18n";
 import { formatNumber, formatTimestamp } from "../../../../lib/format";
 import {
-  DESKTOP_USAGE_RANGES,
   rankUsage,
   type DesktopUsageRange,
 } from "../../../../lib/desktop-usage";
 import type { UsageReportResult } from "../../../../lib/desktop-usage-server";
 import { UsageActivityChart } from "./chart";
+import { DesktopUsageHeader } from "./header";
 
 export async function DesktopUsageView({
   lang,
@@ -23,35 +23,9 @@ export async function DesktopUsageView({
   const { t } = await getTranslation(lang);
   const toolName = (id: string) =>
     t(`admin:desktopUsage.toolNames.${id}`, { defaultValue: id });
-  const title = t("admin:desktopUsage.title");
   const base = `/${lang}/admin/usage`;
 
-  const header = (
-    <div className="flex flex-wrap items-start justify-between gap-4">
-      <div>
-        <h1 className="text-2xl font-bold">{title}</h1>
-        <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-          {t("admin:desktopUsage.description")}
-        </p>
-      </div>
-      <nav
-        aria-label={t("admin:desktopUsage.rangeLabel")}
-        className="flex gap-1 rounded-lg border p-1"
-      >
-        {DESKTOP_USAGE_RANGES.map((value) => (
-          <Link
-            key={value}
-            href={`${base}?range=${value}`}
-            prefetch={false}
-            aria-current={value === range ? "page" : undefined}
-            className={`rounded-md px-3 py-2 text-sm ${value === range ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
-          >
-            {t(`admin:desktopUsage.range.${value}`)}
-          </Link>
-        ))}
-      </nav>
-    </div>
-  );
+  const header = await DesktopUsageHeader({ lang, range });
 
   if (result.status !== "ready")
     return (
@@ -190,12 +164,9 @@ export async function DesktopUsageView({
         ))}
       </div>
       <section className="rounded-lg border bg-card p-5">
-        <h2 className="text-lg font-semibold">
+        <h2 className="mb-4 text-lg font-semibold">
           {t("admin:desktopUsage.activity")}
         </h2>
-        <p className="mb-4 text-xs text-muted-foreground">
-          {t("admin:desktopUsage.activityHint")}
-        </p>
         <UsageActivityChart
           points={report.activity}
           lang={lang}
@@ -219,9 +190,6 @@ export async function DesktopUsageView({
           ),
         )}
       </div>
-      <p className="text-xs text-muted-foreground">
-        {t("admin:desktopUsage.measurementHint")}
-      </p>
       <section className="rounded-lg border bg-card p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">

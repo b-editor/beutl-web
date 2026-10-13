@@ -552,6 +552,31 @@ type per editor lifetime. Session starts are not unique users, and running time
 includes idle time. No identifying event payload or user-entered content is sent by
 the detailed usage collector. The published telemetry policy lists this scope.
 
-Validate locally with `pnpm exec vitest run tests/contract/desktop-usage*.test.ts`
-and `pnpm --filter @beutl/admin typecheck`. Deploying this code does not itself
+The **Error logs** tab (`?tab=errors`) reads the existing Beutl logs from Grafana
+Loki, independently of the Tempo usage report. Set these on the admin Worker:
+
+| Variable | Value |
+| --- | --- |
+| `GRAFANA_LOKI_URL` | HTTPS Loki query base URL, without `/loki/api/v1` (for example `https://logs-prod-xxx.grafana.net`) |
+| `GRAFANA_LOKI_USER` | Grafana Cloud Logs tenant/user ID |
+| `GRAFANA_LOKI_TOKEN` | Secret access-policy token with `logs:read` for that stack |
+
+Store `GRAFANA_LOKI_TOKEN` as a Worker secret. The same administrator guard runs
+before querying; credentials and raw upstream errors are never sent to the
+browser. No additional desktop collector or database migration is needed.
+
+The tab queries [`GET /loki/api/v1/query_range`](https://grafana.com/docs/loki/latest/reference/loki-http-api/#query-logs-within-a-range-of-time)
+for `{service_name="Beutl"} | detected_level=~"error|fatal|critical"`.
+Severity filters apply at Loki, before the result limit. Unlike usage aggregates,
+the selected rolling period includes the current hour. Up to 200 newest records
+are grouped by template, source and exception type, with severity counts,
+OS/version, diagnostic fields, and stack traces (including stdout-relay traces
+inside `Message`). Log timestamps are shown in JST. Counts describe the fetched
+records; a notice identifies truncated results and their covered period.
+Only the selected tab fetches data. Missing Loki configuration or a failed query
+does not prevent viewing usage statistics. IP, location and instance metadata
+are excluded from the report.
+
+Validate locally with `vp exec vitest run tests/contract/desktop-usage*.test.ts tests/contract/desktop-errors*.test.ts`
+and `vp run --filter @beutl/admin typecheck`. Deploying this code does not itself
 configure Grafana credentials or change backend retention/sampling.

@@ -701,9 +701,42 @@
     "filteredByOwner": "Filtered by owner.",
     "clearOwnerFilter": "Clear filter"
   },
+  "desktopErrors": {
+    "level": "Log level",
+    "levels": {
+      "all": "All",
+      "error": "Error",
+      "critical": "Critical",
+      "fatal": "Fatal"
+    },
+    "total": "Fetched error logs",
+    "groups_one": "Error types ({{count}} type)",
+    "groups_other": "Error types ({{count}} types)",
+    "occurrences_one": "{{count}} record",
+    "occurrences_other": "{{count}} records",
+    "coverage": "Fetched log coverage: {{oldest}} — {{newest}}",
+    "truncated": "Showing the newest {{count}} records. Older logs also exist in this period.",
+    "latest": "Last seen: {{time}}",
+    "records": "Occurrences (newest first)",
+    "os": "OS",
+    "version": "App version",
+    "scope": "Source",
+    "exceptionType": "Exception type",
+    "unknownScope": "Source not recorded",
+    "message": "Exception / log message",
+    "stackTrace": "Stack trace",
+    "noStackTrace": "No stack trace was recorded for this log.",
+    "empty": "No error logs match this period and level.",
+    "notConfigured": "Error logs are not configured. Add the Grafana Loki connection settings to the admin server.",
+    "unavailable": "Error logs could not be loaded. Try again later. If the problem persists, check the Loki connection settings and read permissions."
+  },
   "desktopUsage": {
+    "tabs": {
+      "label": "Desktop reports",
+      "usage": "Usage",
+      "errors": "Error logs"
+    },
     "title": "Desktop usage",
-    "description": "Usage reported by consenting desktop applications, grouped by tool tab, feature, editing operation and effect.",
     "rangeLabel": "Report range",
     "range": {
       "1h": "1 hour",
@@ -720,10 +753,8 @@
     "exportSuccess": "Export success rate",
     "buckets": "Complete time buckets (up to 1 hour behind)",
     "activity": "Feature activity over time",
-    "activityHint": "Tab interactions, commands, button actions, setting changes, edits, playback and project operations. One interaction can contribute to more than one measurement.",
     "tools": "Tool tabs interacted with",
     "effects": "Effects used in scenes",
-    "measurementHint": "Tab counts reflect focus or pointer interaction when switching tools. Enabled effect types are counted once per editor lifetime. Running time includes idle time. Consent, connectivity and sampling mean these are observed counts, not exact totals for all users.",
     "features": "Tool features and editing operations",
     "tool": "Tool tab",
     "feature": "Feature",
