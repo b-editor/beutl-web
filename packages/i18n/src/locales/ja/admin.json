@@ -710,8 +710,10 @@
       "fatal": "Fatal"
     },
     "total": "取得したエラーログ",
-    "groups": "エラー種別（{{count}} 種類）",
-    "occurrences": "{{count}} 件",
+    "groups_one": "エラー種別（{{count}} 種類）",
+    "groups_other": "エラー種別（{{count}} 種類）",
+    "occurrences_one": "{{count}} 件",
+    "occurrences_other": "{{count}} 件",
     "coverage": "取得したログの期間：{{oldest}} — {{newest}}",
     "truncated": "最新 {{count}} 件を表示しています。この期間にはさらに古いログがあります。",
     "latest": "最終発生：{{time}}",
