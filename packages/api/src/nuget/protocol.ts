@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import { NUGET_ORIGIN, normalizeNugetId, normalizeNugetVersion, nugetPackageUrl } from "@beutl/core";
 import type { createStorageOperations } from "../storage/files";
-import { releaseMetadata, sortNugetReleases, type NugetPackage, type NugetRelease } from "./catalog";
+import { tryReleaseMetadata, sortNugetReleases, type NugetPackage, type NugetRelease } from "./catalog";
 
 export type NugetEnv = {
   Bindings: {
@@ -42,10 +42,17 @@ export function registrationUrl(id: string, origin: string, version?: string): s
 
 export async function searchItem(pkg: NugetPackage, origin: string) {
   const releases = sortNugetReleases(pkg.Release);
+  let parsed;
+  while (releases.length) {
+    parsed = await tryReleaseMetadata(pkg, releases[0]);
+    if (parsed) break;
+    releases.shift();
+  }
+  if (!parsed) return null;
   const latest = releases[0];
   const name = normalizeNugetId(pkg.name);
   const version = normalizeNugetVersion(latest.version);
-  const { metadata } = await releaseMetadata(pkg, latest);
+  const { metadata } = parsed;
 
   return {
     "@id": registrationUrl(name, origin),
@@ -71,7 +78,9 @@ export async function searchItem(pkg: NugetPackage, origin: string) {
 
 export async function registrationItem(pkg: NugetPackage, release: NugetRelease, origin: string) {
   const version = normalizeNugetVersion(release.version);
-  const { metadata } = await releaseMetadata(pkg, release);
+  const parsed = await tryReleaseMetadata(pkg, release);
+  if (!parsed) return null;
+  const { metadata } = parsed;
   const packageContent = nugetPackageUrl(pkg.name, version, origin);
   const url = registrationUrl(pkg.name, origin, version);
 

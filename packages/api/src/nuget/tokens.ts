@@ -37,7 +37,10 @@ export function nugetCredential(headers: Headers): string | null {
     const decoded = atob(basic[1]);
     const colon = decoded.indexOf(":");
     return colon < 0 ? null : decoded.slice(colon + 1);
-  } catch { return null; }
+  } catch {
+    // Malformed Basic credentials are unauthenticated; never log the supplied key.
+    return null;
+  }
 }
 
 export async function authenticateNuget(headers: Headers) {

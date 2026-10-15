@@ -106,7 +106,14 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Deploy NuGet API Worker
-        run: vp run deploy:nuget-server
+        shell: bash
+        run: |
+          current_main_sha=$(git ls-remote --exit-code origin refs/heads/main | cut -f1)
+          if [[ "$GITHUB_SHA" != "$current_main_sha" ]]; then
+            echo "::error::Refusing to deploy $GITHUB_SHA because main is now at $current_main_sha."
+            exit 1
+          fi
+          vp run deploy:nuget-server
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

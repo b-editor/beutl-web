@@ -38,7 +38,10 @@ export function ApiKeyDialog({ lang, repositories, gitAvailable, initialReposito
   const canCreate = validName && (kind === "nuget" || (gitAvailable && !!repositoryId));
   const copy = async (value: string) => {
     try { await navigator.clipboard.writeText(value); setNotice(t("account:apiKeys.copied")); setError(undefined); }
-    catch { setError(t("account:apiKeys.copyFailed")); }
+    catch {
+      // Clipboard permission failures use the localized message without exposing the key.
+      setError(t("account:apiKeys.copyFailed"));
+    }
   };
   const create = (event: FormEvent) => {
     event.preventDefault();

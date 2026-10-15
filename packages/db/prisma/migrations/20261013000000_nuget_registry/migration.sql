@@ -1,7 +1,15 @@
--- Stop before changing schema if existing IDs differ only by case.
+-- Validate identities before any schema change. Legacy Web versions are SemVer,
+-- optionally prefixed with v; build metadata and prerelease case are not identity.
 DO $$ BEGIN
   IF EXISTS (SELECT 1 FROM "Package" GROUP BY lower("name") HAVING count(*) > 1) THEN
     RAISE EXCEPTION 'Package has duplicate case-insensitive IDs; resolve their ownership before retrying';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM "Release"
+    GROUP BY "packageId", lower(regexp_replace(split_part("version", '+', 1), '^v', ''))
+    HAVING count(*) > 1
+  ) THEN
+    RAISE EXCEPTION 'Release has duplicate normalized versions; resolve the collisions described in docs/deployment.md before retrying';
   END IF;
 END $$;
 ALTER TABLE "Package" SET (schema_locked = false);
@@ -19,6 +27,8 @@ ALTER TABLE "Release" ADD COLUMN "readme" STRING;
 ALTER TABLE "Release" ADD COLUMN "downloads" INT8 NOT NULL DEFAULT 0;
 -- Current unpublished releases are explicitly treated as never published.
 UPDATE "Release" SET "artifactLocked" = true WHERE "published" = true;
+-- Backfill drafts too, so filtering and the unique index use the same identity.
+UPDATE "Release" SET "nugetVersion" = lower(regexp_replace(split_part("version", '+', 1), '^v', ''));
 CREATE UNIQUE INDEX "Release_packageId_nugetVersion_key" ON "Release" ("packageId", "nugetVersion");
 CREATE TABLE "PublishedPackageVersion" (
   "name" STRING NOT NULL,
@@ -46,9 +56,9 @@ ALTER TABLE "NugetToken" SET (schema_locked = false);
 CREATE UNIQUE INDEX "NugetToken_tokenHash_key" ON "NugetToken" ("tokenHash");
 CREATE INDEX "NugetToken_userId_idx" ON "NugetToken" ("userId");
 
--- Existing Web versions are strict SemVer. Reserve currently published identities only.
+-- Reserve currently published identities only, using the canonical backfill above.
 INSERT INTO "PublishedPackageVersion" ("name", "version", "releaseId")
-SELECT lower(p."name"), lower(split_part(r."version", '+', 1)), r."id"
+SELECT lower(p."name"), r."nugetVersion", r."id"
 FROM "Release" r JOIN "Package" p ON p."id" = r."packageId"
 WHERE r."published" = true;
 

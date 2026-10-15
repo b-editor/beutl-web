@@ -28,15 +28,33 @@ export async function releaseMetadata(pkg: Pick<NugetPackage, "name">, release: 
     metadata: release.nugetMetadata as NugetMetadata, nuspec: release.nuspec, readme: release.readme,
   };
   if (!release.file) throw new Error("Package file is missing");
-  // Existing Web artifacts are inspected on demand; no import/migration job is needed.
-  return readNugetPackage(storedPackageReader(release.file.objectKey, Number(release.file.size)), { id: pkg.name, version: release.version });
+  const parsed = await readNugetPackage(storedPackageReader(release.file.objectKey, Number(release.file.size)), { id: pkg.name, version: release.version });
+  // Cache legacy metadata only while it still describes the same attached file.
+  try {
+    await (await getDb()).release.updateMany({
+      where: { id: release.id, fileId: release.fileId, version: release.version },
+      data: { nugetMetadata: parsed.metadata, nuspec: parsed.nuspec, readme: parsed.readme },
+    });
+  } catch (error) {
+    console.error("Failed to cache NuGet release metadata", release.id, error);
+  }
+  return parsed;
+}
+
+export async function tryReleaseMetadata(pkg: Pick<NugetPackage, "name">, release: NugetRelease) {
+  try {
+    return await releaseMetadata(pkg, release);
+  } catch (error) {
+    console.error("Skipping unreadable NuGet release", release.id, error);
+    return null;
+  }
 }
 
 export async function searchNugetPackages({ query = "", skip = 0, take = 20, prerelease = true, audience }: {
   query?: string; skip?: number; take?: number; prerelease?: boolean; audience?: PackageAudience;
 }) {
   const releaseWhere: Prisma.ReleaseWhereInput = { published: true, nugetListed: true, fileId: { not: null },
-    ...(!prerelease ? { NOT: { version: { contains: "-" } } } : {}) };
+    ...(!prerelease ? { NOT: { nugetVersion: { contains: "-" } } } : {}) };
   const where: Prisma.PackageWhereInput = { published: true, audience, Release: { some: releaseWhere },
     ...(query.trim() ? { OR: [
       { name: { contains: query.trim(), mode: "insensitive" } },

@@ -43,6 +43,27 @@ version identities. It refuses package IDs that differ only by case; resolve
 such IDs manually. Retain the `Package_name_lower_key` SQL expression index in
 later schema changes. No old NuGet data or credentials are imported.
 
+Before changing the schema, it also rejects duplicate release identities,
+including drafts, `v` prefixes, build metadata and prerelease casing. Inspect
+collisions on the old schema with:
+
+```sql
+SELECT "packageId", lower(regexp_replace(split_part("version", '+', 1), '^v', '')) AS identity,
+       array_agg("id") AS release_ids, array_agg("version") AS versions
+FROM "Release"
+GROUP BY "packageId", identity
+HAVING count(*) > 1;
+```
+
+For each collision, choose the release and artifact to retain. Use the old
+dashboard to remove redundant releases; if artifacts differ, publish the other
+artifact under a distinct version before removing its conflicting release.
+Unpublishing alone does not remove the collision. The migration does not delete
+or choose artifacts automatically. If Prisma recorded the preflight as failed,
+resolve the data first, mark `20261013000000_nuget_registry` as rolled back with
+`prisma migrate resolve --rolled-back`, and retry the migration. The migration
+backfills canonical `nugetVersion` values while retaining original display versions.
+
 Configure `beutl-nuget-server` with the same Hyperdrive and object storage as Web.
 Set an identical, new random `NUGET_DOWNLOAD_SECRET` on Web and NuGet. This signs
 120-second, file-bound browser download tickets. Also copy the Web desktop
@@ -51,6 +72,10 @@ do not copy the image Worker's separate JWT credentials.
 
 Deploy NuGet before Web, and switch `nuget.beditor.net` to the new Worker during
 the manually managed cutover. The CI deploy order includes NuGet before Web.
+The NuGet Wrangler configuration intentionally omits routes. At cutover, remove
+any conflicting DNS record or previous Worker domain attachment, then attach
+`nuget.beditor.net` to `beutl-nuget-server` in Cloudflare's Domains & Routes settings.
+Automatic deployments leave this manually managed domain attachment unchanged.
 The NuGet Worker serves no HTML. SDK packages appear in the Web store's **SDK**
 filter with `type=development`; their details live at `/[lang]/packages/[name]`.
 `NUGET_PUBLIC_ORIGIN` defaults to `https://nuget.beditor.net`; for local testing,

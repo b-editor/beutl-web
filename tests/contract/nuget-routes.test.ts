@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
+import { zipSync, strToU8 } from "fflate";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { setDbProvider } from "@beutl/db";
 import { setR2BucketProvider } from "@beutl/api/ai/r2-provider";
 import app from "../../packages/api/src/nuget/app";
 import { parseNuspec } from "../../packages/api/src/nuget/archive";
+import { releaseMetadata, type NugetRelease } from "../../packages/api/src/nuget/catalog";
 import { nugetFileUrl, verifyDownloadTicket } from "../../packages/api/src/nuget/tickets";
 
 const secret = `bn_${"a".repeat(64)}`;
@@ -34,7 +36,7 @@ beforeEach(() => {
   setDbProvider(async () => ({ ...models, $transaction: async (fn: (tx: unknown) => unknown) => fn(models) }) as never);
   setR2BucketProvider(() => bucket);
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 describe("NuGet registry routes", () => {
   it("advertises API resources on the NuGet origin", async () => {
@@ -104,6 +106,62 @@ describe("NuGet registry routes", () => {
     expect(preflight.status).toBe(204);
     expect(preflight.headers.get("access-control-allow-headers")).toContain("Range");
   });
+  it("includes stable build metadata in version autocomplete", async () => {
+    models.package.findFirst.mockResolvedValueOnce({ ...pkg, Release: [
+      { ...release, version: "v1.0.0+linux-x64", nugetListed: true },
+      { ...release, version: "2.0.0-beta+linux-x64", nugetListed: true },
+      { ...release, version: "3.0.0+linux-x64", nugetListed: false },
+    ] });
+    expect(await (await request("/v3/autocomplete?id=Library")).json()).toEqual({ data: ["1.0.0"] });
+  });
+  it.each([
+    ["invalid ZIP", strToU8("not a ZIP")],
+    ["missing manifest", zipSync({ "readme.txt": strToU8("legacy data") })],
+    ["mismatched identity", zipSync({ "other.nuspec": strToU8(manifest.replace("<id>Library</id>", "<id>Other</id>")) })],
+  ])("isolates a legacy artifact with %s in search and registration", async (_, bytes) => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    setR2BucketProvider(() => ({ get: async (_key, options) => ({
+      arrayBuffer: async () => bytes.slice(options?.range?.offset ?? 0,
+        (options?.range?.offset ?? 0) + (options?.range?.length ?? bytes.length)).buffer,
+    }) }) as never);
+    const unreadable = { ...release, id: "unreadable", version: "2.0.0", nugetMetadata: null, nuspec: null,
+      file: { ...release.file, size: BigInt(bytes.length) } };
+    const mixed = { ...pkg, Release: [unreadable, release] } as typeof pkg;
+    models.package.findMany.mockResolvedValueOnce([mixed, { ...pkg, name: "Broken", Release: [unreadable] } as typeof pkg]);
+    models.package.count.mockResolvedValueOnce(2);
+    const search = await request("/v3/search");
+    expect(search.status).toBe(200);
+    expect((await search.json()).data).toMatchObject([{ id: "Library", version: "1.0.0", versions: [{ version: "1.0.0" }] }]);
+    models.package.findFirst.mockResolvedValueOnce(mixed);
+    const registration = await request("/v3/registration/library/index.json");
+    expect(registration.status).toBe(200);
+    expect((await registration.json()).items[0]).toMatchObject({ lower: "1.0.0", upper: "1.0.0", count: 1 });
+    models.package.findFirst.mockResolvedValueOnce(mixed);
+    expect((await request("/v3/registration/library/2.0.0.json")).status).toBe(404);
+    expect(errors).toHaveBeenCalledWith("Skipping unreadable NuGet release", "unreadable", expect.any(Error));
+  });
+  it("persists successfully parsed legacy metadata and reuses it on later requests", async () => {
+    const bytes = zipSync({ "Library.nuspec": strToU8(manifest) });
+    const get = vi.fn(async (_key, options) => ({
+      arrayBuffer: async () => bytes.slice(options.range.offset, options.range.offset + options.range.length).buffer,
+    }));
+    setR2BucketProvider(() => ({ get }) as never);
+    const legacy = { ...release, version: "v1.0.0+linux-x64", nugetMetadata: null, nuspec: null,
+      file: { ...release.file, size: BigInt(bytes.length) } } as unknown as NugetRelease;
+    models.release.updateMany.mockImplementationOnce(async ({ data }: { data: object }) => {
+      Object.assign(legacy, data);
+      return { count: 1 };
+    });
+    const parsed = await releaseMetadata(pkg, legacy);
+    expect(models.release.updateMany).toHaveBeenCalledWith({
+      where: { id: legacy.id, fileId: legacy.fileId, version: legacy.version },
+      data: { nugetMetadata: parsed.metadata, nuspec: manifest, readme: null },
+    });
+    const reads = get.mock.calls.length;
+    expect(reads).toBeGreaterThan(0);
+    expect(await releaseMetadata(pkg, legacy)).toEqual(parsed);
+    expect(get).toHaveBeenCalledTimes(reads);
+  });
   it("keeps identity validation and conflict errors mapped at the API boundary", async () => {
     expect((await request("/v3/package/library/not-a-version/library.nupkg")).status).toBe(400);
     models.package.findFirst.mockRejectedValueOnce(Object.assign(new Error("conflict"), { code: "P2002" }));
@@ -160,5 +218,10 @@ describe("NuGet registry routes", () => {
     expect((await app.request(url)).status).toBe(200);
     buyer = null;
     expect((await app.request(url)).status).toBe(403);
+  });
+  it("rejects malformed tickets without concealing missing signing configuration", async () => {
+    expect(await verifyDownloadTicket("not-a-ticket", "file")).toBeNull();
+    vi.stubEnv("NUGET_DOWNLOAD_SECRET", "");
+    await expect(verifyDownloadTicket("not-a-ticket", "file")).rejects.toThrow("not configured");
   });
 });

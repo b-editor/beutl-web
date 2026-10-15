@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, Download, ExternalLink, PackageOpen } from "lucide-react";
 import { findNugetPackage, findNugetVersion, releaseMetadata, sortNugetReleases } from "@beutl/api/nuget/catalog";
-import { NUGET_SERVICE_INDEX, nugetPackageUrl, normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
+import { InvalidNugetIdentityError, NUGET_SERVICE_INDEX, nugetPackageUrl, normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 import { Button } from "@beutl/ui/ui/button";
 import { Badge } from "@beutl/ui/ui/badge";
@@ -15,7 +15,11 @@ export default async function Page({ params, searchParams }: {
   searchParams: Promise<{ version?: string }>;
 }) {
   const { lang, name } = await params, { version } = await searchParams;
-  try { normalizeNugetId(name); if (version) normalizeNugetVersion(version); } catch { notFound(); }
+  try { normalizeNugetId(name); if (version) normalizeNugetVersion(version); }
+  catch (error) {
+    if (error instanceof InvalidNugetIdentityError) notFound();
+    throw error;
+  }
   const pkg = await findNugetPackage(name, "DEVELOPMENT");
   if (!pkg?.Release.length) notFound();
   const releases = sortNugetReleases(pkg.Release);

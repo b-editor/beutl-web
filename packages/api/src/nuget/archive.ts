@@ -10,7 +10,7 @@ import { getR2Bucket } from "../ai/r2-provider";
 const METADATA_LIMIT = 2 * 1024 * 1024;
 const DIRECTORY_LIMIT = 4 * 1024 * 1024;
 export class InvalidNugetPackageError extends Error {}
-const invalid = (message: string): never => { throw new InvalidNugetPackageError(message); };
+const invalid = (message: string, cause?: unknown): never => { throw new InvalidNugetPackageError(message, { cause }); };
 const text = (value: unknown): string => typeof value === "string" ? value : "";
 const list = <T>(value: T | T[] | undefined): T[] => value === undefined ? [] : Array.isArray(value) ? value : [value];
 
@@ -22,12 +22,12 @@ export function parseNuspec(nuspec: string): NugetMetadata {
     removeNSPrefix: true, processEntities: true }).parse(nuspec)?.package?.metadata;
   if (!m || typeof m !== "object") return invalid("Missing package metadata");
   const id = text(m.id), version = text(m.version);
-  try { normalizeNugetId(id); normalizeNugetVersion(version); } catch { return invalid("Invalid package ID or version"); }
+  try { normalizeNugetId(id); normalizeNugetVersion(version); } catch (error) { return invalid("Invalid package ID or version", error); }
   if (!text(m.authors).trim() || !text(m.description).trim()) return invalid("Authors and description are required");
   const dependencies = (value: { "@_id"?: string; "@_version"?: string } | { "@_id"?: string; "@_version"?: string }[] | undefined) =>
     list(value).map((d) => {
       const id = text(d["@_id"]);
-      try { normalizeNugetId(id); } catch { return invalid("Invalid dependency ID"); }
+      try { normalizeNugetId(id); } catch (error) { return invalid("Invalid dependency ID", error); }
       return { id, range: text(d["@_version"]) || "(,)" };
     });
   const groups = list(m.dependencies?.group as { "@_targetFramework"?: string; dependency?: { "@_id"?: string; "@_version"?: string }[] } | undefined)
@@ -82,7 +82,7 @@ async function entriesOf(reader: Reader) {
     return entries;
   } catch (error) {
     if (error instanceof InvalidNugetPackageError) throw error;
-    return invalid("Invalid NuGet ZIP archive");
+    return invalid("Invalid NuGet ZIP archive", error);
   }
 }
 
@@ -92,7 +92,7 @@ async function readEntry(entry: ZipEntry): Promise<ArrayBuffer> {
     const bytes = await entry.arrayBuffer();
     if (bytes.byteLength !== entry.size) return invalid("Invalid package entry size");
     return bytes;
-  } catch { return invalid("Cannot read package metadata"); }
+  } catch (error) { return invalid("Cannot read package metadata", error); }
 }
 
 export async function readNugetPackage(reader: Reader, expected?: { id: string; version: string }): Promise<ReleaseNugetData> {

@@ -8,7 +8,6 @@
   "preview_urls": false,
   "keep_vars": true,
   "observability": { "enabled": true, "head_sampling_rate": 1 },
-  "routes": [{ "pattern": "nuget.beditor.net", "custom_domain": true }],
   "hyperdrive": [{ "binding": "BEUTL_DATABASE_HYPERDRIVE", "id": "34ad44345f2f45ea97c3608b0567a878" }],
   "r2_buckets": [{ "binding": "BEUTL_R2_BUCKET", "bucket_name": "beutl-dev" }],
   "vars": { "NUGET_PUBLIC_ORIGIN": "https://nuget.beditor.net" }

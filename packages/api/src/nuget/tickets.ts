@@ -15,9 +15,13 @@ export async function nugetFileUrl(fileId: string, userId?: string | null) {
 }
 
 export async function verifyDownloadTicket(ticket: string, fileId: string): Promise<string | null> {
+  const signingSecret = secret();
   try {
-    const payload = await verify(ticket, secret(), { alg: "HS256", aud: "nuget-download" });
+    const payload = await verify(ticket, signingSecret, { alg: "HS256", aud: "nuget-download" });
     return payload.fileId === fileId && typeof payload.sub === "string" && typeof payload.exp === "number" &&
       payload.exp > Date.now() / 1000 ? payload.sub : null;
-  } catch { return null; }
+  } catch {
+    // Invalid or expired tickets are authentication failures; do not log credentials.
+    return null;
+  }
 }

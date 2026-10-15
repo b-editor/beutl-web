@@ -23,7 +23,7 @@ routes.get("/index.json", (c) => c.json(serviceIndex(nugetOrigin(c))));
 routes.get("/search", async (c) => {
   const { totalHits, packages } = await searchNugetPackages(searchOptions(c));
   const origin = nugetOrigin(c);
-  const data = await Promise.all(packages.map((pkg) => searchItem(pkg, origin)));
+  const data = (await Promise.all(packages.map((pkg) => searchItem(pkg, origin)))).filter((item) => item !== null);
   return c.json({ totalHits, data });
 });
 
@@ -33,7 +33,7 @@ routes.get("/autocomplete", async (c) => {
   if (id) {
     const pkg = await findNugetPackage(id);
     const releases = pkg?.Release.filter((release) =>
-      release.nugetListed && (options.prerelease || !release.version.includes("-"))) ?? [];
+      release.nugetListed && (options.prerelease || !normalizeNugetVersion(release.version).includes("-"))) ?? [];
     return c.json({
       data: sortNugetReleases(releases).reverse().map((release) => normalizeNugetVersion(release.version)),
     });
@@ -48,7 +48,8 @@ routes.get("/registration/:id/index.json", async (c) => {
 
   const origin = nugetOrigin(c);
   const releases = sortNugetReleases(pkg.Release).reverse();
-  const items = await Promise.all(releases.map((release) => registrationItem(pkg, release, origin)));
+  const items = (await Promise.all(releases.map((release) => registrationItem(pkg, release, origin)))).filter((item) => item !== null);
+  if (!items.length) return c.notFound();
   const url = registrationUrl(pkg.name, origin);
   return c.json({
     "@id": url,
@@ -56,8 +57,8 @@ routes.get("/registration/:id/index.json", async (c) => {
     items: [{
       "@id": url,
       count: items.length,
-      lower: normalizeNugetVersion(releases[0].version),
-      upper: normalizeNugetVersion(releases[releases.length - 1].version),
+      lower: items[0].catalogEntry.version,
+      upper: items[items.length - 1].catalogEntry.version,
       items,
     }],
   });
@@ -70,6 +71,7 @@ routes.get("/registration/:id/:version", async (c) => {
 
   const origin = nugetOrigin(c);
   const item = await registrationItem(pkg, release, origin);
+  if (!item) return c.notFound();
   return c.json({
     ...item,
     listed: release.nugetListed,

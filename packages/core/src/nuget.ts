@@ -12,9 +12,10 @@ export function normalizeNugetId(id: string): string {
   return id.toLowerCase();
 }
 
-/** NuGet identity ignores build metadata, leading zeroes and a zero revision. */
+/** NuGet identity ignores build metadata, leading zeroes and a zero revision.
+ * Also accept the v prefix stored by the previous Web release form. */
 export function normalizeNugetVersion(version: string): string {
-  const match = /^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u.exec(version);
+  const match = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u.exec(version);
   if (!match || version.length > 128) throw new InvalidNugetIdentityError("Invalid NuGet version");
   const numbers = match.slice(1, 5).map((n) => Number(n ?? 0));
   if (numbers.some((n) => !Number.isSafeInteger(n) || n > 2147483647)) throw new InvalidNugetIdentityError("Invalid NuGet version");
@@ -22,7 +23,11 @@ export function normalizeNugetVersion(version: string): string {
 }
 
 export function isValidNugetVersion(version: string): boolean {
-  try { normalizeNugetVersion(version); return true; } catch { return false; }
+  try { normalizeNugetVersion(version); return true; }
+  catch (error) {
+    if (error instanceof InvalidNugetIdentityError) return false;
+    throw error;
+  }
 }
 
 export function compareNugetVersions(left: string, right: string): number {

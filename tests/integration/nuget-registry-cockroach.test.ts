@@ -4,6 +4,7 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createRelease, updateRelease, ReleaseArtifactLockedError, ReleaseIdentityConflictError, setReleasePublishedByAdmin, setDbProvider, packageNameFilter } from "@beutl/db";
+import { searchNugetPackages } from "../../packages/api/src/nuget/catalog";
 
 const connectionString = process.env.TEST_DATABASE_URL;
 const suite = connectionString ? describe : describe.skip;
@@ -11,6 +12,7 @@ const suite = connectionString ? describe : describe.skip;
 suite("NuGet publication invariants on CockroachDB", () => {
   const database = `nuget_${randomUUID().replaceAll("-", "")}`;
   let admin: PrismaClient, db: PrismaClient;
+  let preflight: string, ddl: string;
   beforeAll(async () => {
     const url = new URL(connectionString!); url.pathname = "/defaultdb";
     admin = new PrismaClient({ adapter: new PrismaPg({ connectionString: url.toString() }) });
@@ -21,32 +23,81 @@ suite("NuGet publication invariants on CockroachDB", () => {
     // The pre-integration tables, including both current publication states.
     for (const sql of [
       `CREATE TABLE "User" ("id" STRING PRIMARY KEY)`,
-      `CREATE TABLE "File" ("id" STRING PRIMARY KEY, "name" STRING NOT NULL)`,
-      `CREATE TABLE "Package" ("id" STRING PRIMARY KEY, "name" STRING NOT NULL UNIQUE)`,
+      `CREATE TABLE "File" ("id" STRING PRIMARY KEY, "name" STRING NOT NULL,
+        "size" INT8 NOT NULL DEFAULT 4, "mimeType" STRING NOT NULL DEFAULT 'application/octet-stream',
+        "objectKey" STRING NOT NULL DEFAULT 'object', "userId" STRING NOT NULL DEFAULT 'owner',
+        "sha256" STRING, "visibility" STRING NOT NULL DEFAULT 'DEDICATED', "folderId" STRING,
+        "storageMoveLeaseToken" STRING, "storageMoveLeaseUntil" TIMESTAMP(3),
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp(), "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp())`,
+      `CREATE TABLE "Package" ("id" STRING PRIMARY KEY, "name" STRING NOT NULL UNIQUE,
+        "displayName" STRING, "description" STRING NOT NULL DEFAULT '', "shortDescription" STRING NOT NULL DEFAULT '',
+        "published" BOOL NOT NULL DEFAULT true, "webSite" STRING NOT NULL DEFAULT '', "tags" STRING[] NOT NULL DEFAULT '{}',
+        "iconFileId" STRING, "userId" STRING NOT NULL DEFAULT 'owner', "interval" STRING,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp(), "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp())`,
       `CREATE TABLE "Release" ("id" STRING PRIMARY KEY, "packageId" STRING NOT NULL REFERENCES "Package" ("id"),
         "version" STRING NOT NULL, "targetVersion" STRING NOT NULL, "title" STRING NOT NULL, "description" STRING NOT NULL,
         "fileId" STRING REFERENCES "File" ("id"), "published" BOOL NOT NULL,
         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp(), "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp())`,
-      `INSERT INTO "File" VALUES ('original', 'original.nupkg'), ('replacement', 'replacement.nupkg')`,
-      `INSERT INTO "Package" VALUES ('user', 'User.Package'), ('dev', 'Dev.Package')`,
+      `INSERT INTO "File" ("id", "name") VALUES ('original', 'original.nupkg'), ('replacement', 'replacement.nupkg')`,
+      `INSERT INTO "Package" ("id", "name") VALUES ('user', 'User.Package'), ('dev', 'Dev.Package')`,
       `INSERT INTO "Release" ("id", "packageId", "version", "targetVersion", "title", "description", "fileId", "published") VALUES
-        ('published', 'user', '1.0.0', '1.0.0', '', '', 'original', true),
+        ('published', 'user', 'v1.0.0+linux-x64', '1.0.0', '', '', 'original', true),
         ('draft', 'dev', '1.0.0', '', '', '', 'original', false)`,
     ]) await db.$executeRawUnsafe(sql);
     const sql = await readFile(new URL("../../packages/db/prisma/migrations/20261013000000_nuget_registry/migration.sql", import.meta.url), "utf8");
-    const [preflight, ddl] = sql.split("END $$;");
-    await db.$executeRawUnsafe(`${preflight}END $$;`);
-    for (const statement of ddl.split(";").filter((s) => s.trim())) await db.$executeRawUnsafe(statement);
-    await db.$executeRawUnsafe(`UPDATE "Package" SET "audience" = 'DEVELOPMENT' WHERE "id" = 'dev'`);
+    [preflight, ddl] = sql.split("END $$;");
   }, 90000);
   afterAll(async () => { await db?.$disconnect(); if (admin) { await admin.$executeRawUnsafe(`DROP DATABASE "${database}" CASCADE`); await admin.$disconnect(); } });
   const edit = (id: string, published: boolean, fileId?: string) => updateRelease({ id, published, fileId, title: "Title", description: "Description", targetVersion: "1.0.0" });
   const draft = (packageId: string, version: string) => createRelease({ packageId, version, title: "Title", description: "Description", targetVersion: "1.0.0", published: false });
 
-  it("locks only currently published releases when applying the schema", async () => {
-    expect(await db.release.findUniqueOrThrow({ where: { id: "published" } })).toMatchObject({ artifactLocked: true });
-    expect(await db.release.findUniqueOrThrow({ where: { id: "draft" } })).toMatchObject({ artifactLocked: false });
+  it.each([["1.0.0", true], ["v1.0.0+other-build", true], ["1.0.0+draft", false]])(
+    "rejects colliding legacy version %s (published: %s) before changing schema", async (version, published) => {
+      await db.$executeRaw`INSERT INTO "Release" ("id", "packageId", "version", "targetVersion", "title", "description", "published")
+        VALUES ('collision', 'user', ${version}, '', '', '', ${published})`;
+      try {
+        await expect(db.$executeRawUnsafe(`${preflight}END $$;`)).rejects.toThrow("duplicate normalized versions");
+        const columns = await db.$queryRaw`SELECT column_name FROM information_schema.columns
+          WHERE table_name = 'Release' AND column_name = 'nugetVersion' AND table_schema = 'public'`;
+        expect(columns).toEqual([]);
+      } finally {
+        await db.$executeRaw`DELETE FROM "Release" WHERE "id" = 'collision'`;
+      }
+    },
+  );
+  it("backfills canonical identities and locks only currently published releases", async () => {
+    await db.$executeRawUnsafe(`${preflight}END $$;`);
+    for (const statement of ddl.split(";").filter((s) => s.trim())) await db.$executeRawUnsafe(statement);
+    await db.$executeRawUnsafe(`UPDATE "Package" SET "audience" = 'DEVELOPMENT' WHERE "id" = 'dev'`);
+    expect(await db.release.findUniqueOrThrow({ where: { id: "published" } })).toMatchObject({
+      artifactLocked: true, version: "v1.0.0+linux-x64", nugetVersion: "1.0.0",
+    });
+    expect(await db.release.findUniqueOrThrow({ where: { id: "draft" } })).toMatchObject({ artifactLocked: false, nugetVersion: "1.0.0" });
     expect(await db.publishedPackageVersion.count()).toBe(1);
+    expect(await db.publishedPackageVersion.findUniqueOrThrow({ where: { releaseId: "published" } }))
+      .toMatchObject({ name: "user.package", version: "1.0.0" });
+  }, 90000);
+  it("keeps stable build metadata in search counts and pagination", async () => {
+    for (const [id, version, canonical] of [
+      ["A.Build", "1.0.0+linux-x64", "1.0.0"],
+      ["B.Preview", "2.0.0-beta+linux-x64", "2.0.0-beta"],
+      ["C.Build", "3.0.0+ci-build", "3.0.0"],
+    ]) {
+      await db.$executeRaw`INSERT INTO "Package" ("id", "name", "audience") VALUES (${id}, ${id}, 'DEVELOPMENT')`;
+      await db.$executeRaw`INSERT INTO "Release" ("id", "packageId", "version", "nugetVersion", "targetVersion", "title", "description", "fileId", "published")
+        VALUES (${id}, ${id}, ${version}, ${canonical}, '', '', '', 'original', true)`;
+    }
+    try {
+      const stable = await searchNugetPackages({ prerelease: false, audience: "DEVELOPMENT", skip: 1, take: 1 });
+      expect(stable.totalHits).toBe(2);
+      expect(stable.packages.map((pkg) => pkg.name)).toEqual(["C.Build"]);
+      const all = await searchNugetPackages({ prerelease: true, audience: "DEVELOPMENT", skip: 1, take: 1 });
+      expect(all.totalHits).toBe(3);
+      expect(all.packages.map((pkg) => pkg.name)).toEqual(["B.Preview"]);
+    } finally {
+      await db.release.deleteMany({ where: { id: { in: ["A.Build", "B.Preview", "C.Build"] } } });
+      await db.package.deleteMany({ where: { id: { in: ["A.Build", "B.Preview", "C.Build"] } } });
+    }
   });
   it("permits replacing a current draft, but publication permanently locks its file", async () => {
     await edit("draft", false, "replacement");

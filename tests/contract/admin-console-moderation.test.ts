@@ -53,6 +53,7 @@ describe("administrator package visibility (db)", () => {
   function fakePrisma(model: "package" | "release", { count, row }: { count: number; row: unknown }) {
     return {
       [model]: {
+        update: vi.fn().mockResolvedValue(row),
         updateMany: vi.fn().mockResolvedValue({ count }),
         findUnique: vi.fn().mockResolvedValue(row),
       },
@@ -83,7 +84,7 @@ describe("administrator package visibility (db)", () => {
     await expect(
       setReleasePublishedByAdmin({ releaseId: "r1", published: true, prisma: prisma as never }),
     ).resolves.toEqual({ packageId: "p1", version: "1.0.0", changed: false, missingFile: true });
-    expect(prisma.release.updateMany).not.toHaveBeenCalled();
+    expect(prisma.release.update).not.toHaveBeenCalled();
   });
 
   it("returns null for a package or release that does not exist", async () => {

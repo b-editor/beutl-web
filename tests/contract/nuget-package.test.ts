@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { zipSync, strToU8 } from "fflate";
-import { compareNugetVersions, normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
+import { compareNugetVersions, isValidNugetVersion, normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
 import { blobReader, parseNuspec, readNugetPackage } from "../../packages/api/src/nuget/archive";
 import { readPushBody, NUGET_PUSH_LIMIT } from "../../packages/api/src/nuget/push";
 
@@ -20,6 +20,14 @@ describe("NuGet package identities and metadata", () => {
     expect(["1.0.0-beta.10", "1.0.0.2", "1.0.0", "1.0.0-beta.9"].sort(compareNugetVersions))
       .toEqual(["1.0.0-beta.9", "1.0.0-beta.10", "1.0.0", "1.0.0.2"]);
     expect(compareNugetVersions("1.0.0-beta-x.2", "1.0.0-beta-x.10")).toBeLessThan(0);
+  });
+  it("keeps legacy v-prefixed releases compatible with canonical identities", async () => {
+    expect(normalizeNugetVersion("v1.2.0-Beta.2+linux-x64")).toBe("1.2.0-beta.2");
+    expect(compareNugetVersions("v1.2.0+linux-x64", "1.2.0")).toBe(0);
+    expect(isValidNugetVersion("v1.2.0")).toBe(true);
+    expect(isValidNugetVersion("invalid")).toBe(false);
+    await expect(readNugetPackage(blobReader(archive()), { id: "sample.library", version: "v1.2.0-Beta.2" }))
+      .resolves.toHaveProperty("metadata.id", "Sample.Library");
   });
   it("reads the nuspec, framework groups and declared readme without changing numeric text", async () => {
     const parsed = await readNugetPackage(blobReader(archive()), { id: "sample.library", version: "1.2.0-beta.2" });
