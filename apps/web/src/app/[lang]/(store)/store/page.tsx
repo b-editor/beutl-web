@@ -14,17 +14,20 @@ import type { PackageTypeFilter } from "@beutl/core";
 import { retrievePackages } from "@/lib/store-utils";
 import { contentImageSources } from "@/lib/content-image";
 import Link from "next/link";
+import { DevelopmentPackages } from "./development-packages";
 
-const TYPE_FILTER_LABEL_KEYS: Record<PackageTypeFilter, string> = {
+const STORE_FILTERS = [...PACKAGE_TYPE_FILTERS, "development"] as const;
+const TYPE_FILTER_LABEL_KEYS: Record<PackageTypeFilter | "development", string> = {
   all: "store:typeAll",
   extension: "store:typeExtensions",
   material: "store:typeMaterials",
   template: "store:typeTemplates",
+  development: "developer:nuget.title",
 };
 
 export default async function Page(
   props: {
-    searchParams: Promise<{ query?: string; type?: string }>;
+    searchParams: Promise<{ query?: string; type?: string; page?: string }>;
     params: Promise<{ lang: string }>;
   }
 ) {
@@ -40,10 +43,12 @@ export default async function Page(
     query
   } = searchParams;
 
-  const type = isPackageTypeFilter(searchParams.type) ? searchParams.type : "all";
+  const type = searchParams.type === "development"
+    ? "development"
+    : isPackageTypeFilter(searchParams.type) ? searchParams.type : "all";
 
   const { t } = await getTranslation(lang);
-  const packages = await retrievePackages(query, type);
+  const packages = type === "development" ? [] : await retrievePackages(query, type);
 
   return (
     <>
@@ -65,7 +70,7 @@ export default async function Page(
             />
           </form>
           <div className="flex gap-1 mx-4 flex-wrap">
-            {PACKAGE_TYPE_FILTERS.map((filter) => {
+            {STORE_FILTERS.map((filter) => {
               const next = new URLSearchParams();
               if (query) next.set("query", query);
               if (filter !== "all") next.set("type", filter);
@@ -91,78 +96,82 @@ export default async function Page(
         </div>
       </div>
       <div className="container max-w-6xl mx-auto py-6 px-2">
-        <div className="flex flex-wrap">
-          {packages.map((item) => {
-            const tags = visiblePackageTags(item.tags);
+        {type === "development" ? (
+          <DevelopmentPackages lang={lang} query={query} page={searchParams.page} />
+        ) : (
+          <div className="flex flex-wrap">
+            {packages.map((item) => {
+              const tags = visiblePackageTags(item.tags);
 
-            return (
-            <Link
-              href={`/${lang}/store/${item.name}`}
-              className="text-start p-2 basis-full sm:basis-1/2 md:basis-1/3"
-              key={item.id}
-            >
-              <Card className="h-full">
-                <CardContent className="p-6 h-full flex flex-col gap-2 justify-between">
-                  <div>
-                    <div className="flex w-full">
-                      <div className="flex-3">
-                        <h4 className="text-xl font-semibold">
-                          {item.displayName || item.name}
-                        </h4>
-                        <span className="text-muted-foreground">{item.userName}</span>
+              return (
+              <Link
+                href={`/${lang}/store/${item.name}`}
+                className="text-start p-2 basis-full sm:basis-1/2 md:basis-1/3"
+                key={item.id}
+              >
+                <Card className="h-full">
+                  <CardContent className="p-6 h-full flex flex-col gap-2 justify-between">
+                    <div>
+                      <div className="flex w-full">
+                        <div className="flex-3">
+                          <h4 className="text-xl font-semibold">
+                            {item.displayName || item.name}
+                          </h4>
+                          <span className="text-muted-foreground">{item.userName}</span>
+                        </div>
+                        {item.iconFileUrl && (
+                          /* eslint-disable-next-line @next/next/no-img-element */
+                          <img
+                            className="flex-1 w-16 h-16 max-w-16 max-h-16 rounded-md"
+                            alt="Package icon"
+                            {...contentImageSources(item.iconFileUrl, "icon")}
+                            width={64}
+                            height={64}
+                            loading="lazy"
+                            decoding="async"
+                          />
+                        )}
+                        {!item.iconFileUrl && (
+                          <div className="w-16 h-16 rounded-md bg-secondary" />
+                        )}
                       </div>
-                      {item.iconFileUrl && (
-                        /* eslint-disable-next-line @next/next/no-img-element */
-                        <img
-                          className="flex-1 w-16 h-16 max-w-16 max-h-16 rounded-md"
-                          alt="Package icon"
-                          {...contentImageSources(item.iconFileUrl, "icon")}
-                          width={64}
-                          height={64}
-                          loading="lazy"
-                          decoding="async"
-                        />
-                      )}
-                      {!item.iconFileUrl && (
-                        <div className="w-16 h-16 rounded-md bg-secondary" />
-                      )}
+                      <p className="text-sm mt-2">{item.shortDescription}</p>
                     </div>
-                    <p className="text-sm mt-2">{item.shortDescription}</p>
-                  </div>
-                  <div className="overflow-x-clip relative h-6">
-                    <div className="flex gap-2 absolute">
-                      <Badge variant="secondary" className="text-nowrap">
-                        {item.price
-                          ? formatAmount(
-                            item.price.price,
-                            item.price.currency,
-                            lang,
-                          )
-                          : t("store:free")}
-                      </Badge>
-                      {tags.length > 0 && (
-                        <Separator
-                          orientation="vertical"
-                          className="h-auto my-1"
-                        />
-                      )}
-                      {tags.map((tag) => (
-                        <Badge
-                          variant="outline"
-                          className="border-input text-nowrap"
-                          key={tag}
-                        >
-                          {tag}
+                    <div className="overflow-x-clip relative h-6">
+                      <div className="flex gap-2 absolute">
+                        <Badge variant="secondary" className="text-nowrap">
+                          {item.price
+                            ? formatAmount(
+                              item.price.price,
+                              item.price.currency,
+                              lang,
+                            )
+                            : t("store:free")}
                         </Badge>
-                      ))}
+                        {tags.length > 0 && (
+                          <Separator
+                            orientation="vertical"
+                            className="h-auto my-1"
+                          />
+                        )}
+                        {tags.map((tag) => (
+                          <Badge
+                            variant="outline"
+                            className="border-input text-nowrap"
+                            key={tag}
+                          >
+                            {tag}
+                          </Badge>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </Link>
-            );
-          })}
-        </div>
+                  </CardContent>
+                </Card>
+              </Link>
+              );
+            })}
+          </div>
+        )}
       </div>
     </>
   );

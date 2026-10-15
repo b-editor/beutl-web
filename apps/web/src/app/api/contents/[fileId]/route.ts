@@ -1,3 +1,4 @@
+import { nugetFileUrl } from "@beutl/api/nuget/tickets";
 import { byteRangeHeaders, parseByteRange, resolveContentAccess } from "@beutl/core";
 import {
   existsUserPaymentHistory,
@@ -64,9 +65,11 @@ async function serveContent(
     userId: null,
     hasPurchasedPackage: async () => false,
   });
+  let downloadUserId: string | null = null;
   if (access.outcome !== "allowed") {
     const session = await auth.api.getSession({ headers: request.headers });
     const userId = session?.user?.id ?? (await tryGetUserIdFromHeaders(request.headers));
+    downloadUserId = userId;
     access = await resolveContentAccess({
       file,
       userId,
@@ -76,6 +79,10 @@ async function serveContent(
   }
 
   if (access.outcome === "allowed") {
+    if (file.Release.length > 0) {
+      return new NextResponse(null, { status: 307, headers: { Location: await nugetFileUrl(fileId, downloadUserId),
+        ...contentCacheHeaders(false), "Referrer-Policy": "no-referrer" } });
+    }
     const etag = contentEntityTag(file);
     const deliveryHeaders = contentDeliveryHeaders(file.mimeType);
     const headers = {

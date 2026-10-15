@@ -83,10 +83,7 @@ describe("administrator package visibility (db)", () => {
     await expect(
       setReleasePublishedByAdmin({ releaseId: "r1", published: true, prisma: prisma as never }),
     ).resolves.toEqual({ packageId: "p1", version: "1.0.0", changed: false, missingFile: true });
-    expect(prisma.release.updateMany).toHaveBeenCalledWith({
-      where: { id: "r1", published: false, fileId: { not: null } },
-      data: { published: true },
-    });
+    expect(prisma.release.updateMany).not.toHaveBeenCalled();
   });
 
   it("returns null for a package or release that does not exist", async () => {

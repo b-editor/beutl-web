@@ -37,6 +37,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@beutl/ui/ui/dialog";
+import { compareNugetVersions, isValidNugetVersion } from "@beutl/core";
 import { cn } from "@beutl/core";
 import { isValidNuGetVersionRange } from "@beutl/core";
 import {
@@ -97,7 +98,7 @@ export function ReleaseForm({
       formData.append("id", release.id);
       formData.append("title", title);
       formData.append("description", description);
-      formData.append("targetVersion", targetVersion.value);
+      formData.append("targetVersion", pkg.audience === "DEVELOPMENT" ? "" : targetVersion.value);
       formData.append("published", published ? "on" : "off");
       const result = await updateRelease(formData);
       if (result.success) {
@@ -127,6 +128,7 @@ export function ReleaseForm({
     releases,
     t,
     targetVersion.value,
+    pkg.audience,
     title,
     toast,
   ]);
@@ -153,7 +155,7 @@ export function ReleaseForm({
         const data: Package["Release"][number] = result.data!;
         setReleases((releases) =>
           [...releases, data].toSorted((a, b) =>
-            new SemVer.SemVer(b.version).compare(a.version),
+            compareNugetVersions(b.version, a.version),
           ),
         );
         setRelease(data);
@@ -308,6 +310,7 @@ export function ReleaseForm({
               emptyPreview: t("developer:markdown.emptyPreview"),
             }}
           />
+          {pkg.audience === "USER" && <>
           <Label className="mt-2" htmlFor="release-target-version">
             {t("developer:release.targetVersion")}
           </Label>
@@ -332,6 +335,7 @@ export function ReleaseForm({
           {targetVersion.message && (
             <p className="text-sm text-red-300">{targetVersion.message}</p>
           )}
+          </>}
           <div className="flex items-center gap-2 mt-2">
             <Label htmlFor="release-package-file">
               {t("developer:release.packageFile")}
@@ -342,14 +346,14 @@ export function ReleaseForm({
                   variant="ghost"
                   size="icon"
                   className="w-6 h-6"
-                  aria-label={t("developer:release.packageFileHelp")}
+                  aria-label={t(pkg.audience === "DEVELOPMENT" ? "developer:nuget.nupkgRequired" : "developer:release.packageFileHelp")}
                   disabled={saving}
                 >
                   <Info className="w-4 h-4" />
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-80 text-sm">
-                {t("developer:release.packageFileHelp")}
+                {t(pkg.audience === "DEVELOPMENT" ? "developer:nuget.nupkgRequired" : "developer:release.packageFileHelp")}
               </PopoverContent>
             </Popover>
           </div>
@@ -358,10 +362,11 @@ export function ReleaseForm({
             variant="outline"
             className="flex w-full justify-start"
             onClick={handleSelectFiles}
-            disabled={saving}
+            disabled={saving || release.artifactLocked || release.published}
           >
             {t("developer:release.selectFiles")}
           </Button>
+          {(release.artifactLocked || release.published) && <p className="text-sm text-muted-foreground">{t("developer:release.artifactLocked")}</p>}
           {files.length > 0 && (
             <p className="text-sm text-muted-foreground">
               {t("developer:upload.filesSelected", {
@@ -431,7 +436,7 @@ export function ReleaseForm({
               onChange={(e) =>
                 setVersion({
                   value: e.target.value,
-                  message: SemVer.valid(e.target.value)
+                  message: isValidNugetVersion(e.target.value)
                     ? ""
                     : t("developer:validation.versionIncorrect"),
                 })

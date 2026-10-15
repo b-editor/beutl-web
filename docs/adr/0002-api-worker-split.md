@@ -1,7 +1,7 @@
 # 0002: Web と公開 API を同じ Worker に含める
 
 - 状態: Accepted (2026-08-06 の API Worker 分離を撤回)
-- 更新日: 2026-10-04
+- 更新日: 2026-10-13
 
 ## 背景
 
@@ -10,7 +10,7 @@ API が公開されない。Hosted Git のリポジトリ作成で、この状�
 
 ## 決定
 
-Web とすべての公開 API は **単一の `beutl-web` Worker** に含める。
+Web とデスクトップ向け公開 API は **単一の `beutl-web` Worker** に含める。
 `packages/api` はコード共有の単位であり、独立したデプロイ単位にはしない。
 
 - `apps/web/worker.js` が `/api/v1`, `/api/v2`, `/api/v3` を共通 API runtime に渡す。
@@ -27,14 +27,22 @@ Web とすべての公開 API は **単一の `beutl-web` Worker** に含める�
   画像 Worker の入口・デプロイ設定は `apps/image-worker` に置き、画像 API の処理は
   `packages/api` から共有する。
 
+## NuGet 配信の例外
+
+NuGet プロトコルと両用途のパッケージ配信は、`apps/nuget-server` の
+`beutl-nuget-server` Worker が `nuget.beditor.net` で担当する。
+このドメインは API のみとし、開発用カタログ、ユーザーストア、公開管理、
+API キー管理は Web に置く。DB・ストレージと公開後のファイル固定の処理を共有し、
+NuGet Worker は独立した入口・ビルド・デプロイ・契約テストを持つ。
+
 ## 再発防止
 
-新しい公開 API は Web の入口を通して契約テストを行う。
+新しいデスクトップ向け公開 API は Web の入口を通して契約テストを行う。
 `tests/contract/web-api-entrypoint.test.ts` はリポジトリ作成、Git 転送、サイズ制限、
 Web へのフォールバック、cron 接続と実際のデプロイ設定を確認する。
 `tests/contract/hosted-git-routes.test.ts` は Worker 経由と Next.js route 経由で
 Hosted Git の応答が一致することを確認する。
-独立 API Worker の Wrangler 設定や deploy/upload コマンドを再導入しない。
+デスクトップ API の独立 Worker は再導入しない。
 
 以前の分離構成を使用していた環境では、旧 `/api/v{1,2,3}/*` の Worker routes を
 取り除き、Web のカスタムドメインに全公開リクエストを届ける。

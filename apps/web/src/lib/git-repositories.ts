@@ -6,8 +6,7 @@ export class GitRepositoryError extends Error {
   constructor(
     public readonly code:
       | "unavailable" | "requestFailed" | "unauthorized" | "notFound"
-      | "invalidName" | "limitReached" | "conflict" | "accountChanged"
-      | "invalidTokenName" | "tokenLimitReached",
+      | "invalidName" | "limitReached" | "conflict" | "accountChanged",
   ) { super(code); }
 }
 

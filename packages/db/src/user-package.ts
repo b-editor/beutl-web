@@ -140,6 +140,7 @@ export async function retrieveLibraryPackagesByUserId({
       userId: userId,
       package: {
         published: true,
+        audience: "USER",
       },
     },
     select: {

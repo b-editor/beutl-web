@@ -1,3 +1,4 @@
+import { zipSync, strToU8 } from "fflate";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setDbProvider } from "@beutl/db";
 import { getTranslation } from "@beutl/i18n";
@@ -14,26 +15,31 @@ const RELEASE_ID = "c7bc502e-aee6-4fbf-87f9-0c413659b1fe";
 describe("editing a release without replacing its artifact", () => {
   let row: {
     id: string; packageId: string; version: string; published: boolean;
+    artifactLocked: boolean; package: { audience: "USER" | "DEVELOPMENT" };
     file: { id: string; userId: string } | null;
   };
   let update: ReturnType<typeof vi.fn>;
   let beforeTransaction: (() => void) | undefined;
   let models: {
-    release: { findFirst: () => Promise<typeof row>; findFirstOrThrow: () => Promise<typeof row>; update: ReturnType<typeof vi.fn> };
-    package: { findFirst: () => Promise<{ id: string; name: string; userId: string; tags: string[] }>; update: ReturnType<typeof vi.fn> };
+    publishedPackageVersion: { upsert: () => Promise<{ releaseId: string }> };
+    release: { findUniqueOrThrow: () => Promise<unknown>; findFirst: () => Promise<typeof row>; findFirstOrThrow: () => Promise<typeof row>; update: ReturnType<typeof vi.fn> };
+    package: { findUniqueOrThrow: () => Promise<{ name: string }>; findFirst: () => Promise<{ id: string; name: string; userId: string; tags: string[] }>; update: ReturnType<typeof vi.fn> };
   };
   beforeEach(() => {
     beforeTransaction = undefined;
     vi.mocked(createDedicatedStorageFile).mockReset();
-    row = { id: RELEASE_ID, packageId: "pkg", version: "2.0.0", published: false, file: { id: "existing-file", userId: "owner" } };
+    row = { id: RELEASE_ID, packageId: "pkg", version: "2.0.0", published: false, artifactLocked: false, package: { audience: "USER" }, file: { id: "existing-file", userId: "owner" } };
     update = vi.fn(async ({ data }) => Object.assign(row, data));
     models = {
+      publishedPackageVersion: { upsert: async () => ({ releaseId: RELEASE_ID }) },
       release: {
+        findUniqueOrThrow: async () => ({ ...row, fileId: row.file?.id }),
         findFirst: async () => ({ ...row }),
         findFirstOrThrow: async () => ({ ...row }),
         update,
       },
       package: {
+        findUniqueOrThrow: async () => ({ name: "Package" }),
         findFirst: async () => ({ id: "pkg", name: "Package", userId: "owner", tags: [] }),
         update: vi.fn(async () => ({ name: "Package" })),
       },
@@ -93,8 +99,28 @@ describe("editing a release without replacing its artifact", () => {
       return { kind: "created", record: file } as never;
     });
     const form = input(true);
-    form.append("file", new File(["package"], "package.nupkg"));
+    form.append("file", new File([zipSync({ "Package.nuspec": strToU8("<package><metadata><id>Package</id><version>2.0.0</version><authors>Owner</authors><description>Package</description></metadata></package>") })], "package.nupkg"));
     expect((await updateRelease(form)).success).toBe(true);
     expect(row).toMatchObject({ published: true, fileId: file.id });
   });
+  it.each([true, false])("refuses replacing a previously published file while published=%s", async (published) => {
+    row.artifactLocked = true; row.published = published;
+    const form = input(published); form.append("file", new File(["replacement"], "package.nupkg"));
+    expect((await updateRelease(form)).success).toBe(false);
+    expect(createDedicatedStorageFile).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+  it("rechecks the lock after an upload races with publication", async () => {
+    const file = { id: "replacement-file", objectKey: "replacement-key", size: 7n };
+    vi.mocked(createDedicatedStorageFile).mockImplementation(async ({ publish }) => {
+      row.artifactLocked = true; row.published = true;
+      await publish?.(models as never, file);
+      return { kind: "created", record: file } as never;
+    });
+    const form = input(true);
+    form.append("file", new File([zipSync({ "Package.nuspec": strToU8("<package><metadata><id>Package</id><version>2.0.0</version><authors>Owner</authors><description>Package</description></metadata></package>") })], "package.nupkg"));
+    expect((await updateRelease(form)).success).toBe(false);
+    expect(update).not.toHaveBeenCalled();
+  });
+
 });

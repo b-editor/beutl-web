@@ -1,0 +1,29 @@
+{
+  "name": "@beutl/nuget-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "wrangler deploy --dry-run --outdir .wrangler/build",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "check:runtime": "node scripts/check-runtime.mjs"
+  },
+  "dependencies": {
+    "@beutl/api": "workspace:*",
+    "@beutl/core": "workspace:*",
+    "@beutl/db": "workspace:*",
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
+    "hono": "^4.13.13"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^6.0.3",
+    "wrangler": "^4.149.0"
+  }
+}

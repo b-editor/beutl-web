@@ -1,6 +1,6 @@
 import "server-only";
 import { unstable_cache } from "next/cache";
-import { getDb } from "@beutl/db";
+import { getDb, packageNameFilter } from "@beutl/db";
 import { contentPath } from "@/lib/content-url";
 import { withOwnPrismaClient } from "@/prisma";
 import { selectPricing, packageTypeWhere } from "@beutl/core";
@@ -45,11 +45,9 @@ export async function retrievePackage(name: string) {
   const db = await getDb();
   const pkg = await db.package.findFirst({
     where: {
-      name: {
-        equals: name,
-        mode: "insensitive",
-      },
+      name: packageNameFilter(name),
       published: true,
+      audience: "USER",
     },
     select: {
       id: true,
@@ -205,7 +203,8 @@ export async function retrievePackages(
   const tmp = await db.package.findMany({
     where: {
       published: true,
-      ...packageTypeWhere(type),
+      audience: "USER" as const,
+    ...packageTypeWhere(type),
       ...(query
         ? {
             OR: [

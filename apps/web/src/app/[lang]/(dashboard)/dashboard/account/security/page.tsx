@@ -7,10 +7,13 @@ import { Separator } from "@beutl/ui/ui/separator";
 import { getTranslation } from "@beutl/i18n";
 import { retrieveAccountsWithIdToken } from "@beutl/db";
 import { getPasskeysByUserId } from "@beutl/db";
+import { ApiKeys } from "./api-keys";
+import { retrieveApiKeys } from "./api-key-actions";
 
 export default async function Page(
   props: {
     params: Promise<{ lang: string }>;
+    searchParams: Promise<{ repository?: string }>;
   }
 ) {
   const params = await props.params;
@@ -82,6 +85,8 @@ export default async function Page(
   })) as ComponentProps<typeof PasskeysList>["authenticators"];
 
   const { t } = await getTranslation(lang);
+  const apiKeys = await retrieveApiKeys();
+  const { repository } = await props.searchParams;
 
   return (
     <div>
@@ -104,6 +109,7 @@ export default async function Page(
         {passkeysList.length !== 0 && <Separator />}
         <PasskeysList lang={lang} authenticators={passkeysList} />
       </div>
+      <ApiKeys lang={lang} initialResult={apiKeys} initialRepositoryId={repository} />
     </div>
   );
 }

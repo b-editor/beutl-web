@@ -224,7 +224,10 @@ function withKnownLength(
     .FixedLengthStream;
   if (typeof FixedLength === "function") {
     return {
-      body: value.pipeThrough(new FixedLength(contentLength)),
+      // Callers may already supply a FixedLengthStream (for R2). workerd cannot
+      // pipe one native identity stream directly into another; a JS transform
+      // bridges them without buffering the upload.
+      body: value.pipeThrough(new TransformStream()).pipeThrough(new FixedLength(contentLength)),
       headers: {},
     };
   }

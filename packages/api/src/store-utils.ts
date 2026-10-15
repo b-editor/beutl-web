@@ -48,6 +48,7 @@ export async function retrievePackages(
   const currency = await guessCurrency(request);
   const where = {
     published: true,
+    audience: "USER" as const,
     ...packageTypeWhere(type),
     ...(query
       ? {

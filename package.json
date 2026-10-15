@@ -9,7 +9,7 @@
     "postinstall": "node scripts/prisma-generate.mjs",
     "dev": "pnpm --filter @beutl/web dev",
     "dev:admin": "pnpm --filter @beutl/admin dev",
-    "build": "pnpm --filter @beutl/web build && pnpm --filter @beutl/api typecheck && pnpm --filter @beutl/admin build && vp run --filter @beutl/image-worker build",
+    "build": "pnpm --filter @beutl/web build && pnpm --filter @beutl/api typecheck && pnpm --filter @beutl/admin build && vp run --filter @beutl/image-worker build && vp run --filter @beutl/nuget-server build",
     "start": "pnpm --filter @beutl/web start",
     "lint": "pnpm --filter @beutl/web lint && pnpm --filter @beutl/admin lint",
     "typecheck": "pnpm -r run typecheck",
@@ -25,7 +25,9 @@
     "preview": "pnpm --filter @beutl/web preview",
     "migrate:fresh-cockroach": "vp run --filter @beutl/web migrate:fresh-cockroach",
     "migrate:ai-usage": "vp run --filter @beutl/web migrate:ai-usage",
-    "verify:r2-lifecycle": "./scripts/verify-r2-lifecycle.sh"
+    "verify:r2-lifecycle": "./scripts/verify-r2-lifecycle.sh",
+    "dev:nuget-server": "vp run --filter @beutl/nuget-server dev",
+    "deploy:nuget-server": "vp run --filter @beutl/nuget-server deploy"
   },
   "devDependencies": {
     "@prisma/adapter-pg": "^7.10.0",

@@ -134,7 +134,7 @@ export function PackageDetailsForm({
       <h4 className="font-bold text-lg mt-6 border-b pb-2">
         {t("developer:details.title")}
       </h4>
-      <div className="flex gap-2 flex-col my-4">
+      {pkg.audience === "USER" ? <div className="flex gap-2 flex-col my-4">
         <h4>{t("developer:details.packageType")}</h4>
         <Select value={getPackageType(tags)} onValueChange={handleChangeType} disabled={isPending}>
           <SelectTrigger className="md:max-w-xs">
@@ -151,7 +151,7 @@ export function PackageDetailsForm({
         <p className="text-sm text-muted-foreground">
           {t(PACKAGE_TYPE_DESCRIPTION_KEYS[getPackageType(tags)])}
         </p>
-      </div>
+      </div> : <Badge variant="outline" className="my-4">{t("developer:nuget.title")}</Badge>}
       <Separator />
       <div className="flex gap-2 flex-col my-4">
         <h4>{t("developer:details.tags")}</h4>

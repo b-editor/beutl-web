@@ -1,5 +1,6 @@
 import {
   GIT_ACCESS_TOKEN_LIMIT,
+  GIT_REPOSITORY_LIMIT,
   type CreatedGitAccessToken,
   type GitAccessTokenSummary,
 } from "@beutl/core";
@@ -13,6 +14,7 @@ import { generateGitAccessToken, gitAccessTokenFrom, hashGitAccessToken, type Gi
 
 type TokenRow = { id: string; name: string; scope: string; hint: string; createdAt: Date; lastUsedAt: Date | null };
 const LAST_USED_PRECISION_MS = 60 * 60_000;
+const summarySelect = { id: true, name: true, scope: true, hint: true, createdAt: true, lastUsedAt: true } as const;
 
 function summary(row: TokenRow): GitAccessTokenSummary {
   return {
@@ -27,6 +29,18 @@ export async function listGitAccessTokens(ownerId: string, repoId: string): Prom
     where: { repoId, ownerId, revokedAt: null }, orderBy: { createdAt: "desc" }, take: GIT_ACCESS_TOKEN_LIMIT,
   });
   return rows.map(summary);
+}
+
+/** Account-wide management also works while the Git service is disabled. */
+export async function listAccountGitAccessTokens(ownerId: string) {
+  const rows = await (await getDb()).gitRepository.findMany({
+    where: { ownerId, deletedAt: null }, orderBy: { createdAt: "desc" }, take: GIT_REPOSITORY_LIMIT,
+    select: { id: true, name: true, accessTokens: {
+      where: { ownerId, revokedAt: null }, orderBy: { createdAt: "desc" }, take: GIT_ACCESS_TOKEN_LIMIT,
+      select: summarySelect,
+    } },
+  });
+  return rows.map((row) => ({ id: row.id, name: row.name, tokens: row.accessTokens.map(summary) }));
 }
 
 /** The secret is returned once; only its hash is kept. */

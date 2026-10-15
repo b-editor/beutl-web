@@ -1,6 +1,31 @@
 import { getDb } from "./provider";
 import { deleteUnreferencedFileWithStorageCleanup } from "./file";
 import { startRetryableTransaction, type PrismaTransaction } from "./transaction";
+import { normalizeNugetId, normalizeNugetVersion, type NugetMetadata } from "@beutl/core";
+
+export class ReleaseArtifactLockedError extends Error {
+  constructor() { super("Published release files cannot be replaced. Create a new version."); }
+}
+
+export class ReleaseIdentityConflictError extends Error {
+  constructor() { super("This package version already exists or was previously published."); }
+}
+
+export async function reservePublishedReleaseIdentity(
+  tx: PrismaTransaction,
+  release: { id: string; packageId: string; version: string },
+) {
+  const pkg = await tx.package.findUniqueOrThrow({ where: { id: release.packageId }, select: { name: true } });
+  const name = normalizeNugetId(pkg.name), version = normalizeNugetVersion(release.version);
+  const reservation = await tx.publishedPackageVersion.upsert({
+    where: { name_version: { name, version } },
+    create: { name, version, releaseId: release.id },
+    update: {},
+  });
+  if (reservation.releaseId !== release.id) throw new ReleaseIdentityConflictError();
+}
+
+export type ReleaseNugetData = { metadata: NugetMetadata; nuspec: string; readme: string | null };
 
 export async function findReleaseForLibrary({
   id: latestReleaseId,
@@ -94,6 +119,9 @@ export async function getReleaseWithFileById({
     select: {
       packageId: true,
       version: true,
+      published: true,
+      artifactLocked: true,
+      package: { select: { audience: true } },
       file: {
         select: {
           id: true,
@@ -131,6 +159,7 @@ export async function updateRelease({
   targetVersion,
   published,
   fileId,
+  nuget,
   prisma,
 }: {
   id: string;
@@ -139,34 +168,54 @@ export async function updateRelease({
   targetVersion: string;
   published: boolean;
   fileId: string | undefined;
+  nuget?: ReleaseNugetData;
   prisma?: PrismaTransaction;
 }) {
-  const db = prisma ?? await getDb();
-  return db.release.update({
-    where: {
-      id,
-    },
-    data: {
-      title,
-      description,
-      targetVersion,
-      published,
-      fileId,
-    },
-    select: {
-      version: true,
-      title: true,
-      description: true,
-      targetVersion: true,
-      id: true,
-      published: true,
-      file: {
-        select: {
-          name: true,
+  const run = async (db: PrismaTransaction) => {
+    const current = await db.release.findUniqueOrThrow({ where: { id } });
+    if ((current.artifactLocked || current.published) &&
+        ((fileId !== undefined && fileId !== current.fileId) || nuget)) {
+      throw new ReleaseArtifactLockedError();
+    }
+    if (published) {
+      if (!(fileId ?? current.fileId)) throw new Error("A published release requires a file");
+      await reservePublishedReleaseIdentity(db, current);
+    }
+    return db.release.update({
+      where: {
+        id,
+      },
+      data: {
+        title,
+        description,
+        targetVersion,
+        published,
+        fileId,
+        ...(published ? { artifactLocked: true } : {}),
+        ...(nuget ? {
+          nugetVersion: normalizeNugetVersion(current.version),
+          nugetMetadata: nuget.metadata,
+          nuspec: nuget.nuspec,
+          readme: nuget.readme,
+        } : {}),
+      },
+      select: {
+        version: true,
+        title: true,
+        description: true,
+        targetVersion: true,
+        id: true,
+        published: true,
+        artifactLocked: true,
+        file: {
+          select: {
+            name: true,
+          },
         },
       },
-    },
-  });
+    });
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
 }
 
 export async function createRelease({
@@ -186,30 +235,43 @@ export async function createRelease({
   published: boolean;
   prisma?: PrismaTransaction;
 }) {
-  const db = prisma ?? await getDb();
-  return db.release.create({
-    data: {
-      packageId,
-      version,
-      title,
-      description,
-      targetVersion,
-      published,
-    },
-    select: {
-      version: true,
-      title: true,
-      description: true,
-      targetVersion: true,
-      id: true,
-      published: true,
-      file: {
-        select: {
-          name: true,
+  const run = async (db: PrismaTransaction) => {
+    const nugetVersion = normalizeNugetVersion(version);
+    const pkg = await db.package.findUniqueOrThrow({ where: { id: packageId }, select: { name: true } });
+    const used = await db.publishedPackageVersion.findUnique({
+      where: { name_version: { name: normalizeNugetId(pkg.name), version: nugetVersion } },
+    });
+    const versions = await db.release.findMany({ where: { packageId }, select: { version: true } });
+    if (used || versions.some((r) => normalizeNugetVersion(r.version) === nugetVersion)) throw new ReleaseIdentityConflictError();
+    // Files are attached through updateRelease's transactional publication path.
+    if (published) throw new Error("Create a draft and attach its file before publishing");
+    return db.release.create({
+      data: {
+        packageId,
+        version,
+        nugetVersion,
+        title,
+        description,
+        targetVersion,
+        published,
+      },
+      select: {
+        version: true,
+        title: true,
+        description: true,
+        targetVersion: true,
+        id: true,
+        published: true,
+        artifactLocked: true,
+        file: {
+          select: {
+            name: true,
+          },
         },
       },
-    },
-  });
+    });
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
 }
 
 export async function getReleasePackageAndFileId({
@@ -245,6 +307,11 @@ export async function deleteReleaseWithStorageCleanup({
     const release = await tx.release.findUnique({
       where: { id },
       select: {
+        id: true,
+        packageId: true,
+        version: true,
+        artifactLocked: true,
+        published: true,
         package: { select: { userId: true } },
         file: { select: { id: true, userId: true } },
       },
@@ -253,6 +320,7 @@ export async function deleteReleaseWithStorageCleanup({
       throw new Error(`Release ${id} was not found`);
     }
 
+    if (release.artifactLocked || release.published) await reservePublishedReleaseIdentity(tx, release);
     const deleted = await tx.release.delete({ where: { id } });
     if (release.file?.userId === userId) {
       await deleteUnreferencedFileWithStorageCleanup({

@@ -14,7 +14,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenu
 import { createRepository, deleteRepository, renameRepository, retrieveRepositories } from "./actions";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@beutl/ui/ui/tooltip";
 import { RepositoryNameDialog } from "./repository-name-dialog";
-import { RepositoryTokenDialog } from "./repository-token-dialog";
+import { RepositoryConnectionDialog } from "./repository-connection-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@beutl/ui/ui/toggle-group";
 import { RepositoryActions, RepositoryContextMenu, RepositoryDate, RepositoryGridCard, RepositoryVisibility, repositoryPageHref, type RepositoryHandlers } from "./repository-items";
@@ -208,7 +208,7 @@ export function RepositoryManager({ lang, userId, initialResult }: {
       setNotice(t(`dashboard:repositories.${editing.repository ? "renamed" : "created"}`));
       setError(undefined); setEditing(undefined);
     }} />}
-    {connecting && <RepositoryTokenDialog repository={connecting} lang={lang} onClose={() => setConnecting(undefined)} />}
+    {connecting && <RepositoryConnectionDialog repository={connecting} lang={lang} onClose={() => setConnecting(undefined)} />}
     <AlertDialog open={!!deleting} onOpenChange={(open) => { if (!open && !pending) setDeleting(undefined); }}>
       <AlertDialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
         <AlertDialogHeader>

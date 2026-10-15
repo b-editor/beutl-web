@@ -13,6 +13,7 @@ Cloudflare Workers.
 | --- | --- | --- |
 | `apps/web` | `@beutl/web` | Public site, account and developer dashboards, authentication, and checkout |
 | `apps/admin` | `@beutl/admin` | Administrative console |
+| `apps/nuget-server` | `@beutl/nuget-server` | NuGet protocol and package distribution at nuget.beditor.net |
 | `apps/image-worker` | `@beutl/image-worker` | Private Cloudflare Worker for AI image editing |
 | `packages/api` | `@beutl/api` | Hono APIs for desktop clients (`v1`, `v2`, and `v3`) |
 | `packages/core` | `@beutl/core` | Framework-independent domain logic |
@@ -66,7 +67,7 @@ commands run from this package and load its `.env`; `migrate:fresh-cockroach` an
 | --- | --- |
 | `pnpm dev` | Start the public Web app |
 | `pnpm dev:admin` | Start the admin console |
-| `pnpm build` | Build both Next.js apps and the image Worker, and type-check the shared API |
+| `pnpm build` | Build both Next.js apps, image and NuGet Workers, and type-check the shared API |
 | `pnpm lint` | Lint both Next.js apps |
 | `pnpm typecheck` | Type-check every workspace that defines a type-check script |
 | `pnpm test` | Run the Vitest contract and integration suites |
@@ -76,6 +77,35 @@ commands run from this package and load its `.env`; `migrate:fresh-cockroach` an
 CockroachDB integration tests require `TEST_DATABASE_URL`. The live OpenRouter
 pricing test is opt-in through `TEST_OPENROUTER_PRICING=1`; these tests are
 skipped when their respective variables are absent.
+
+## NuGet packages
+
+The store shows development libraries and SDKs when its **SDK**
+filter is selected (`/en/store?type=development` or `/ja/store?type=development`).
+The default store listing contains user extensions, materials and templates.
+The former `/[lang]/packages` listing redirects to this filter, retaining search
+and pagination; SDK package details remain at `/[lang]/packages/[name]`.
+Both use `https://nuget.beditor.net/v3/index.json` for NuGet distribution.
+Create an expiring read or push API key under **Account → Security → API keys**
+with **NuGet** selected. Repository access keys are managed in the same place.
+
+```sh
+dotnet nuget push package.nupkg --source https://nuget.beditor.net/v3/index.json --api-key <API_KEY>
+```
+
+Push publishes a new release immediately. A new ID creates a development
+package; create user packages in the dashboard first. Push accepts `.nupkg`
+archives up to 50 MiB. Web uploads also verify the manifest ID/version.
+`dotnet nuget delete` unlists a version but leaves exact-version restores working;
+POST to the same publish-resource URL relists it. Web unpublishing removes public
+access. Neither action permits replacing a previously published version.
+Currently unpublished Web releases remain editable when the schema is applied.
+
+For purchased packages, configure a NuGet source credential with any nonempty
+username and an API key as its password (Basic authentication). Purchasing and
+browser authentication remain on Beutl Web. Store downloads redirect to NuGet
+with a short-lived, file-bound ticket; the Worker rechecks purchase access.
+Run the separate local Worker with `vp run dev:nuget-server`.
 
 ## Landing-page recording
 
@@ -90,7 +120,7 @@ English/Japanese description in sync with the recording.
 
 [GitHub Actions](.github/workflows/ci.yml) runs the Vitest suite on pull requests
 and pushes to `main`. After tests pass on `main`, it deploys `beutl-ai-images`,
-`beutl-web` (including public APIs), and `beutl-admin` in that order using the
+`beutl-nuget-server`, `beutl-web` (including desktop APIs), and `beutl-admin` in that order using the
 existing deployment tooling. Web and Admin are built without Cloudflare
 credentials. Immediately before each Worker deployment, the run's commit must
 still match the head of `main`. A manual run on `main` also tests and deploys.
@@ -114,13 +144,14 @@ are separate release steps and are not run by this workflow.
 
 ## Deployment
 
-The public Web app and all desktop APIs deploy together as `beutl-web`.
+The public Web app and desktop APIs deploy together as `beutl-web`.
 `packages/api` is shared application code, not a separate API Worker. The Web
 entrypoint dispatches `/api/v{1,2,3}/*` before OpenNext so uploads remain streamed.
 
 | Worker | Routes | Command |
 | --- | --- | --- |
-| `beutl-web` | `beutl.beditor.net/*`, including all public APIs | `vp run deploy:web` |
+| `beutl-web` | `beutl.beditor.net/*`, including desktop APIs | `vp run deploy:web` |
+| `beutl-nuget-server` | `nuget.beditor.net/*` (API only) | `vp run deploy:nuget-server` |
 | `beutl-admin` | `admin.beutl.beditor.net/*` | `vp run deploy:admin` |
 | `beutl-ai-images` | Service binding only; no public route | `vp run deploy:image-worker` |
 

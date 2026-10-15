@@ -1,6 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRequire } from "node:module";
-import { createHash } from "node:crypto";
 import { isValidGitRepositoryName } from "@beutl/core";
 import { runWithDbProvider } from "@beutl/db";
 import { authenticatedCloneUrl, repositoryCloneCommand } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/repositories/connection";
@@ -17,7 +16,6 @@ vi.mock("@/lib/auth-guard", () => ({
 
 let actions: typeof import("../../apps/web/src/app/[lang]/(dashboard)/dashboard/repositories/actions");
 const id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
-const tokenId = "66666666-6666-4666-8666-666666666666";
 const createdAt = new Date("2026-10-04T00:00:00Z");
 const row = { id, ownerId: "owner", name: "Project", deletedAt: null, createdAt, updatedAt: createdAt };
 const repository = { id, name: "Project", url: `https://git.example/api/v3/git/${id}.git`,
@@ -34,8 +32,6 @@ let db: any;
 const repositoryOperations = [
   { name: "rename", run: () => actions.renameRepository(id, "New name") },
   { name: "delete", run: () => actions.deleteRepository(id) },
-  { name: "token creation", run: () => actions.createRepositoryToken(id, "Laptop", "read") },
-  { name: "token listing", run: () => actions.listRepositoryTokens(id) },
 ];
 const withDb = <T>(run: () => Promise<T>) => runWithDbProvider(async () => db, run);
 
@@ -61,12 +57,6 @@ beforeEach(() => {
         return { ...row, ...data };
       }),
       updateMany: vi.fn(async ({ where }) => ({ count: where.id === id && where.ownerId === "owner" ? 1 : 0 })),
-    },
-    gitAccessToken: {
-      findMany: vi.fn(async () => []),
-      count: vi.fn(async () => 0),
-      create: vi.fn(async ({ data }) => ({ ...data, id: tokenId, createdAt, lastUsedAt: null, revokedAt: null })),
-      updateMany: vi.fn(async ({ where }) => ({ count: where.id === tokenId && where.repoId === id && where.ownerId === "owner" ? 1 : 0 })),
     },
   };
 });
@@ -116,14 +106,9 @@ describe("Web repository management", () => {
     expect(db.gitRepository.create).not.toHaveBeenCalled();
     expect(db.gitRepository.update).not.toHaveBeenCalled();
   });
-  it("rejects path traversal, a nil creation ID, and unsupported token scopes", async () => {
+  it("rejects path traversal and a nil creation ID", async () => {
     expect((await withDb(() => actions.deleteRepository("../repos"))).success).toBe(false);
     expect((await withDb(() => actions.createRepository("Project", "00000000-0000-0000-0000-000000000000", "owner"))).success).toBe(false);
-    expect((await withDb(() => actions.createRepositoryToken(id, "Laptop", "admin" as "read"))).success).toBe(false);
-    expect((await withDb(() => actions.createRepositoryToken(id, "bad\nname", "read"))).success).toBe(false);
-    expect((await withDb(() => actions.revokeRepositoryToken(id, "../tokens"))).success).toBe(false);
-    expect(db.gitAccessToken.create).not.toHaveBeenCalled();
-    expect(db.gitAccessToken.updateMany).not.toHaveBeenCalled();
     expect(db.gitRepository.updateMany).not.toHaveBeenCalled();
     expect(db.gitRepository.create).not.toHaveBeenCalled();
     expect(db.gitRepository.findFirst).not.toHaveBeenCalled();
@@ -177,32 +162,6 @@ describe("Web repository management", () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     expect((await withDb(() => actions.deleteRepository(id))).success).toBe(true);
     expect(mocks.revalidate).toHaveBeenCalledTimes(2);
-  });
-  it("creates a non-expiring token, stores only its hash, and shows the secret once", async () => {
-    const result = await withDb(() => actions.createRepositoryToken(id, " Laptop ", "write"));
-    if (!result.success) throw new Error("token was not created");
-    expect(result.data).toMatchObject({ id: tokenId, name: "Laptop", scope: "write", lastUsedAt: null });
-    expect(result.data.token).toMatch(/^bgt_[A-Za-z0-9_-]{43}$/u);
-    expect(result.data).not.toHaveProperty("expiresAt");
-    const stored = db.gitAccessToken.create.mock.calls[0][0].data;
-    expect(stored).toEqual({ repoId: id, ownerId: "owner", name: "Laptop", scope: "write",
-      tokenHash: createHash("sha256").update(result.data.token).digest("hex"), hint: result.data.token.slice(-4) });
-    expect(mocks.revalidate).not.toHaveBeenCalled();
-  });
-  it("caps the active tokens per repository", async () => {
-    db.gitAccessToken.count.mockResolvedValue(50);
-    expect(await withDb(() => actions.createRepositoryToken(id, "Laptop", "read"))).toEqual({ success: false, message: "dashboard:repositories.errors.tokenLimitReached" });
-    expect(db.gitAccessToken.create).not.toHaveBeenCalled();
-  });
-  it("lists active tokens without secrets and revokes one", async () => {
-    db.gitAccessToken.findMany.mockResolvedValue([{ id: tokenId, name: "Laptop", scope: "read", hint: "abcd",
-      tokenHash: "hash", createdAt, lastUsedAt: createdAt, revokedAt: null }]);
-    expect(await withDb(() => actions.listRepositoryTokens(id))).toEqual({ success: true, data: [{ id: tokenId, name: "Laptop",
-      scope: "read", hint: "abcd", createdAt: createdAt.toISOString(), lastUsedAt: createdAt.toISOString() }] });
-    expect(db.gitAccessToken.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { repoId: id, ownerId: "owner", revokedAt: null } }));
-    expect((await withDb(() => actions.revokeRepositoryToken(id, tokenId))).success).toBe(true);
-    expect(db.gitAccessToken.updateMany).toHaveBeenCalledWith({ where: { id: tokenId, repoId: id, ownerId: "owner", revokedAt: null }, data: { revokedAt: expect.any(Date) } });
-    expect(await withDb(() => actions.revokeRepositoryToken(id, "77777777-7777-4777-8777-777777777777"))).toEqual({ success: false, message: "dashboard:repositories.errors.notFound" });
   });
   it("does not fall back to a remote API without a Worker context", async () => {
     mocks.context.mockRejectedValue(new Error("no context"));

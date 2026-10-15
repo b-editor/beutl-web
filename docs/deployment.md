@@ -1,7 +1,7 @@
 # Deployment configuration
 
 This document records configuration and operational requirements shared by the
-three Cloudflare Workers. The public Web app and desktop APIs deploy together
+four Cloudflare Workers. The public Web app and desktop APIs deploy together
 as `beutl-web`; `packages/api` has no independent deployment. Worker routes and deploy commands are listed in the
 root [README](../README.md#deployment).
 
@@ -10,6 +10,7 @@ root [README](../README.md#deployment).
 Cloudflare bindings are declared alongside each deployable application:
 
 - Web and public API: [`apps/web/wrangler.jsonc`](../apps/web/wrangler.jsonc)
+- NuGet API: [`apps/nuget-server/wrangler.jsonc`](../apps/nuget-server/wrangler.jsonc)
 - Private image edit: [`apps/image-worker/wrangler.jsonc`](../apps/image-worker/wrangler.jsonc)
 - Admin: [`apps/admin/wrangler.jsonc`](../apps/admin/wrangler.jsonc)
 
@@ -22,7 +23,7 @@ commit secret values.
 `JWT_SECRET`, `JWT_ISSUER`, and `JWT_AUDIENCE` belong to the Web Worker, which
 both issues and validates desktop JWTs. Public versioned APIs, Git Durable
 Objects and all scheduled reconcilers use the Web deployment and bindings.
-Do not add a separate API Worker or route public APIs away from Web.
+Desktop APIs remain on Web. NuGet protocol endpoints have their own Worker.
 
 The private image-edit Worker has a separate JWT signing key. Set the same
 new random value as `AI_IMAGE_WORKER_JWT_SECRET` on `beutl-web` and
@@ -33,6 +34,30 @@ public route or workers.dev URL. Its database Hyperdrive, R2 binding, storage
 configuration, and `OPENROUTER_API_KEY` / `VERCEL_AI_GATEWAY_API_KEY` secrets
 must address the same production resources as Web before the Web service
 binding is deployed. Other Web/API routes retain their existing behavior.
+
+## NuGet registry deployment
+
+Apply `20261013000000_nuget_registry` before deploying the new application code.
+The migration locks only currently published Web releases and reserves those
+version identities. It refuses package IDs that differ only by case; resolve
+such IDs manually. Retain the `Package_name_lower_key` SQL expression index in
+later schema changes. No old NuGet data or credentials are imported.
+
+Configure `beutl-nuget-server` with the same Hyperdrive and object storage as Web.
+Set an identical, new random `NUGET_DOWNLOAD_SECRET` on Web and NuGet. This signs
+120-second, file-bound browser download tickets. Also copy the Web desktop
+`JWT_SECRET`, `JWT_ISSUER` and `JWT_AUDIENCE` to NuGet for existing desktop clients;
+do not copy the image Worker's separate JWT credentials.
+
+Deploy NuGet before Web, and switch `nuget.beditor.net` to the new Worker during
+the manually managed cutover. The CI deploy order includes NuGet before Web.
+The NuGet Worker serves no HTML. SDK packages appear in the Web store's **SDK**
+filter with `type=development`; their details live at `/[lang]/packages/[name]`.
+`NUGET_PUBLIC_ORIGIN` defaults to `https://nuget.beditor.net`; for local testing,
+set it to the local NuGet Worker URL in both applications. Configure
+`CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_BEUTL_DATABASE_HYPERDRIVE` for
+local database access. Production deployment and data movement are separate
+operational steps, not part of a dry-run build.
 
 ## First hosted Git deployment
 
@@ -76,7 +101,7 @@ Git/LFS uses the same `BEUTL_S3_*` configuration and private bucket as
 File/AI storage. Its lifecycle rules must preserve referenced Git/LFS versions.
 
 User files and AI outputs live in one object store used by the Web Worker's
-UI, public APIs and scheduled reconcilers. The admin and private image Workers
+UI, public APIs and scheduled reconcilers. The admin, NuGet and private image Workers
 use the same bucket. The admin Worker takes the same configuration so that
 `/admin/storage` can show where each file's object lives and move it.
 
@@ -89,7 +114,7 @@ use the same bucket. The admin Worker takes the same configuration so that
 
 ### S3 compatible storage
 
-Set `BEUTL_STORAGE_PROVIDER=s3` on all three Workers (Web/API, admin,
+Set `BEUTL_STORAGE_PROVIDER=s3` on all four Workers (Web/API, admin, NuGet,
 and private image edit) together with:
 
 - `BEUTL_S3_ENDPOINT`: the service URL, for example `https://s3.example.com`,

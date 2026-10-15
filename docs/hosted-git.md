@@ -77,6 +77,11 @@ signed-in account, without an API token.
 
 ## Access tokens
 
+Create and revoke repository keys under **Account → Security → API keys**,
+alongside NuGet keys. Select **Repository** and the target repository when
+creating a key. Keys can also be created and revoked directly in the
+repository's **Connection details** dialog, which provides the clone URL and command.
+
 Each repository can have up to 50 access tokens with `read` or `write` scope.
 Tokens do not expire. Revoking a token, deleting its repository, or the
 repository leaving the account that created the token stops it working. Only a

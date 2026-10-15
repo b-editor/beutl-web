@@ -2,15 +2,23 @@
 
 import { Input } from "@beutl/ui/ui/input";
 import { Label } from "@beutl/ui/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@beutl/ui/ui/select";
 import { Separator } from "@beutl/ui/ui/separator";
 import { createNewProject } from "./actions";
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { ErrorDisplay } from "@beutl/ui/error-display";
 import SubmitButton from "@beutl/ui/submit-button";
 import { useTranslation } from "@beutl/ui/i18n-client";
 
 export function Form({ lang }: { lang: string }) {
   const [state, dispatch] = useActionState(createNewProject, {});
+  const [audience, setAudience] = useState("USER");
   const { t } = useTranslation(lang);
 
   return (
@@ -19,6 +27,28 @@ export function Form({ lang }: { lang: string }) {
         <h2 className="font-bold text-2xl">
           {t("developer:newProject.title")}
         </h2>
+        <div className="rounded-lg border text-card-foreground flex flex-col mt-4">
+          <Label className="font-bold text-md m-6 mb-4" htmlFor="audience">
+            {t("developer:nuget.audience")}
+          </Label>
+          <Separator />
+          <Select name="audience" value={audience} onValueChange={setAudience}>
+            <SelectTrigger
+              id="audience"
+              aria-describedby="audience-description"
+              className="max-w-sm w-auto mt-4 mx-6"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="USER">{t("developer:nuget.userPackages")}</SelectItem>
+              <SelectItem value="DEVELOPMENT">{t("developer:nuget.title")}</SelectItem>
+            </SelectContent>
+          </Select>
+          <p id="audience-description" className="text-sm text-muted-foreground m-6 mt-2">
+            {t(audience === "DEVELOPMENT" ? "developer:nuget.description" : "developer:nuget.userDescription")}
+          </p>
+        </div>
         <div className="rounded-lg border text-card-foreground flex flex-col mt-4">
           <Label className="font-bold text-md m-6 mb-4" htmlFor="packageId">
             {t("developer:newProject.packageId")}

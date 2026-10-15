@@ -35,6 +35,11 @@ jobs:
           run-install: false
       - name: Install dependencies
         run: vp install --frozen-lockfile
+      - name: Check NuGet Worker
+        run: |
+          vp run --filter @beutl/nuget-server typecheck
+          vp run --filter @beutl/nuget-server build
+          vp run --filter @beutl/nuget-server check:runtime
       - name: Run tests
         run: vp run test --maxWorkers=2 --testTimeout=60000 --hookTimeout=120000
 
@@ -97,6 +102,11 @@ jobs:
           fi
       - name: Deploy private image Worker
         run: vp run deploy:image-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Deploy NuGet API Worker
+        run: vp run deploy:nuget-server
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

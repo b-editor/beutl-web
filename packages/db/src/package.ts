@@ -9,6 +9,11 @@ import {
   deleteUnreferencedFileWithStorageCleanup,
 } from "./file";
 
+/** Prisma's insensitive equality uses ILIKE; package IDs must match underscores literally. */
+export function packageNameFilter(name: string) {
+  return { equals: name.replace(/[\\%_]/gu, "\\$&"), mode: "insensitive" as const };
+}
+
 export async function findPackageBasicByName({
   name,
   prisma,
@@ -19,6 +24,7 @@ export async function findPackageBasicByName({
   const db = prisma ?? await getDb();
   return db.package.findFirst({
     where: {
+      audience: "USER",
       name: name,
     },
     select: {
@@ -59,6 +65,7 @@ export async function findPackageForLibraryResponse({
   const db = prisma ?? await getDb();
   return await db.package.findFirst({
     where: {
+      audience: "USER",
       id: pkgId,
     },
     select: {
@@ -154,6 +161,7 @@ export async function retrieveDevPackagesByUserId({
     },
     select: {
       id: true,
+      audience: true,
       name: true,
       displayName: true,
       published: true,
@@ -181,6 +189,7 @@ export async function findPublishedPackageForLibrary({
   const db = prisma || await getDb();
   return await db.package.findFirst({
     where: {
+      audience: "USER",
       id,
       published: true,
     },
@@ -250,6 +259,7 @@ export async function retrievePublishedPackagesByUserName({
   const db = prisma || await getDb();
   return await db.package.findMany({
     where: {
+      audience: "USER",
       user: {
         Profile: {
           userName: profileUserNameFilter(userName),
@@ -317,6 +327,7 @@ export async function retrieveLatestPublishedPackages({
   const db = prisma ?? await getDb();
   return await db.package.findMany({
     where: {
+      audience: "USER",
       published: true,
     },
     orderBy: {
@@ -355,14 +366,12 @@ export async function retrieveDevPackageByName({
   const db = prisma || await getDb();
   return await db.package.findFirst({
     where: {
-      name: {
-        equals: name,
-        mode: "insensitive",
-      },
+      name: packageNameFilter(name),
       userId: userId,
     },
     select: {
       id: true,
+      audience: true,
       name: true,
       displayName: true,
       description: true,
@@ -416,6 +425,7 @@ export async function retrieveDevPackageByName({
           targetVersion: true,
           id: true,
           published: true,
+          artifactLocked: true,
           file: {
             select: {
               name: true,
@@ -437,20 +447,19 @@ export async function existsPackageName({
   const db = prisma || await getDb();
   return await db.package.count({
     where: {
-      name: {
-        equals: name,
-        mode: "insensitive",
-      },
+      name: packageNameFilter(name),
     },
   });
 }
 
 export async function createDevPackage({
   name,
+  audience = "USER",
   userId,
   prisma,
 }: {
   name: string;
+  audience?: "USER" | "DEVELOPMENT";
   userId: string;
   prisma?: PrismaTransaction;
 }) {
@@ -458,6 +467,7 @@ export async function createDevPackage({
   return await db.package.create({
     data: {
       name: name,
+      audience,
       userId: userId,
       description: "",
       shortDescription: "",

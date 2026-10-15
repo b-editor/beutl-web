@@ -46,6 +46,7 @@ model User {
   AiOperationModel             AiOperationModel[]
   StorageUpload                StorageUpload[]
   GitRepository                GitRepository[]
+  NugetToken                   NugetToken[]
 }
 
 // Hosted project history is opt-in and separate from the existing user file
@@ -371,6 +372,7 @@ model StorageUpload {
 model Package {
   id                String              @id @default(uuid())
   name              String              @unique
+  audience          PackageAudience     @default(USER)
   displayName       String?
   description       String
   shortDescription  String
@@ -1047,12 +1049,52 @@ model Release {
   description   String
   fileId        String?
   published     Boolean
+  // Sticky after first publication, including when the release is later hidden.
+  artifactLocked Boolean @default(false)
+  nugetListed   Boolean @default(true)
+  nugetVersion  String?
+  nugetMetadata Json?
+  nuspec        String?
+  readme        String?
+  downloads     BigInt @default(0)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   file          File?    @relation(fields: [fileId], references: [id])
   package       Package  @relation(fields: [packageId], references: [id], onDelete: Cascade)
 
   @@index([packageId])
+  @@unique([packageId, nugetVersion])
+}
+
+enum PackageAudience {
+  USER
+  DEVELOPMENT
+}
+
+// No foreign key: deleting a release/account must not let its published identity
+// be reused with different bytes by a subsequent owner.
+model PublishedPackageVersion {
+  name      String
+  version   String
+  releaseId String @unique
+  createdAt DateTime @default(now())
+
+  @@id([name, version])
+}
+
+model NugetToken {
+  id         String @id @default(uuid())
+  userId     String
+  name       String
+  tokenHash  String @unique
+  hint       String
+  canPush    Boolean @default(false)
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  user       User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model NativeAppAuth {

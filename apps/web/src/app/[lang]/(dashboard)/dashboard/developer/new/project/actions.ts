@@ -19,10 +19,11 @@ export type State = {
 
 const formSchema = (t: Translator) =>
   z.object({
+    audience: z.enum(["USER", "DEVELOPMENT"]).default("USER"),
     packageId: z
       .string()
       .regex(
-        /^[a-zA-Z0-9_.]*$/,
+        /^\w+(?:[._-]\w+)*$/,
         t("developer:validation.packageIdCharacters"),
       )
       .and(z.string().max(50, t("developer:validation.packageIdMax")))
@@ -47,7 +48,7 @@ export async function createNewProject(
       };
     }
 
-    const { packageId } = validated.data;
+    const { packageId, audience } = validated.data;
     if (await existsPackageName({ name: packageId })) {
       return {
         errors: {
@@ -59,6 +60,7 @@ export async function createNewProject(
     }
     const { id } = await createDevPackage({
       name: packageId,
+      audience,
       userId: session.user.id,
     });
     await addAuditLog({
