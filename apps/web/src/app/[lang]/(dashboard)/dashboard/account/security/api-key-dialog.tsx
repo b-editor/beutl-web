@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition, type FormEvent } from "react";
-import { Copy, KeyRound, Loader2, Terminal } from "lucide-react";
+import { KeyRound, Loader2, Terminal } from "lucide-react";
 import { isValidGitAccessTokenName, NUGET_SERVICE_INDEX } from "@beutl/core";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { Button } from "@beutl/ui/ui/button";
@@ -10,6 +10,7 @@ import { Input } from "@beutl/ui/ui/input";
 import { Label } from "@beutl/ui/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@beutl/ui/ui/select";
 import { actionFailureKey } from "@/lib/action-error";
+import { CopyableInput } from "@/components/copyable-input";
 import { authenticatedCloneUrl, repositoryCloneCommand } from "../../repositories/connection";
 import { createApiKey } from "./api-key-actions";
 import type { AccountApiKeys, ApiKeySettings, ApiKeySummary, CreatedApiKey } from "./api-key-types";
@@ -65,27 +66,21 @@ export function ApiKeyDialog({ lang, repositories, gitAvailable, initialReposito
       {created ? <div className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="api-key-secret">{t("account:apiKeys.key")}</Label>
-          <div className="flex gap-2">
-            <Input id="api-key-secret" type="password" autoComplete="off" readOnly value={created.secret} className="min-w-0 font-mono text-xs" />
-            <Button variant="outline" size="icon" aria-label={t("account:apiKeys.copyKey")} onClick={() => copy(created.secret)}><Copy className="size-4" aria-hidden /></Button>
-          </div>
+          <CopyableInput id="api-key-secret" secret value={created.secret} className="text-xs"
+            copyLabel={t("account:apiKeys.copyKey")} onCopy={copy} />
         </div>
         {created.cloneUrl && <>
           <div className="space-y-2">
             <Label htmlFor="api-key-clone-url">{t("account:apiKeys.authenticatedCloneUrl")}</Label>
-            <div className="flex gap-2">
-              <Input id="api-key-clone-url" type="password" autoComplete="off" readOnly value={authenticatedCloneUrl(created.cloneUrl, created.secret)} className="min-w-0 font-mono text-xs" />
-              <Button variant="outline" size="icon" aria-label={t("account:apiKeys.copyUrl")} onClick={() => copy(authenticatedCloneUrl(created.cloneUrl!, created.secret))}><Copy className="size-4" aria-hidden /></Button>
-            </div>
+            <CopyableInput id="api-key-clone-url" secret value={authenticatedCloneUrl(created.cloneUrl, created.secret)} className="text-xs"
+              copyLabel={t("account:apiKeys.copyUrl")} onCopy={copy} />
           </div>
           <Button variant="outline" onClick={() => copy(repositoryCloneCommand(created.cloneUrl!, created.secret))}><Terminal className="size-4" aria-hidden />{t("account:apiKeys.copyCloneCommand")}</Button>
         </>}
         {created.key.kind === "nuget" && <div className="space-y-2">
           <Label htmlFor="api-key-nuget-source">{t("account:apiKeys.nugetSource")}</Label>
-          <div className="flex gap-2">
-            <Input id="api-key-nuget-source" value={NUGET_SERVICE_INDEX} readOnly className="min-w-0 font-mono text-xs" />
-            <Button variant="outline" size="icon" aria-label={t("account:apiKeys.copyUrl")} onClick={() => copy(NUGET_SERVICE_INDEX)}><Copy className="size-4" aria-hidden /></Button>
-          </div>
+          <CopyableInput id="api-key-nuget-source" value={NUGET_SERVICE_INDEX} className="text-xs"
+            copyLabel={t("account:apiKeys.copyUrl")} onCopy={copy} />
         </div>}
       </div> : <form id="create-api-key" onSubmit={create} className="space-y-4">
         <div className="space-y-2">

@@ -17,7 +17,7 @@ const file = () => ({ name: "library.nupkg", size: 4n, objectKey: "object", sha2
   Package: [], Profile: [], PackageScreenshot: [], aiJobResult: null,
   Release: [{ published: true, package: { ...pkg, packagePricing: paid ? [{ id: "price", price: 100 }] : [] } }] });
 const models = {
-  package: { findFirst: vi.fn(async () => pkg), findUniqueOrThrow: vi.fn(async () => pkg), findMany: vi.fn(async () => []), count: vi.fn(async () => 0) },
+  package: { findFirst: vi.fn(async () => pkg), findUniqueOrThrow: vi.fn(async () => pkg), findMany: vi.fn(async () => [] as (typeof pkg)[]), count: vi.fn(async () => 0) },
   release: { updateMany: vi.fn(async () => ({ count: 1 })), update: vi.fn(async () => release) },
   file: { findFirst: vi.fn(async () => file()) },
   nugetToken: { findUnique: vi.fn(async ({ where }: { where: { tokenHash: string } }) => where.tokenHash === createHash("sha256").update(secret).digest("hex") ?
@@ -53,16 +53,73 @@ describe("NuGet registry routes", () => {
     const result = await (await request("/v3/registration/library/index.json")).json();
     expect(result.items[0].items[0].catalogEntry.listed).toBe(false);
     expect(await (await request("/v3/package/library/1.0.0/library.1.0.0.nupkg")).text()).toBe("test");
+    expect(models.nugetToken.findUnique).not.toHaveBeenCalled();
+  });
+  it("uses the configured origin and normalized links across catalog responses", async () => {
+    const origin = "https://packages.example.test";
+    const env = { NUGET_PUBLIC_ORIGIN: `${origin}/` };
+    const versions = ["1.10.0", "1.2.0", "01.11.0.0-Beta.2+build"];
+    const catalog = {
+      ...pkg,
+      Release: versions.map((version, index) => ({
+        ...release, id: `release-${index}`, version, downloads: BigInt(index + 1), nugetListed: true,
+      })),
+    };
+    models.package.findMany.mockResolvedValueOnce([catalog]);
+    models.package.count.mockResolvedValueOnce(1);
+    const search = await app.request(`${origin}/v3/search?q=Library&skip=4&take=8&prerelease=true`, {}, env);
+    const result = await search.json();
+    expect(result.totalHits).toBe(1);
+    expect(result.data[0]).toMatchObject({
+      "@id": `${origin}/v3/registration/library/index.json`,
+      version: "1.11.0-beta.2", totalDownloads: 6,
+      versions: [
+        { version: "1.2.0", "@id": `${origin}/v3/registration/library/1.2.0.json` },
+        { version: "1.10.0", "@id": `${origin}/v3/registration/library/1.10.0.json` },
+        { version: "1.11.0-beta.2", "@id": `${origin}/v3/registration/library/1.11.0-beta.2.json` },
+      ],
+    });
+    expect(models.package.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 4, take: 8 }));
+
+    models.package.findFirst.mockResolvedValueOnce(catalog);
+    const registration = await (await app.request(`${origin}/v3/registration/LIBRARY/index.json`, {}, env)).json();
+    expect(registration.items[0]).toMatchObject({ lower: "1.2.0", upper: "1.11.0-beta.2", count: 3 });
+    expect(registration.items[0].items[2].packageContent).toBe(`${origin}/v3/package/library/1.11.0-beta.2/library.1.11.0-beta.2.nupkg`);
+
+    const index = await (await app.request(`${origin}/v3/index.json`, {}, env)).json();
+    expect(index.resources.every((resource: { "@id": string }) => resource["@id"].startsWith(`${origin}/`))).toBe(true);
+    expect(models.nugetToken.findUnique).not.toHaveBeenCalled();
+  });
+  it("preserves security and CORS headers on catalog and content routes", async () => {
+    for (const path of ["/v3/index.json", "/v3/registration/library/1.0.0.json", "/v3/files/file"]) {
+      const response = await request(path, { headers: { Origin: "https://beutl.example" } });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("access-control-allow-origin")).toBe("*");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+    }
+    const preflight = await request("/v3/files/file", {
+      method: "OPTIONS", headers: { Origin: "https://beutl.example", "Access-Control-Request-Method": "GET" },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("access-control-allow-headers")).toContain("Range");
+  });
+  it("keeps identity validation and conflict errors mapped at the API boundary", async () => {
+    expect((await request("/v3/package/library/not-a-version/library.nupkg")).status).toBe(400);
+    models.package.findFirst.mockRejectedValueOnce(Object.assign(new Error("conflict"), { code: "P2002" }));
+    const conflict = await request("/api/v2/package/library/1.0.0", { method: "POST", headers: { "X-NuGet-ApiKey": secret } });
+    expect(conflict.status).toBe(409);
+    expect((await conflict.json()).message).toContain("previously published");
   });
   it("serves HEAD without fetching package bytes", async () => {
     const response = await request("/v3/files/file", { method: "HEAD" });
     expect(response.status).toBe(200); expect(response.headers.get("content-length")).toBe("4");
     expect(bucket.get).not.toHaveBeenCalled();
   });
-  it("authenticates pushes before reading their request body", async () => {
+  it.each(["/api/v2/package", "/api/v2/package/"])("authenticates %s before reading its request body", async (path) => {
     const cancel = vi.fn();
     const stream = new ReadableStream({ pull() { throw new Error("must not read"); }, cancel }, { highWaterMark: 0 });
-    const response = await request("/api/v2/package/", { method: "PUT", body: stream, duplex: "half" } as RequestInit);
+    const response = await request(path, { method: "PUT", body: stream, duplex: "half" } as RequestInit);
     expect(response.status).toBe(401); expect(cancel).toHaveBeenCalled();
     expect(bucket.put).not.toHaveBeenCalled();
   });
@@ -75,6 +132,14 @@ describe("NuGet registry routes", () => {
     expect((await request("/api/v2/package/library/1.0.0", { method: "DELETE", headers: { "X-NuGet-ApiKey": secret } })).status).toBe(204);
     expect(models.release.update).toHaveBeenCalledWith({ where: { id: "release" }, data: { nugetListed: false, artifactLocked: true } });
     expect(bucket.put).not.toHaveBeenCalled();
+  });
+  it.each(["DELETE", "POST"])("requires authentication and push scope for %s listing changes", async (method) => {
+    expect((await request("/api/v2/package/library/1.0.0", { method })).status).toBe(401);
+    canPush = false;
+    expect((await request("/api/v2/package/library/1.0.0", {
+      method, headers: { "X-NuGet-ApiKey": secret },
+    })).status).toBe(403);
+    expect(models.release.update).not.toHaveBeenCalled();
   });
   it("enforces purchase access for user packages on canonical downloads", async () => {
     paid = true;

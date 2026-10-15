@@ -3,9 +3,11 @@ export type PackageAudience = "USER" | "DEVELOPMENT";
 export const NUGET_ORIGIN = "https://nuget.beditor.net";
 export const NUGET_SERVICE_INDEX = `${NUGET_ORIGIN}/v3/index.json`;
 
+export class InvalidNugetIdentityError extends Error {}
+
 export function normalizeNugetId(id: string): string {
   if (id.length > 100 || !/^\w+(?:[._-]\w+)*$/u.test(id)) {
-    throw new Error("Invalid NuGet package ID");
+    throw new InvalidNugetIdentityError("Invalid NuGet package ID");
   }
   return id.toLowerCase();
 }
@@ -13,9 +15,9 @@ export function normalizeNugetId(id: string): string {
 /** NuGet identity ignores build metadata, leading zeroes and a zero revision. */
 export function normalizeNugetVersion(version: string): string {
   const match = /^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u.exec(version);
-  if (!match || version.length > 128) throw new Error("Invalid NuGet version");
+  if (!match || version.length > 128) throw new InvalidNugetIdentityError("Invalid NuGet version");
   const numbers = match.slice(1, 5).map((n) => Number(n ?? 0));
-  if (numbers.some((n) => !Number.isSafeInteger(n) || n > 2147483647)) throw new Error("Invalid NuGet version");
+  if (numbers.some((n) => !Number.isSafeInteger(n) || n > 2147483647)) throw new InvalidNugetIdentityError("Invalid NuGet version");
   return numbers.slice(0, numbers[3] ? 4 : 3).join(".") + (match[5] ? `-${match[5].toLowerCase()}` : "");
 }
 

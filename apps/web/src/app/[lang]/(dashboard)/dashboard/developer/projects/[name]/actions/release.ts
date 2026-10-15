@@ -1,15 +1,12 @@
 "use server";
 
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
-import type { ActionResult, PackageType } from "@beutl/core";
-import { applyPackageType, getPackageType } from "@beutl/core";
-import { blobReader, readNugetPackage, InvalidNugetPackageError } from "@beutl/api/nuget/archive";
-import { ReleaseArtifactLockedError, ReleaseIdentityConflictError, type ReleaseNugetData } from "@beutl/db";
+import { applyPackageType, isValidNugetVersion, type ActionResult } from "@beutl/core";
+import { InvalidNugetPackageError } from "@beutl/api/nuget/archive";
+import { ReleaseArtifactLockedError, ReleaseIdentityConflictError } from "@beutl/db";
 import { authenticated } from "@/lib/auth-guard";
-import { buildDataPackageNupkgFile } from "@/lib/data-package";
 import {
   getPackageNameFromPackageId,
-  getProfileByUserId,
   retrieveDevPackageByName,
   startTransaction,
   deleteUnreferencedFileWithStorageCleanup,
@@ -27,7 +24,7 @@ import {
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
 import { revalidatePath } from "next/cache";
-import { isValidNugetVersion } from "@beutl/core";
+import { prepareReleaseArtifact } from "./release-artifact";
 import {
   createDedicatedFile,
   releaseSchema,
@@ -64,10 +61,6 @@ export async function updateRelease(
     }
 
     return await sameUser(release.packageId, session.user.id, t, async () => {
-      // Only the kind is decided here; it is merged into the package's visible tags
-      // inside the write transaction, so a tag edit landing meanwhile is not discarded.
-      let packageType: PackageType | undefined;
-      let nuget: ReleaseNugetData | undefined;
       const uploaded = formData.getAll("file").filter((f): f is File => typeof f !== "string" && f.size > 0);
       if (uploaded.length && (release.artifactLocked || release.published)) {
         return { success: false, message: t("developer:release.artifactLocked") };
@@ -88,6 +81,19 @@ export async function updateRelease(
         const { published: oldPublished } = await getReleasePublishedByIdOrThrow({
           id: validated.data.id,
         });
+
+        const prepared = uploaded.length > 0 ? await prepareReleaseArtifact({
+          files: uploaded,
+          audience: release.package.audience,
+          id: packageName,
+          version: release.version,
+          title: validated.data.title,
+          description: validated.data.description,
+          user: session.user,
+          t,
+        }) : undefined;
+        if (prepared && !prepared.ok) return { success: false, message: prepared.message };
+        const artifact = prepared?.artifact;
 
         const publishRelease = async (
           tx: PrismaTransaction,
@@ -123,14 +129,15 @@ export async function updateRelease(
             targetVersion: validated.data.targetVersion,
             published: validated.data.published === "on",
             fileId,
-            nuget,
+            nuget: artifact?.nuget,
             prisma: tx,
           });
 
-          if (packageType) {
+          // Merge the upload's kind into the current tags so concurrent edits survive.
+          if (artifact?.packageType) {
             await updateDevPackageTags({
               packageId: release.packageId,
-              tags: applyPackageType(devPackage.tags, packageType),
+              tags: applyPackageType(devPackage.tags, artifact.packageType),
               prisma: tx,
             });
           }
@@ -145,19 +152,11 @@ export async function updateRelease(
         };
 
         let data: ReleaseRecord;
-        const singleNupkg =
-          uploaded.length === 1 && uploaded[0].name.toLowerCase().endsWith(".nupkg");
-
-        if (singleNupkg) {
-          // A lone .nupkg is an extension release; drop any data markers a previous
-          // upload may have left so the store stops classifying it as a data package.
-          packageType = release.package.audience === "USER" ? "extension" : undefined;
-          nuget = await readNugetPackage(blobReader(uploaded[0]), { id: packageName, version: release.version });
-
+        if (artifact) {
           let published: ReleaseRecord | undefined;
           const result = await createDedicatedFile(
             session.user.id,
-            uploaded[0],
+            artifact.file,
             t,
             async (tx, record) => {
               published = await publishRelease(tx, record.id);
@@ -174,51 +173,8 @@ export async function updateRelease(
             throw new Error("Release artifact publication did not return a result");
           }
           data = published;
-        } else if (uploaded.length > 0) {
-          if (release.package.audience === "DEVELOPMENT") return { success: false, message: t("developer:nuget.nupkgRequired") };
-          const profile = await getProfileByUserId(session.user.id);
-          const username = profile?.userName || session.user.name || session.user.id;
-
-          const built = await buildDataPackageNupkgFile({
-            files: uploaded,
-            id: packageName,
-            version: release.version,
-            title: validated.data.title,
-            description: validated.data.description,
-            username,
-            t,
-          });
-          if (!built.ok) {
-            return { success: false, message: built.message };
-          }
-
-          packageType = getPackageType(built.tags);
-          nuget = built.nuget;
-
-          let published: ReleaseRecord | undefined;
-          const result = await createDedicatedFile(
-            session.user.id,
-            built.file,
-            t,
-            async (tx, record) => {
-              published = await publishRelease(tx, record.id);
-            },
-          );
-          if (!result.success) {
-            return { success: false, message: result.message };
-          }
-
-          if (!published) {
-            throw new Error("Release artifact publication did not return a result");
-          }
-          data = published;
         } else {
-          try {
-            data = await startTransaction((tx) => publishRelease(tx));
-          } catch (error) {
-            if (!(error instanceof ReleaseFileRequiredError)) throw error;
-            return { success: false, message: t("developer:errors.fileNotFound") };
-          }
+          data = await startTransaction((tx) => publishRelease(tx));
         }
 
         await addAuditLog({
@@ -244,6 +200,7 @@ export async function updateRelease(
           data,
         };
       } catch (error) {
+        if (error instanceof ReleaseFileRequiredError) return { success: false, message: t("developer:errors.fileNotFound") };
         if (error instanceof ReleaseArtifactLockedError) return { success: false, message: t("developer:release.artifactLocked") };
         if (error instanceof ReleaseIdentityConflictError) return { success: false, message: t("developer:release.versionReserved") };
         if (error instanceof InvalidNugetPackageError) return { success: false, message: error.message };

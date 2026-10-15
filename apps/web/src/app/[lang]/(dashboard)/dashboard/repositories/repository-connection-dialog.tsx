@@ -1,10 +1,9 @@
 "use client";
 
 import { useEffect, useState, useTransition, type FormEvent } from "react";
-import { Copy, KeyRound, Loader2, Terminal, Trash2 } from "lucide-react";
+import { KeyRound, Loader2, Terminal, Trash2 } from "lucide-react";
 import {
   isValidGitAccessTokenName,
-  type CreatedGitAccessToken,
   type GitAccessTokenScope,
   type GitAccessTokenSummary,
   type GitRepositorySummary,
@@ -16,8 +15,10 @@ import { Input } from "@beutl/ui/ui/input";
 import { Label } from "@beutl/ui/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@beutl/ui/ui/select";
 import { createApiKey, retrieveApiKeys, revokeApiKey } from "../account/security/api-key-actions";
+import type { CreatedApiKey } from "../account/security/api-key-types";
 import { authenticatedCloneUrl, repositoryCloneCommand } from "./connection";
 import { actionFailureKey } from "@/lib/action-error";
+import { CopyableInput } from "@/components/copyable-input";
 
 export function RepositoryConnectionDialog({ repository, lang, onClose }: {
   repository: GitRepositorySummary; lang: string; onClose: () => void;
@@ -26,7 +27,7 @@ export function RepositoryConnectionDialog({ repository, lang, onClose }: {
   const [tokens, setTokens] = useState<GitAccessTokenSummary[]>();
   const [name, setName] = useState("");
   const [scope, setScope] = useState<GitAccessTokenScope>("read");
-  const [created, setCreated] = useState<CreatedGitAccessToken>();
+  const [created, setCreated] = useState<CreatedApiKey>();
   const [revoking, setRevoking] = useState<GitAccessTokenSummary>();
   const [notice, setNotice] = useState<string>();
   const [error, setError] = useState<string>();
@@ -61,11 +62,11 @@ export function RepositoryConnectionDialog({ repository, lang, onClose }: {
       setCreated(undefined);
       const result = await createApiKey({ kind: "repository", repositoryId: repository.id, name: name.trim(), scope });
       if (!result.success || !result.data) { setError(result.message ?? failure()); return; }
-      if (result.data.key.kind !== "repository") { setError(failure()); return; }
-      const { id, name: tokenName, scope: tokenScope, hint, createdAt, lastUsedAt } = result.data.key;
-      setCreated({ id, name: tokenName, scope: tokenScope, hint, createdAt, lastUsedAt, token: result.data.secret });
+      const { key } = result.data;
+      if (key.kind !== "repository") { setError(failure()); return; }
+      setCreated(result.data);
       // The list keeps the summary only; the secret stays in the one-time panel.
-      setTokens((rows) => [{ id, name: tokenName, scope: tokenScope, hint, createdAt, lastUsedAt }, ...(rows ?? [])]);
+      setTokens((rows) => [key, ...(rows ?? [])]);
       setName("");
     });
   };
@@ -73,7 +74,7 @@ export function RepositoryConnectionDialog({ repository, lang, onClose }: {
     const result = await revokeApiKey({ kind: "repository", repositoryId: repository.id, id: token.id });
     if (!result.success) { setError(result.message ?? failure()); return; }
     setTokens((rows) => rows?.filter((row) => row.id !== token.id));
-    if (created?.id === token.id) setCreated(undefined);
+    if (created?.key.id === token.id) setCreated(undefined);
     setRevoking(undefined);
     setNotice(t("account:apiKeys.revoked"));
   });
@@ -95,10 +96,8 @@ export function RepositoryConnectionDialog({ repository, lang, onClose }: {
         <div className="flex min-w-0 flex-col gap-5">
           <div className="flex flex-col gap-2">
             <Label htmlFor="repository-clone-url">{t("dashboard:repositories.cloneUrl")}</Label>
-            <div className="flex gap-2">
-              <Input id="repository-clone-url" readOnly value={repository.url} className="min-w-0 bg-muted/20 font-mono text-xs" onFocus={(event) => event.target.select()} />
-              <Button variant="outline" size="icon" aria-label={t("dashboard:repositories.copyUrl")} onClick={() => copy(repository.url)}><Copy className="size-4" aria-hidden /></Button>
-            </div>
+            <CopyableInput id="repository-clone-url" value={repository.url} selectOnFocus className="bg-muted/20 text-xs"
+              copyLabel={t("dashboard:repositories.copyUrl")} onCopy={copy} />
           </div>
 
           <section className="flex flex-col gap-3" aria-labelledby="repository-tokens-heading">
@@ -130,16 +129,12 @@ export function RepositoryConnectionDialog({ repository, lang, onClose }: {
             {created && <div className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-4">
               <p className="text-sm font-medium">{t("account:apiKeys.secretNotice")}</p>
               <Label htmlFor="repository-token">{t("account:apiKeys.key")}</Label>
-              <div className="flex gap-2">
-                <Input id="repository-token" type="password" autoComplete="off" readOnly value={created.token} className="min-w-0 font-mono" />
-                <Button variant="outline" size="icon" aria-label={t("account:apiKeys.copyKey")} onClick={() => copy(created.token)}><Copy className="size-4" aria-hidden /></Button>
-              </div>
+              <CopyableInput id="repository-token" secret value={created.secret}
+                copyLabel={t("account:apiKeys.copyKey")} onCopy={copy} />
               <Label htmlFor="repository-authenticated-url">{t("account:apiKeys.authenticatedCloneUrl")}</Label>
-              <div className="flex gap-2">
-                <Input id="repository-authenticated-url" type="password" autoComplete="off" readOnly value={authenticatedCloneUrl(repository.url, created.token)} className="min-w-0 font-mono text-xs" />
-                <Button variant="outline" size="icon" aria-label={t("dashboard:repositories.copyUrl")} onClick={() => copy(authenticatedCloneUrl(repository.url, created.token))}><Copy className="size-4" aria-hidden /></Button>
-              </div>
-              <Button onClick={() => copy(repositoryCloneCommand(repository.url, created.token))}>
+              <CopyableInput id="repository-authenticated-url" secret value={authenticatedCloneUrl(repository.url, created.secret)} className="text-xs"
+                copyLabel={t("dashboard:repositories.copyUrl")} onCopy={copy} />
+              <Button onClick={() => copy(repositoryCloneCommand(repository.url, created.secret))}>
                 <Terminal className="size-4" aria-hidden />{t("account:apiKeys.copyCloneCommand")}
               </Button>
             </div>}

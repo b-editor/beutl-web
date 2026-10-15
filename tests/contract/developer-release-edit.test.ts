@@ -1,8 +1,10 @@
 import { zipSync, strToU8 } from "fflate";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setDbProvider } from "@beutl/db";
+import { MATERIAL_TAG } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 import { createDedicatedStorageFile } from "@/lib/storage";
+import { blobReader, readNugetPackage } from "../../packages/api/src/nuget/archive";
 
 vi.mock("@/lib/auth-guard", () => ({ authenticated: async (fn: (session: unknown) => unknown) => fn({ user: { id: "owner", name: "Owner" } }) }));
 vi.mock("@beutl/next/language", () => ({ getLanguage: async () => "en" }));
@@ -21,6 +23,7 @@ describe("editing a release without replacing its artifact", () => {
   let update: ReturnType<typeof vi.fn>;
   let beforeTransaction: (() => void) | undefined;
   let models: {
+    profile: { findFirst: () => Promise<{ userName: string }> };
     publishedPackageVersion: { upsert: () => Promise<{ releaseId: string }> };
     release: { findUniqueOrThrow: () => Promise<unknown>; findFirst: () => Promise<typeof row>; findFirstOrThrow: () => Promise<typeof row>; update: ReturnType<typeof vi.fn> };
     package: { findUniqueOrThrow: () => Promise<{ name: string }>; findFirst: () => Promise<{ id: string; name: string; userId: string; tags: string[] }>; update: ReturnType<typeof vi.fn> };
@@ -31,6 +34,7 @@ describe("editing a release without replacing its artifact", () => {
     row = { id: RELEASE_ID, packageId: "pkg", version: "2.0.0", published: false, artifactLocked: false, package: { audience: "USER" }, file: { id: "existing-file", userId: "owner" } };
     update = vi.fn(async ({ data }) => Object.assign(row, data));
     models = {
+      profile: { findFirst: async () => ({ userName: "author" }) },
       publishedPackageVersion: { upsert: async () => ({ releaseId: RELEASE_ID }) },
       release: {
         findUniqueOrThrow: async () => ({ ...row, fileId: row.file?.id }),
@@ -107,6 +111,35 @@ describe("editing a release without replacing its artifact", () => {
     row.artifactLocked = true; row.published = published;
     const form = input(published); form.append("file", new File(["replacement"], "package.nupkg"));
     expect((await updateRelease(form)).success).toBe(false);
+    expect(createDedicatedStorageFile).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+  it("publishes data uploads through the same transaction and preserves concurrent custom tags", async () => {
+    row.file = null;
+    const record = { id: "data-file", objectKey: "data-key", size: 7n };
+    vi.mocked(createDedicatedStorageFile).mockImplementation(async ({ file, publish }) => {
+      const blob = await new Response(file.stream()).blob();
+      const metadata = await readNugetPackage(blobReader(blob));
+      expect(metadata.metadata).toMatchObject({ id: "Package", version: "2.0.0", authors: "author" });
+      models.package.findFirst = async () => ({ id: "pkg", name: "Package", userId: "owner", tags: ["edited-during-upload"] });
+      await publish?.(models as never, record);
+      return { kind: "created", record } as never;
+    });
+    const form = input(true);
+    form.append("file", new File(["image"], "image.png"));
+    expect(await updateRelease(form)).toMatchObject({ success: true });
+    expect(createDedicatedStorageFile).toHaveBeenCalledTimes(1);
+    expect(row).toMatchObject({ published: true, fileId: record.id, artifactLocked: true });
+    expect(models.package.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: { tags: expect.arrayContaining(["edited-during-upload", MATERIAL_TAG]) },
+    }));
+  });
+  it("rejects data uploads for SDK packages before storage", async () => {
+    row.package.audience = "DEVELOPMENT";
+    const form = input(true);
+    form.append("file", new File(["image"], "image.png"));
+    const { t } = await getTranslation("en");
+    expect(await updateRelease(form)).toMatchObject({ success: false, message: t("developer:nuget.nupkgRequired") });
     expect(createDedicatedStorageFile).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
   });
