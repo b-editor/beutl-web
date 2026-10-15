@@ -37,11 +37,27 @@ binding is deployed. Other Web/API routes retain their existing behavior.
 
 ## NuGet registry deployment
 
-Apply `20261013000000_nuget_registry` before deploying the new application code.
+Apply `20261013000000_nuget_registry` and `20261016000000_nuget_semver_level`
+before deploying the new application code. The latter backfills the SemVer 2
+search filter for existing versions and cached dependency ranges.
 The migration locks only currently published Web releases and reserves those
 version identities. It refuses package IDs that differ only by case; resolve
 such IDs manually. Retain the `Package_name_lower_key` SQL expression index in
 later schema changes. No old NuGet data or credentials are imported.
+
+The preflight also rejects historical IDs outside the NuGet ID syntax, including
+leading dots and repeated separators. Find them on the old schema with:
+
+```sql
+SELECT "id", "name" FROM "Package"
+WHERE length("name") > 100 OR "name" !~ '^[A-Za-z0-9_]+([._-][A-Za-z0-9_]+)*$';
+```
+
+Choose an unused valid ID for each affected project. If its artifacts already
+declare that valid nuspec ID, update `Package.name` to match it, retaining the
+row's `id` and ownership. Otherwise publish corrected artifacts under a valid
+project ID through the old dashboard, then remove the obsolete project before
+retrying. Renaming the database row alone cannot fix an invalid nuspec ID.
 
 Before changing the schema, it also rejects duplicate release identities,
 including drafts, `v` prefixes, build metadata and prerelease casing. Inspect
@@ -63,6 +79,8 @@ or choose artifacts automatically. If Prisma recorded the preflight as failed,
 resolve the data first, mark `20261013000000_nuget_registry` as rolled back with
 `prisma migrate resolve --rolled-back`, and retry the migration. The migration
 backfills canonical `nugetVersion` values while retaining original display versions.
+Once any version has been published, its package ID stays permanently reserved
+even if the project or account is deleted.
 
 Configure `beutl-nuget-server` with the same Hyperdrive and object storage as Web.
 Set an identical, new random `NUGET_DOWNLOAD_SECRET` on Web and NuGet. This signs

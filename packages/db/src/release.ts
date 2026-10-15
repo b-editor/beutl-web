@@ -1,7 +1,7 @@
 import { getDb } from "./provider";
 import { deleteUnreferencedFileWithStorageCleanup } from "./file";
 import { startRetryableTransaction, type PrismaTransaction } from "./transaction";
-import { normalizeNugetId, normalizeNugetVersion, type NugetMetadata } from "@beutl/core";
+import { normalizeNugetId, normalizeNugetVersion, requiresNugetSemVer2, type NugetMetadata } from "@beutl/core";
 
 export class ReleaseArtifactLockedError extends Error {
   constructor() { super("Published release files cannot be replaced. Create a new version."); }
@@ -194,6 +194,7 @@ export async function updateRelease({
         ...(published ? { artifactLocked: true } : {}),
         ...(nuget ? {
           nugetVersion: normalizeNugetVersion(current.version),
+          nugetSemVer2: requiresNugetSemVer2(current.version, nuget.metadata),
           nugetMetadata: nuget.metadata,
           nuspec: nuget.nuspec,
           readme: nuget.readme,
@@ -250,6 +251,7 @@ export async function createRelease({
         packageId,
         version,
         nugetVersion,
+        nugetSemVer2: requiresNugetSemVer2(version),
         title,
         description,
         targetVersion,

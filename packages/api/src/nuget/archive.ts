@@ -14,6 +14,27 @@ const invalid = (message: string, cause?: unknown): never => { throw new Invalid
 const text = (value: unknown): string => typeof value === "string" ? value : "";
 const list = <T>(value: T | T[] | undefined): T[] => value === undefined ? [] : Array.isArray(value) ? value : [value];
 
+function validateMetadata(metadata: NugetMetadata): NugetMetadata {
+  const limits = { title: 256, authors: 1024, description: 4000, summary: 4000,
+    projectUrl: 2048, licenseUrl: 2048, license: 2048, releaseNotes: 35000,
+    icon: 512, iconUrl: 2048, readme: 512 } as const;
+  for (const [field, limit] of Object.entries(limits)) {
+    if (metadata[field as keyof typeof limits].length > limit) invalid(`Package ${field} exceeds ${limit} characters`);
+  }
+  if (metadata.tags.length > 50 || metadata.tags.some((tag) => tag.length > 100)) invalid("Package tags exceed 50 entries or 100 characters per tag");
+  if (metadata.dependencyGroups.length > 100 || metadata.dependencyGroups.reduce((sum, group) => sum + group.dependencies.length, 0) > 1000) {
+    invalid("Too many package dependencies or target frameworks");
+  }
+  if (metadata.dependencyGroups.some((group) => group.targetFramework.length > 256 || group.dependencies.some((dependency) => dependency.range.length > 256))) {
+    invalid("Package dependency range or target framework is too long");
+  }
+  if (metadata.packageTypes.length > 10 || metadata.packageTypes.some((type) => type.name.length > 100 || type.version.length > 128)) invalid("Invalid package types");
+  if (Object.values(metadata.repository).some((value) => value.length > 2048)) invalid("Package repository metadata is too long");
+  // Also bound the aggregate stored/returned metadata, including dependency lists.
+  if (new TextEncoder().encode(JSON.stringify(metadata)).byteLength > 64 * 1024) invalid("Package metadata exceeds 64 KiB");
+  return metadata;
+}
+
 export function parseNuspec(nuspec: string): NugetMetadata {
   if (nuspec.length > METADATA_LIMIT || /<!DOCTYPE|<!ENTITY/iu.test(nuspec) || XMLValidator.validate(nuspec) !== true) {
     return invalid("Invalid package manifest");
@@ -33,7 +54,7 @@ export function parseNuspec(nuspec: string): NugetMetadata {
   const groups = list(m.dependencies?.group as { "@_targetFramework"?: string; dependency?: { "@_id"?: string; "@_version"?: string }[] } | undefined)
     .map((g) => ({ targetFramework: text(g["@_targetFramework"]), dependencies: dependencies(g.dependency) }));
   if (m.dependencies?.dependency) groups.unshift({ targetFramework: "", dependencies: dependencies(m.dependencies.dependency) });
-  return {
+  return validateMetadata({
     id, version, title: text(m.title) || id, authors: text(m.authors), description: text(m.description),
     summary: text(m.summary), tags: text(m.tags).split(/[\s,;]+/u).filter(Boolean),
     projectUrl: text(m.projectUrl), licenseUrl: text(m.licenseUrl), license: text(m.license?.["#text"]) || text(m.license),
@@ -43,7 +64,7 @@ export function parseNuspec(nuspec: string): NugetMetadata {
       .map((p) => ({ name: text(p["@_name"]), version: text(p["@_version"]) })),
     repository: { type: text(m.repository?.["@_type"]), url: text(m.repository?.["@_url"]),
       branch: text(m.repository?.["@_branch"]), commit: text(m.repository?.["@_commit"]) },
-  };
+  });
 }
 
 export function blobReader(blob: Blob): Reader {

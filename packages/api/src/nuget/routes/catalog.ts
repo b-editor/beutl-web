@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
-import { normalizeNugetVersion } from "@beutl/core";
-import { findNugetPackage, findNugetVersion, searchNugetPackages, sortNugetReleases } from "../catalog";
+import { compareNugetVersions, isValidNugetVersion, normalizeNugetId, normalizeNugetVersion, requiresNugetSemVer2 } from "@beutl/core";
+import { getDb, packageNameFilter } from "@beutl/db";
+import { catalogReleaseSelect, findNugetPackage, searchNugetPackages, sortNugetReleases } from "../catalog";
 import { nugetOrigin, registrationItem, registrationUrl, searchItem, serviceIndex, type NugetEnv } from "../protocol";
 
 const routes = new Hono<NugetEnv>();
@@ -10,9 +11,11 @@ function boundedInteger(value: string | undefined, fallback: number, max: number
 }
 
 function searchOptions(c: Context<NugetEnv>) {
+  const level = c.req.query("semVerLevel");
   return {
     query: c.req.query("q"),
     prerelease: c.req.query("prerelease") === "true",
+    semVer2: !!level && isValidNugetVersion(level) && compareNugetVersions(level, "2.0.0") >= 0,
     skip: boundedInteger(c.req.query("skip"), 0, 100000),
     take: boundedInteger(c.req.query("take"), 20, 100),
   };
@@ -33,7 +36,8 @@ routes.get("/autocomplete", async (c) => {
   if (id) {
     const pkg = await findNugetPackage(id);
     const releases = pkg?.Release.filter((release) =>
-      release.nugetListed && (options.prerelease || !normalizeNugetVersion(release.version).includes("-"))) ?? [];
+      release.nugetListed && (options.prerelease || !normalizeNugetVersion(release.version).includes("-")) &&
+      (options.semVer2 || !(release.nugetSemVer2 || requiresNugetSemVer2(release.version)))) ?? [];
     return c.json({
       data: sortNugetReleases(releases).reverse().map((release) => normalizeNugetVersion(release.version)),
     });
@@ -42,31 +46,75 @@ routes.get("/autocomplete", async (c) => {
   return c.json({ totalHits, data: packages.map((pkg) => pkg.name) });
 });
 
-routes.get("/registration/:id/index.json", async (c) => {
-  const pkg = await findNugetPackage(c.req.param("id"));
-  if (!pkg?.Release.length) return c.notFound();
+const REGISTRATION_PAGE_SIZE = 64;
 
+async function registrationPackage(id: string) {
+  return (await getDb()).package.findFirst({
+    where: { name: packageNameFilter(normalizeNugetId(id)), published: true },
+    select: { name: true, Release: {
+      where: { published: true, fileId: { not: null } }, select: { id: true, version: true },
+    } },
+  });
+}
+
+function pageDescriptor(id: string, releases: { version: string }[], origin: string) {
+  const lower = normalizeNugetVersion(releases[0].version);
+  const upper = normalizeNugetVersion(releases[releases.length - 1].version);
+  return { "@id": `${origin}/v3/registration/${normalizeNugetId(id)}/page/${lower}/${upper}.json`,
+    parent: registrationUrl(id, origin), count: releases.length, lower, upper };
+}
+
+async function registrationPage(pkg: { name: string }, versions: { id: string; version: string }[], origin: string) {
+  const releases = await (await getDb()).release.findMany({
+    where: { id: { in: versions.map((r) => r.id) }, published: true, fileId: { not: null } },
+    select: catalogReleaseSelect,
+  });
+  const items = [];
+  // A legacy archive can require several storage reads. Extract one at a time
+  // and never hold manifest/readme bodies for every version in memory.
+  for (const release of sortNugetReleases(releases).reverse()) {
+    const item = await registrationItem(pkg, release, origin);
+    if (item) items.push(item);
+  }
+  return { ...pageDescriptor(pkg.name, versions, origin), count: items.length, items };
+}
+
+routes.get("/registration/:id/index.json", async (c) => {
+  const pkg = await registrationPackage(c.req.param("id"));
+  if (!pkg?.Release.length) return c.notFound();
   const origin = nugetOrigin(c);
   const releases = sortNugetReleases(pkg.Release).reverse();
-  const items = (await Promise.all(releases.map((release) => registrationItem(pkg, release, origin)))).filter((item) => item !== null);
-  if (!items.length) return c.notFound();
-  const url = registrationUrl(pkg.name, origin);
-  return c.json({
-    "@id": url,
-    count: 1,
-    items: [{
-      "@id": url,
-      count: items.length,
-      lower: items[0].catalogEntry.version,
-      upper: items[items.length - 1].catalogEntry.version,
-      items,
-    }],
-  });
+  if (releases.length <= REGISTRATION_PAGE_SIZE) {
+    const page = await registrationPage(pkg, releases, origin);
+    if (!page.items.length) return c.notFound();
+    return c.json({ "@id": registrationUrl(pkg.name, origin), count: 1, items: [{ ...page,
+      lower: page.items[0].catalogEntry.version, upper: page.items[page.items.length - 1].catalogEntry.version }] });
+  }
+  const items = [];
+  for (let offset = 0; offset < releases.length; offset += REGISTRATION_PAGE_SIZE) {
+    items.push(pageDescriptor(pkg.name, releases.slice(offset, offset + REGISTRATION_PAGE_SIZE), origin));
+  }
+  return c.json({ "@id": registrationUrl(pkg.name, origin), count: items.length, items });
+});
+
+routes.get("/registration/:id/page/:lower/:upper", async (c) => {
+  const pkg = await registrationPackage(c.req.param("id"));
+  if (!pkg) return c.notFound();
+  const lower = normalizeNugetVersion(c.req.param("lower"));
+  const upper = normalizeNugetVersion(c.req.param("upper").replace(/\.json$/u, ""));
+  const releases = sortNugetReleases(pkg.Release).reverse().filter((r) =>
+    compareNugetVersions(r.version, lower) >= 0 && compareNugetVersions(r.version, upper) <= 0);
+  if (!releases.length || releases.length > REGISTRATION_PAGE_SIZE) return c.notFound();
+  return c.json(await registrationPage(pkg, releases, nugetOrigin(c)));
 });
 
 routes.get("/registration/:id/:version", async (c) => {
-  const pkg = await findNugetPackage(c.req.param("id"));
-  const release = pkg && findNugetVersion(pkg, c.req.param("version").replace(/\.json$/u, ""));
+  const pkg = await registrationPackage(c.req.param("id"));
+  const version = normalizeNugetVersion(c.req.param("version").replace(/\.json$/u, ""));
+  const candidate = pkg?.Release.find((r) => normalizeNugetVersion(r.version) === version);
+  const release = candidate && await (await getDb()).release.findFirst({
+    where: { id: candidate.id, published: true, fileId: { not: null } }, select: catalogReleaseSelect,
+  });
   if (!pkg || !release) return c.notFound();
 
   const origin = nugetOrigin(c);

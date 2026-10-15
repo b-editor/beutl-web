@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { PackageOpen } from "lucide-react";
-import { searchNugetPackages, sortNugetReleases, releaseMetadata } from "@beutl/api/nuget/catalog";
-import { NUGET_SERVICE_INDEX } from "@beutl/core";
+import { searchNugetPackages, sortNugetReleases, catalogMetadata } from "@beutl/api/nuget/catalog";
+import { NUGET_ORIGIN } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 import { Button } from "@beutl/ui/ui/button";
 import { Badge } from "@beutl/ui/ui/badge";
@@ -15,17 +15,19 @@ export async function DevelopmentPackages({ lang, query, page: requestedPage }: 
   const { t } = await getTranslation(lang);
   const page = /^\d+$/u.test(requestedPage ?? "") ? Math.max(1, Math.min(5000, Number(requestedPage))) : 1;
   const { packages, totalHits } = await searchNugetPackages({ audience: "DEVELOPMENT", query, skip: (page - 1) * 20, take: 20 });
-  const cards = await Promise.all(packages.map(async (pkg) => {
+  const cards = (await Promise.all(packages.map(async (pkg) => {
     const latest = sortNugetReleases(pkg.Release)[0];
-    return { pkg, latest, metadata: (await releaseMetadata(pkg, latest)).metadata };
-  }));
+    const metadata = await catalogMetadata(pkg, latest);
+    return metadata ? { pkg, latest, metadata } : null;
+  }))).filter((card) => card !== null);
+  const origin = (process.env.NUGET_PUBLIC_ORIGIN || NUGET_ORIGIN).replace(/\/$/u, "");
   const pageUrl = (n: number) => `/${lang}/store?${new URLSearchParams({ type: "development", query: query || "", page: String(n) })}`;
   return (
     <section className="px-2 space-y-6" aria-label={t("developer:nuget.title")}>
       <p className="max-w-2xl text-muted-foreground leading-relaxed">{t("developer:nuget.description")}</p>
       <div className="rounded-lg border bg-muted/30 p-4 text-sm space-y-2">
         <p className="font-medium">{t("developer:nuget.feed")}</p>
-        <code className="block break-all text-muted-foreground">{NUGET_SERVICE_INDEX}</code>
+        <code className="block break-all text-muted-foreground">{origin}/v3/index.json</code>
       </div>
       <p className="text-sm text-muted-foreground">{totalHits.toLocaleString(lang)} {t("developer:nuget.packages")}</p>
       <div className="grid md:grid-cols-2 gap-4">

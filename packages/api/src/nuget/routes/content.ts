@@ -15,7 +15,7 @@ routes.on(["GET", "HEAD"], "/package/:id/index.json", async (c) => {
   });
 });
 
-routes.on(["GET", "HEAD"], "/files/:fileId", (c) => downloadPackage(c.req.raw, c.req.param("fileId")));
+routes.on(["GET", "HEAD"], "/files/:fileId", (c) => downloadPackage(c.req.raw, c.req.param("fileId"), c.env?.execution));
 
 routes.on(["GET", "HEAD"], "/package/:id/:version/:fileName", async (c) => {
   const pkg = await findNugetPackage(c.req.param("id"));
@@ -25,7 +25,7 @@ routes.on(["GET", "HEAD"], "/package/:id/:version/:fileName", async (c) => {
   const name = normalizeNugetId(pkg.name);
   const version = normalizeNugetVersion(release.version);
   const filename = c.req.param("fileName").toLowerCase();
-  if (filename === `${name}.${version}.nupkg`) return downloadPackage(c.req.raw, release.file.id);
+  if (filename === `${name}.${version}.nupkg`) return downloadPackage(c.req.raw, release.file.id, c.env?.execution);
 
   const data = await releaseMetadata(pkg, release);
   const isHead = c.req.method === "HEAD";

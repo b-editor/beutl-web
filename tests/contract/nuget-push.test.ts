@@ -13,7 +13,7 @@ vi.mock("../../packages/api/src/storage/files", () => ({
 
 const tx = {
   package: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
-  publishedPackageVersion: { findUnique: vi.fn(async () => null) },
+  publishedPackageVersion: { findUnique: vi.fn(async () => null), findFirst: vi.fn() },
 };
 const existing = { id: "pkg", userId: "owner", audience: "DEVELOPMENT", Release: [
   { version: "1.0.0", targetVersion: "", published: true, nugetListed: true },
@@ -22,6 +22,7 @@ const existing = { id: "pkg", userId: "owner", audience: "DEVELOPMENT", Release:
 beforeEach(() => {
   vi.clearAllMocks();
   tx.package.findFirst.mockResolvedValue(existing);
+  tx.publishedPackageVersion.findFirst.mockResolvedValue(null);
   tx.package.create.mockResolvedValue({ ...existing, Release: [] });
   setDbProvider(async () => tx as never);
   publication.createRelease.mockResolvedValue({ id: "new-release" });
@@ -41,6 +42,19 @@ async function push(version = "2.0.0") {
 }
 
 describe("NuGet push searchable metadata", () => {
+  it("rejects another version of a deleted published ID before storing bytes", async () => {
+    tx.package.findFirst.mockResolvedValue(null);
+    tx.publishedPackageVersion.findFirst.mockResolvedValue({ name: "library" });
+    await expect(push("3.0.0")).rejects.toThrow("permanently reserved");
+    expect(publication.store).not.toHaveBeenCalled();
+    expect(tx.package.create).not.toHaveBeenCalled();
+  });
+  it("rechecks ID reservations in the publication transaction", async () => {
+    tx.package.findFirst.mockResolvedValue(null);
+    tx.publishedPackageVersion.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({ name: "library" });
+    await expect(push()).rejects.toThrow("permanently reserved");
+    expect(tx.package.create).not.toHaveBeenCalled();
+  });
   it("refreshes an existing SDK's searchable fields in the publication transaction", async () => {
     await expect(push()).resolves.toEqual({ kind: "created" });
     expect(tx.package.update).toHaveBeenCalledWith({ where: { id: "pkg" }, data: {

@@ -1053,6 +1053,7 @@ model Release {
   artifactLocked Boolean @default(false)
   nugetListed   Boolean @default(true)
   nugetVersion  String?
+  nugetSemVer2  Boolean @default(false)
   nugetMetadata Json?
   nuspec        String?
   readme        String?
@@ -1071,8 +1072,8 @@ enum PackageAudience {
   DEVELOPMENT
 }
 
-// No foreign key: deleting a release/account must not let its published identity
-// be reused with different bytes by a subsequent owner.
+// No foreign key: published versions and their package IDs stay reserved after
+// deleting a release, project or account.
 model PublishedPackageVersion {
   name      String
   version   String

@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import { NUGET_ORIGIN, normalizeNugetId, normalizeNugetVersion, nugetPackageUrl } from "@beutl/core";
 import type { createStorageOperations } from "../storage/files";
-import { tryReleaseMetadata, sortNugetReleases, type NugetPackage, type NugetRelease } from "./catalog";
+import { catalogMetadata, sortNugetReleases, type NugetPackage, type CatalogRelease } from "./catalog";
 
 export type NugetEnv = {
   Bindings: {
@@ -40,19 +40,18 @@ export function registrationUrl(id: string, origin: string, version?: string): s
   return `${origin}/v3/registration/${normalizeNugetId(id)}/${leaf}.json`;
 }
 
-export async function searchItem(pkg: NugetPackage, origin: string) {
+export async function searchItem(pkg: Pick<NugetPackage, "name"> & { Release: CatalogRelease[] }, origin: string) {
   const releases = sortNugetReleases(pkg.Release);
-  let parsed;
+  let metadata;
   while (releases.length) {
-    parsed = await tryReleaseMetadata(pkg, releases[0]);
-    if (parsed) break;
+    metadata = await catalogMetadata(pkg, releases[0]);
+    if (metadata) break;
     releases.shift();
   }
-  if (!parsed) return null;
+  if (!metadata) return null;
   const latest = releases[0];
   const name = normalizeNugetId(pkg.name);
   const version = normalizeNugetVersion(latest.version);
-  const { metadata } = parsed;
 
   return {
     "@id": registrationUrl(name, origin),
@@ -76,11 +75,10 @@ export async function searchItem(pkg: NugetPackage, origin: string) {
   };
 }
 
-export async function registrationItem(pkg: NugetPackage, release: NugetRelease, origin: string) {
+export async function registrationItem(pkg: Pick<NugetPackage, "name">, release: CatalogRelease, origin: string) {
   const version = normalizeNugetVersion(release.version);
-  const parsed = await tryReleaseMetadata(pkg, release);
-  if (!parsed) return null;
-  const { metadata } = parsed;
+  const metadata = await catalogMetadata(pkg, release);
+  if (!metadata) return null;
   const packageContent = nugetPackageUrl(pkg.name, version, origin);
   const url = registrationUrl(pkg.name, origin, version);
 

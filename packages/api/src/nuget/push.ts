@@ -1,8 +1,9 @@
-import { packageNameFilter } from "@beutl/db";
+import { assertPackageIdNotReserved, packageNameFilter } from "@beutl/db";
 import { boundedBody, compareNugetVersions, normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
 import { createRelease, getDb, ReleaseIdentityConflictError, updateRelease, type PrismaTransaction } from "@beutl/db";
 import { createStorageOperations } from "../storage/files";
 import { blobReader, InvalidNugetPackageError, readNugetPackage } from "./archive";
+import { nugetSearchableMetadata } from "./catalog";
 
 export const NUGET_PUSH_LIMIT = 50 * 1024 * 1024;
 export class NugetPushTooLargeError extends Error {}
@@ -51,6 +52,7 @@ export async function readPushBody(request: Request): Promise<Blob> {
 async function checkIdentity(tx: PrismaTransaction, name: string, version: string, userId: string) {
   const pkg = await tx.package.findFirst({ where: { name: packageNameFilter(name) }, include: { Release: { orderBy: { createdAt: "desc" }, select: { version: true, targetVersion: true, published: true, nugetListed: true } } } });
   if (pkg && pkg.userId !== userId) throw new NugetOwnershipError();
+  if (!pkg) await assertPackageIdNotReserved(tx, name);
   if (pkg?.Release.some((r) => normalizeNugetVersion(r.version) === version) ||
     await tx.publishedPackageVersion.findUnique({ where: { name_version: { name, version } } })) throw new ReleaseIdentityConflictError();
   return pkg;
@@ -66,8 +68,7 @@ export async function pushNugetPackage(request: Request, userId: string, executi
   const result = await createStorageOperations(execution).createDedicatedStorageFile({ file, userId,
     publish: async (tx, record) => {
       let pkg = await checkIdentity(tx, name, version, userId);
-      const searchable = { displayName: metadata.title, description: metadata.description,
-        shortDescription: metadata.summary || metadata.description.slice(0, 200), tags: metadata.tags, webSite: metadata.projectUrl };
+      const searchable = nugetSearchableMetadata(metadata);
       if (pkg?.audience === "DEVELOPMENT" && pkg.Release.every((release) =>
         !release.published || !release.nugetListed || compareNugetVersions(version, release.version) > 0)) {
         await tx.package.update({ where: { id: pkg.id }, data: searchable });

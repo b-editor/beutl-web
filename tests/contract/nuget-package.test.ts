@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { zipSync, strToU8 } from "fflate";
-import { compareNugetVersions, isValidNugetVersion, normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
+import { compareNugetVersions, isValidNugetVersion, normalizeNugetId, normalizeNugetVersion, requiresNugetSemVer2 } from "@beutl/core";
 import { blobReader, parseNuspec, readNugetPackage } from "../../packages/api/src/nuget/archive";
 import { readPushBody, NUGET_PUSH_LIMIT } from "../../packages/api/src/nuget/push";
 
@@ -8,6 +8,40 @@ const nuspec = `<package><metadata><id>Sample.Library</id><version>01.2.0.0-Beta
 function archive(manifest = nuspec) { return new Blob([zipSync({ "Sample.Library.nuspec": strToU8(manifest), "README.md": strToU8("# Library"), "lib/net10.0/sample.dll": new Uint8Array(1024) })]); }
 
 describe("NuGet package identities and metadata", () => {
+  it.each(["1.0.0+linux-x64", "1.0.0-beta.1", "v1.0.0-beta.1+build"])("identifies SemVer 2 features in %s", (version) => {
+    expect(requiresNugetSemVer2(version)).toBe(true);
+  });
+  it("classifies dependency range bounds independently", () => {
+    for (const range of ["[1.0.0-beta.1,2.0.0)", "(,2.0.0+build]"]) {
+      const metadata = parseNuspec(nuspec.replace("[1.0,2.0)", range).replace("01.2.0.0-Beta.2+build", "1.0.0"));
+      expect(requiresNugetSemVer2("1.0.0", metadata)).toBe(true);
+    }
+    expect(requiresNugetSemVer2("1.0.0-beta")).toBe(false);
+    const metadata = parseNuspec(nuspec.replace("[1.0,2.0)", "[1.0.0-beta,2.0.0)").replace("01.2.0.0-Beta.2+build", "1.0.0"));
+    expect(requiresNugetSemVer2("1.0.0", metadata)).toBe(false);
+  });
+  it.each([["title", 256], ["description", 4000], ["authors", 1024], ["summary", 4000], ["projectUrl", 2048]] as const)(
+    "bounds %s before accepting an archive", async (field, limit) => {
+      const manifest = (length: number) => `<package><metadata><id>Sample.Library</id><version>1.0.0</version>
+        ${field !== "authors" ? "<authors>Author</authors>" : ""}${field !== "description" ? "<description>Library</description>" : ""}
+        <${field}>${"x".repeat(length)}</${field}></metadata></package>`;
+      expect(() => parseNuspec(manifest(limit))).not.toThrow();
+      await expect(readNugetPackage(blobReader(archive(manifest(limit + 1))))).rejects.toThrow(`Package ${field} exceeds`);
+    },
+  );
+  it("bounds tag lengths and count even within the manifest allowance", () => {
+    const tags = (value: string) => nuspec.replace("</metadata>", `<tags>${value}</tags></metadata>`);
+    expect(() => parseNuspec(tags(Array.from({ length: 50 }, (_, i) => `tag${i}`).join(" ")))).not.toThrow();
+    expect(() => parseNuspec(tags(Array.from({ length: 51 }, (_, i) => `tag${i}`).join(" ")))).toThrow("tags exceed");
+    expect(() => parseNuspec(tags("x".repeat(101)))).toThrow("tags exceed");
+  });
+  it("bounds dependency count and total serialized metadata", () => {
+    const dependency = '<dependency id="Dependency" version="[1.0,2.0)" />';
+    const manifest = nuspec.replace(/<dependencies>.*<\/dependencies>/u, `<dependencies>${dependency.repeat(1001)}</dependencies>`);
+    expect(() => parseNuspec(manifest)).toThrow("Too many package dependencies");
+    const large = nuspec.replace("</metadata>", `<releaseNotes>${"あ".repeat(30000)}</releaseNotes></metadata>`);
+    expect(() => parseNuspec(large)).toThrow("exceeds 64 KiB");
+  });
   it("treats case, build metadata, padded numbers and zero revisions as the same identity", () => {
     expect(normalizeNugetId("Sample.Library")).toBe("sample.library");
     expect(normalizeNugetVersion("01.2.0.0-Beta.2+build")).toBe("1.2.0-beta.2");

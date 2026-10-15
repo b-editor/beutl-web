@@ -1,6 +1,9 @@
 -- Validate identities before any schema change. Legacy Web versions are SemVer,
 -- optionally prefixed with v; build metadata and prerelease case are not identity.
 DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM "Package" WHERE length("name") > 100 OR "name" !~ '^[A-Za-z0-9_]+([._-][A-Za-z0-9_]+)*$') THEN
+    RAISE EXCEPTION 'Package has unsupported legacy IDs; resolve the IDs described in docs/deployment.md before retrying';
+  END IF;
   IF EXISTS (SELECT 1 FROM "Package" GROUP BY lower("name") HAVING count(*) > 1) THEN
     RAISE EXCEPTION 'Package has duplicate case-insensitive IDs; resolve their ownership before retrying';
   END IF;

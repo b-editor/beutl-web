@@ -4,6 +4,7 @@ import { normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
 import { packageNameFilter, reservePublishedReleaseIdentity, startRetryableTransaction } from "@beutl/db";
 import { authenticateNuget } from "../tokens";
 import { pushNugetPackage } from "../push";
+import { refreshNugetPackageMetadata } from "../catalog";
 import type { NugetEnv } from "../protocol";
 
 type PublishEnv = NugetEnv & { Variables: { publisherId: string } };
@@ -28,7 +29,7 @@ routes.on(["DELETE", "POST"], "/:id/:version", requirePushKey, async (c) => {
   const result = await startRetryableTransaction(async (tx) => {
     const pkg = await tx.package.findFirst({
       where: { name: packageNameFilter(normalizeNugetId(c.req.param("id"))) },
-      include: { Release: true },
+      include: { Release: { include: { file: true } } },
     });
     if (!pkg) return 404;
     if (pkg.userId !== c.get("publisherId")) return 403;
@@ -41,6 +42,8 @@ routes.on(["DELETE", "POST"], "/:id/:version", requirePushKey, async (c) => {
       where: { id: release.id },
       data: { nugetListed: c.req.method === "POST", artifactLocked: true },
     });
+    release.nugetListed = c.req.method === "POST";
+    await refreshNugetPackageMetadata(tx, pkg);
     return c.req.method === "DELETE" ? 204 : 200;
   });
   return c.body(null, result);

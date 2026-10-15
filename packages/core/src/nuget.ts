@@ -30,6 +30,15 @@ export function isValidNugetVersion(version: string): boolean {
   }
 }
 
+/** Older clients cannot read build metadata or dotted prerelease labels,
+ * including when they occur in a dependency range's bounds. */
+export function requiresNugetSemVer2(version: string, metadata?: NugetMetadata): boolean {
+  const isSemVer2 = (value: string) => /\+|-[^+]*\./u.test(value);
+  return isSemVer2(version) || !!metadata && (isSemVer2(metadata.version) ||
+    metadata.dependencyGroups.some((group) => group.dependencies.some((dependency) =>
+      dependency.range.split(/[,[\]()]/u).some(isSemVer2))));
+}
+
 export function compareNugetVersions(left: string, right: string): number {
   const a = normalizeNugetVersion(left).split("-");
   const b = normalizeNugetVersion(right).split("-");

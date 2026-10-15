@@ -1,4 +1,5 @@
 import { getDb } from "./provider";
+import { normalizeNugetId } from "@beutl/core";
 import { profileUserNameFilter } from "./profile";
 import type { PaymentInterval } from "@prisma/client";
 import type { PrismaTransaction } from "./transaction";
@@ -12,6 +13,16 @@ import {
 /** Prisma's insensitive equality uses ILIKE; package IDs must match underscores literally. */
 export function packageNameFilter(name: string) {
   return { equals: name.replace(/[\\%_]/gu, "\\$&"), mode: "insensitive" as const };
+}
+
+export class PackageIdentityReservedError extends Error {
+  constructor() { super("This package ID was previously published and is permanently reserved."); }
+}
+
+export async function assertPackageIdNotReserved(db: PrismaTransaction, name: string) {
+  if (await db.publishedPackageVersion.findFirst({ where: { name: normalizeNugetId(name) }, select: { name: true } })) {
+    throw new PackageIdentityReservedError();
+  }
 }
 
 export async function findPackageBasicByName({
@@ -445,11 +456,12 @@ export async function existsPackageName({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma || await getDb();
-  return await db.package.count({
+  const count = await db.package.count({
     where: {
       name: packageNameFilter(name),
     },
   });
+  return count || await db.publishedPackageVersion.count({ where: { name: normalizeNugetId(name) } });
 }
 
 export async function createDevPackage({
@@ -463,18 +475,21 @@ export async function createDevPackage({
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  const db = prisma || await getDb();
-  return await db.package.create({
-    data: {
-      name: name,
-      audience,
-      userId: userId,
-      description: "",
-      shortDescription: "",
-      webSite: "",
-      published: false,
-    },
-  });
+  const run = async (db: PrismaTransaction) => {
+    await assertPackageIdNotReserved(db, name);
+    return db.package.create({
+      data: {
+        name,
+        audience,
+        userId,
+        description: "",
+        shortDescription: "",
+        webSite: "",
+        published: false,
+      },
+    });
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
 }
 
 export async function getUserIdFromPackageId({

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, Download, ExternalLink, PackageOpen } from "lucide-react";
 import { findNugetPackage, findNugetVersion, releaseMetadata, sortNugetReleases } from "@beutl/api/nuget/catalog";
-import { InvalidNugetIdentityError, NUGET_SERVICE_INDEX, nugetPackageUrl, normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
+import { InvalidNugetIdentityError, NUGET_ORIGIN, nugetPackageUrl, normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 import { Button } from "@beutl/ui/ui/button";
 import { Badge } from "@beutl/ui/ui/badge";
@@ -27,9 +27,11 @@ export default async function Page({ params, searchParams }: {
   if (!release) notFound();
   const { metadata: m, readme } = await releaseMetadata(pkg, release);
   const { t } = await getTranslation(lang);
+  const origin = (process.env.NUGET_PUBLIC_ORIGIN || NUGET_ORIGIN).replace(/\/$/u, "");
+  const serviceIndex = `${origin}/v3/index.json`;
   const snippets = [
-    [".NET CLI", `dotnet add package ${pkg.name} --version ${release.version} --source ${NUGET_SERVICE_INDEX}`],
-    ["Package Manager", `Install-Package ${pkg.name} -Version ${release.version} -Source ${NUGET_SERVICE_INDEX}`],
+    [".NET CLI", `dotnet add package ${pkg.name} --version ${release.version} --source ${serviceIndex}`],
+    ["Package Manager", `Install-Package ${pkg.name} -Version ${release.version} -Source ${serviceIndex}`],
     ["PackageReference", `<PackageReference Include="${pkg.name}" Version="${release.version}" />`],
   ];
   return (
@@ -40,7 +42,7 @@ export default async function Page({ params, searchParams }: {
           <div className="flex gap-2 flex-wrap"><Badge>{release.version}</Badge><Badge variant="outline">{t("developer:nuget.title")}</Badge>{!release.nugetListed && <Badge variant="secondary">{t("developer:nuget.unlisted")}</Badge>}</div>
           {m.title !== pkg.name && <p className="text-lg text-muted-foreground">{m.title}</p>}
         </div>
-        <Button asChild variant="outline" className="shrink-0"><a href={nugetPackageUrl(pkg.name, release.version)}><Download className="mr-2 size-4" />{t("developer:nuget.download")}</a></Button>
+        <Button asChild variant="outline" className="shrink-0"><a href={nugetPackageUrl(pkg.name, release.version, origin)}><Download className="mr-2 size-4" />{t("developer:nuget.download")}</a></Button>
       </div>
       <div className="grid lg:grid-cols-[minmax(0,1fr)_280px] gap-8">
         <div className="min-w-0 space-y-8">

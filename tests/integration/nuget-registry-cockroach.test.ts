@@ -3,8 +3,9 @@ import { readFile } from "node:fs/promises";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createRelease, updateRelease, ReleaseArtifactLockedError, ReleaseIdentityConflictError, setReleasePublishedByAdmin, setDbProvider, packageNameFilter } from "@beutl/db";
-import { searchNugetPackages } from "../../packages/api/src/nuget/catalog";
+import { createDevPackage, existsPackageName, PackageIdentityReservedError, createRelease, updateRelease, ReleaseArtifactLockedError, ReleaseIdentityConflictError, setReleasePublishedByAdmin, setDbProvider, packageNameFilter } from "@beutl/db";
+import { refreshNugetPackageMetadata, searchNugetPackages } from "../../packages/api/src/nuget/catalog";
+import { parseNuspec } from "../../packages/api/src/nuget/archive";
 
 const connectionString = process.env.TEST_DATABASE_URL;
 const suite = connectionString ? describe : describe.skip;
@@ -51,6 +52,14 @@ suite("NuGet publication invariants on CockroachDB", () => {
   const edit = (id: string, published: boolean, fileId?: string) => updateRelease({ id, published, fileId, title: "Title", description: "Description", targetVersion: "1.0.0" });
   const draft = (packageId: string, version: string) => createRelease({ packageId, version, title: "Title", description: "Description", targetVersion: "1.0.0", published: false });
 
+  it.each(["foo..bar", ".foo", "foo."])("rejects legacy ID %s before schema changes", async (name) => {
+    await db.$executeRaw`INSERT INTO "Package" ("id", "name") VALUES ('legacy-id', ${name})`;
+    try {
+      await expect(db.$executeRawUnsafe(`${preflight}END $$;`)).rejects.toThrow("unsupported legacy IDs");
+      expect(await db.$queryRaw`SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'Package' AND column_name = 'audience' AND table_schema = 'public'`).toEqual([]);
+    } finally { await db.$executeRaw`DELETE FROM "Package" WHERE "id" = 'legacy-id'`; }
+  });
   it.each([["1.0.0", true], ["v1.0.0+other-build", true], ["1.0.0+draft", false]])(
     "rejects colliding legacy version %s (published: %s) before changing schema", async (version, published) => {
       await db.$executeRaw`INSERT INTO "Release" ("id", "packageId", "version", "targetVersion", "title", "description", "published")
@@ -68,11 +77,14 @@ suite("NuGet publication invariants on CockroachDB", () => {
   it("backfills canonical identities and locks only currently published releases", async () => {
     await db.$executeRawUnsafe(`${preflight}END $$;`);
     for (const statement of ddl.split(";").filter((s) => s.trim())) await db.$executeRawUnsafe(statement);
+    await db.$executeRawUnsafe(`UPDATE "Release" SET "nugetMetadata" = '{"version":"1.0.0","dependencyGroups":[{"dependencies":[{"range":"[1.0.0-beta.1,2.0.0)"}]}]}'::JSONB WHERE "id" = 'draft'`);
+    const semverMigration = await readFile(new URL("../../packages/db/prisma/migrations/20261016000000_nuget_semver_level/migration.sql", import.meta.url), "utf8");
+    for (const statement of semverMigration.split(";").filter((s) => s.trim())) await db.$executeRawUnsafe(statement);
     await db.$executeRawUnsafe(`UPDATE "Package" SET "audience" = 'DEVELOPMENT' WHERE "id" = 'dev'`);
     expect(await db.release.findUniqueOrThrow({ where: { id: "published" } })).toMatchObject({
-      artifactLocked: true, version: "v1.0.0+linux-x64", nugetVersion: "1.0.0",
+      artifactLocked: true, version: "v1.0.0+linux-x64", nugetVersion: "1.0.0", nugetSemVer2: true,
     });
-    expect(await db.release.findUniqueOrThrow({ where: { id: "draft" } })).toMatchObject({ artifactLocked: false, nugetVersion: "1.0.0" });
+    expect(await db.release.findUniqueOrThrow({ where: { id: "draft" } })).toMatchObject({ artifactLocked: false, nugetVersion: "1.0.0", nugetSemVer2: true });
     expect(await db.publishedPackageVersion.count()).toBe(1);
     expect(await db.publishedPackageVersion.findUniqueOrThrow({ where: { releaseId: "published" } }))
       .toMatchObject({ name: "user.package", version: "1.0.0" });
@@ -84,8 +96,8 @@ suite("NuGet publication invariants on CockroachDB", () => {
       ["C.Build", "3.0.0+ci-build", "3.0.0"],
     ]) {
       await db.$executeRaw`INSERT INTO "Package" ("id", "name", "audience") VALUES (${id}, ${id}, 'DEVELOPMENT')`;
-      await db.$executeRaw`INSERT INTO "Release" ("id", "packageId", "version", "nugetVersion", "targetVersion", "title", "description", "fileId", "published")
-        VALUES (${id}, ${id}, ${version}, ${canonical}, '', '', '', 'original', true)`;
+      await db.$executeRaw`INSERT INTO "Release" ("id", "packageId", "version", "nugetVersion", "nugetSemVer2", "targetVersion", "title", "description", "fileId", "published")
+        VALUES (${id}, ${id}, ${version}, ${canonical}, true, '', '', '', 'original', true)`;
     }
     try {
       const stable = await searchNugetPackages({ prerelease: false, audience: "DEVELOPMENT", skip: 1, take: 1 });
@@ -94,9 +106,32 @@ suite("NuGet publication invariants on CockroachDB", () => {
       const all = await searchNugetPackages({ prerelease: true, audience: "DEVELOPMENT", skip: 1, take: 1 });
       expect(all.totalHits).toBe(3);
       expect(all.packages.map((pkg) => pkg.name)).toEqual(["B.Preview"]);
+      const legacy = await searchNugetPackages({ prerelease: true, semVer2: false, audience: "DEVELOPMENT", take: 1 });
+      expect(legacy).toMatchObject({ totalHits: 0, packages: [] });
     } finally {
       await db.release.deleteMany({ where: { id: { in: ["A.Build", "B.Preview", "C.Build"] } } });
       await db.package.deleteMany({ where: { id: { in: ["A.Build", "B.Preview", "C.Build"] } } });
+    }
+  });
+  it("keeps search terms in sync when the highest SDK version is unlisted and relisted", async () => {
+    const pkg = await createDevPackage({ name: "Search.Package", audience: "DEVELOPMENT", userId: "owner" });
+    await db.package.update({ where: { id: pkg.id }, data: { published: true } });
+    const ids = [];
+    for (const [version, description] of [["1.0.0", "Old searchable"], ["2.0.0", "New searchable"]]) {
+      const r = await draft(pkg.id, version);
+      ids.push(r.id);
+      const nuspec = `<package><metadata><id>Search.Package</id><version>${version}</version><authors>Author</authors><description>${description}</description></metadata></package>`;
+      await updateRelease({ id: r.id, published: true, fileId: "original", title: "", description: "", targetVersion: "",
+        nuget: { metadata: parseNuspec(nuspec), nuspec, readme: null } });
+    }
+    for (const listed of [false, true]) {
+      await db.$transaction(async (tx) => {
+        await tx.release.update({ where: { id: ids[1] }, data: { nugetListed: listed } });
+        const current = await tx.package.findUniqueOrThrow({ where: { id: pkg.id }, include: { Release: { include: { file: true } } } });
+        await refreshNugetPackageMetadata(tx, current);
+      });
+      expect((await searchNugetPackages({ query: listed ? "New searchable" : "Old searchable" })).totalHits).toBe(1);
+      expect((await searchNugetPackages({ query: listed ? "Old searchable" : "New searchable" })).totalHits).toBe(0);
     }
   });
   it("permits replacing a current draft, but publication permanently locks its file", async () => {
@@ -136,5 +171,14 @@ suite("NuGet publication invariants on CockroachDB", () => {
     const settled = await db.release.findUniqueOrThrow({ where: { id: r.id } });
     expect(settled.artifactLocked).toBe(true);
     await expect(edit(r.id, false, settled.fileId === "original" ? "replacement" : "original")).rejects.toBeInstanceOf(ReleaseArtifactLockedError);
+  });
+  it("permanently reserves a published ID after project deletion", async () => {
+    await db.release.deleteMany({ where: { packageId: "user" } });
+    await db.package.delete({ where: { id: "user" } });
+    expect(await existsPackageName({ name: "USER.PACKAGE" })).toBeGreaterThan(0);
+    for (const audience of ["USER", "DEVELOPMENT"] as const) {
+      await expect(createDevPackage({ name: "USER.PACKAGE", audience, userId: "other" })).rejects.toBeInstanceOf(PackageIdentityReservedError);
+    }
+    expect(await db.package.count({ where: { name: packageNameFilter("User.Package") } })).toBe(0);
   });
 });

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { InvalidNugetIdentityError } from "@beutl/core";
-import { ReleaseArtifactLockedError, ReleaseIdentityConflictError } from "@beutl/db";
+import { PackageIdentityReservedError, ReleaseArtifactLockedError, ReleaseIdentityConflictError } from "@beutl/db";
 import { InvalidNugetPackageError } from "./archive";
 import { NugetOwnershipError, NugetPushTooLargeError } from "./push";
 import { nugetOrigin, type NugetEnv } from "./protocol";
@@ -31,6 +31,7 @@ app.route("/v3", contentRoutes);
 app.route("/api/v2/package", publishRoutes);
 
 app.onError((error, c) => {
+  if (error instanceof PackageIdentityReservedError) return c.json({ message: error.message }, 409);
   if (error instanceof ReleaseIdentityConflictError || error instanceof ReleaseArtifactLockedError ||
       ("code" in error && error.code === "P2002")) {
     return c.json({ message: "This package version already exists or was previously published" }, 409);
