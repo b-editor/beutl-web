@@ -314,7 +314,7 @@ const app = new Hono()
     }
 
     const params = pathParamsSchema.safeParse(c.req.param());
-    if (!params.success || !(await getAiIdempotencyKeyHash(c.req.raw))) {
+    if (!params.success) {
       return c.json(await apiErrorResponse("invalidRequestBody"), {
         status: 400,
       });

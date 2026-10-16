@@ -312,6 +312,50 @@ describe("POST /api/v3/ai/jobs/:id/retry", () => {
     expect(usage()).toHaveLength(1);
   });
 
+  it("returns the first retry after its source job is deleted", async () => {
+    const job = await seedJob({ kind: "image", inputParams: image, model: "dear/model" });
+    const first = await (await retry(job.id, { key: "source-deleted" })).json();
+    expect((await call("DELETE", `/api/v3/ai/jobs/${job.id}`)).status).toBe(200);
+
+    const replay = await retry(job.id, { key: "source-deleted" });
+
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toEqual(first);
+    expect(generateImage).toHaveBeenCalledOnce();
+    expect(usage()).toHaveLength(1);
+    expect((await call("DELETE", `/api/v3/ai/jobs/${first.jobId}`)).status).toBe(200);
+    expect(await errorOf(await retry(job.id, { key: "source-deleted" })))
+      .toEqual([409, "aiRequestWasDeleted"]);
+  });
+
+  it.each([
+    ["its model is disabled", async () => {
+      await upsertAiOperationModel({
+        operation: "image.generate", modelId: "dear/model", displayName: null,
+        sortOrder: 0, enabled: false, updatedBy: "admin",
+      });
+    }],
+    ["its model's capabilities narrow", async () => {
+      mocks.loadAiImageModelCapabilities.mockResolvedValue(new Map([
+        [aiCapabilityKey("openrouter", "dear/model"), {
+          modelId: "dear/model", aspectRatios: ["1:1"], backgrounds: ["auto"], seed: false,
+          inputReferences: false, maxReferenceImages: 0, resolution: false,
+        }],
+      ]));
+    }],
+  ])("returns the first retry after %s", async (_, change) => {
+    const job = await seedJob({ kind: "image", inputParams: image, model: "dear/model" });
+    const first = await (await retry(job.id, { key: "settings-changed" })).json();
+    await change();
+
+    const replay = await retry(job.id, { key: "settings-changed" });
+
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toEqual(first);
+    expect(generateImage).toHaveBeenCalledOnce();
+    expect(usage()).toHaveLength(1);
+  });
+
   it("answers aiRequestChanged for a key already used for another job", async () => {
     const first = await seedJob({ kind: "image", inputParams: image, model: "dear/model" });
     const other = await seedJob({

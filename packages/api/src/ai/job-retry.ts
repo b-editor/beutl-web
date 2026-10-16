@@ -1,6 +1,6 @@
 // Reruns a finished image or video job on the model and provider it ran on.
 // POST /v3/ai/jobs/:id/retry and the dashboard's retryJobAction share it.
-import { getAiJobByUserId } from "@beutl/db";
+import { getAiJobByIdempotency, getAiJobByUserId } from "@beutl/db";
 import {
   AI_IMAGE_ASPECT_RATIOS,
   AI_IMAGE_BACKGROUNDS,
@@ -32,7 +32,11 @@ import { loadAiModelCatalog, type AiModelCatalog } from "./model-catalog";
 import { AiProviderError, aiProviderFailureCode } from "./providers/errors";
 import { DEFAULT_AI_PROVIDER_ID, imageProviderFor } from "./providers/registry";
 import type { PartialImage } from "./providers/types";
-import { createCallbackNonce, toAiRequestIdentity } from "./request-integrity";
+import {
+  createCallbackNonce,
+  hashAiIdempotencyKey,
+  toAiRequestIdentity,
+} from "./request-integrity";
 import { saveAiImage } from "./storage";
 import {
   loadAiVideoModelCapabilities,
@@ -128,6 +132,24 @@ function retryEntryFor(
   return entry.provider === ranOn ? entry : null;
 }
 
+type ReplayInput = { prompt: string; [key: string]: unknown };
+
+type ImageRetryRequest = {
+  prompt: string;
+  aspectRatio: AiImageAspectRatio;
+  background?: AiImageBackground;
+  seed?: number;
+};
+
+type VideoRetryRequest = {
+  prompt: string;
+  durationSeconds: number;
+  resolution: AiVideoResolution;
+  aspectRatio: AiVideoAspectRatio;
+  generateAudio: boolean;
+  seed?: number;
+};
+
 // Everything that can refuse a rerun runs here, up to its reservation; the caller runs the job.
 export async function prepareAiJobRetry({
   userId,
@@ -145,7 +167,14 @@ export async function prepareAiJobRetry({
     inputParams: Record<string, unknown>;
   }) => Promise<boolean>;
 }): Promise<AiJobRetry> {
-  const job = await getAiJobByUserId({ userId, jobId });
+  const idempotencyKeyHash = await hashAiIdempotencyKey(idempotencyKey);
+  if (!idempotencyKeyHash) return refuse("invalidRequestBody", 400);
+  const [existing, job] = await Promise.all([
+    getAiJobByIdempotency({ userId, idempotencyKeyHash }),
+    getAiJobByUserId({ userId, jobId }),
+  ]);
+  // A paid retry answers under its key even after its source job or model settings changed.
+  if (existing) return await replayedRetry({ existing, source: job, idempotencyKey });
   if (!job) return refuse("aiJobNotFound", 404);
   if (job.status !== "failed" && job.status !== "succeeded") {
     return refuse("aiJobIsActive", 409);
@@ -166,36 +195,73 @@ export async function prepareAiJobRetry({
   // the operation's default, which is what they ran on.
   const catalog = await loadAiModelCatalog();
   if (job.kind === "image") {
-    return await prepareImageRetry({ userId, job, input, catalog, idempotencyKey });
+    const request = imageRetryRequest(input);
+    if (!request) return refuse("invalidRequestBody", 400);
+    return await prepareImageRetry({ userId, job, request, catalog, idempotencyKey });
   }
   if (job.kind === "video") {
-    return await prepareVideoRetry({ userId, job, input, catalog, idempotencyKey });
+    const request = videoRetryRequest(input);
+    if (!request) return refuse("invalidRequestBody", 400);
+    return await prepareVideoRetry({ userId, job, request, catalog, idempotencyKey });
   }
   return refuse("invalidRequestBody", 400);
 }
 
-type RetrySource = {
-  userId: string;
-  job: { model: string | null; provider: string | null };
-  input: { prompt: string; [key: string]: unknown };
-  catalog: AiModelCatalog;
-  idempotencyKey: unknown;
-};
-
-async function prepareImageRetry({
-  userId,
-  job,
-  input,
-  catalog,
+async function replayedRetry({
+  existing,
+  source,
   idempotencyKey,
-}: RetrySource): Promise<AiJobRetry> {
+}: {
+  existing: ExistingAiJob;
+  source: { kind: string; model: string | null; inputParams: unknown } | null;
+  idempotencyKey: unknown;
+}): Promise<AiJobRetry> {
+  if (existing.kind !== "image" && existing.kind !== "video") {
+    return refuse("aiRequestChanged", 409);
+  }
+  // Without the source job (deleted) the key is all there is to go by.
+  if (source) {
+    const replay = parseReplayableAiJobInput(source.kind, source.inputParams);
+    const request = !replay.success
+      ? null
+      : source.kind === "image"
+        ? imageRetryRequest(replay.data)
+        : videoRetryRequest(replay.data);
+    // A legacy source carries no model; the first retry recorded the default it used.
+    const identity = request &&
+      await retryIdentity(idempotencyKey, source.kind, source.model ?? existing.model, request);
+    if (identity?.requestFingerprint !== existing.requestFingerprint) {
+      return refuse("aiRequestChanged", 409);
+    }
+  }
+  if (existing.deletedAt) return refuse("aiRequestWasDeleted", 409);
+  return existing.kind === "image"
+    ? { ok: true, kind: "image", outcome: "existing", job: existing }
+    : { ok: true, kind: "video", outcome: "existing", job: existing };
+}
+
+async function retryIdentity(
+  idempotencyKey: unknown,
+  kind: string,
+  model: string | null,
+  request: ImageRetryRequest | VideoRetryRequest,
+) {
+  return await toAiRequestIdentity({
+    idempotencyKey,
+    operation: kind === "image" ? "image.generate" : "video.generate",
+    input: { model, ...request },
+  });
+}
+
+// Null when the persisted input cannot be repeated exactly.
+function imageRetryRequest(input: ReplayInput): ImageRetryRequest | null {
   // The reference image was never stored, so this would generate something
   // else and charge for it.
   // Both spellings have existed in persisted jobs. Neither can be replayed
   // because the uploaded bytes were never retained; accepting either would
   // charge for a different, reference-free generation.
   if (input.reference !== undefined || input.references !== undefined) {
-    return refuse("invalidRequestBody", 400);
+    return null;
   }
   // Required rather than defaulted: a generation always recorded its shape, so
   // a job without one is not a generation and must not be rerun as one. Jobs
@@ -209,7 +275,7 @@ async function prepareImageRetry({
         ? aspectRatioOfLegacyImageSize(input.size)
         : null;
   if (aspectRatio === null || !AI_IMAGE_ASPECT_RATIOS.includes(aspectRatio)) {
-    return refuse("invalidRequestBody", 400);
+    return null;
   }
   // A missing background is the legacy "auto" request. A value that was
   // persisted but is no longer recognized cannot be silently changed to
@@ -220,7 +286,7 @@ async function prepareImageRetry({
       typeof input.background !== "string" ||
       !AI_IMAGE_BACKGROUNDS.includes(input.background as AiImageBackground)
     ) {
-      return refuse("invalidRequestBody", 400);
+      return null;
     }
     background =
       input.background === "auto"
@@ -229,9 +295,71 @@ async function prepareImageRetry({
   }
   let seed: number | undefined;
   if (input.seed !== undefined) {
-    if (!isAiSeed(input.seed)) return refuse("invalidRequestBody", 400);
+    if (!isAiSeed(input.seed)) return null;
     seed = input.seed;
   }
+  return {
+    prompt: input.prompt,
+    aspectRatio,
+    ...(background ? { background } : {}),
+    ...(seed === undefined ? {} : { seed }),
+  };
+}
+
+// Null when the persisted input cannot be repeated exactly.
+function videoRetryRequest(input: ReplayInput): VideoRetryRequest | null {
+  // The frames are not stored, so this would submit a different video and
+  // charge for it. The button is hidden for these, but the rule belongs here.
+  if (input.firstFrame !== undefined || input.lastFrame !== undefined) {
+    return null;
+  }
+  // Jobs created before these existed carry none; the defaults reproduce what
+  // they were actually submitted with.
+  const durationSeconds = input.durationSeconds === undefined ? 4 : input.durationSeconds;
+  const resolution = input.resolution === undefined ? "720p" : input.resolution;
+  const aspectRatio = input.aspectRatio === undefined ? "16:9" : input.aspectRatio;
+  const generateAudio = input.generateAudio === undefined ? true : input.generateAudio;
+  let seed: number | undefined;
+  if (input.seed !== undefined) {
+    if (!isAiSeed(input.seed)) return null;
+    seed = input.seed;
+  }
+  if (
+    typeof durationSeconds !== "number" ||
+    !isAiVideoDurationSeconds(durationSeconds) ||
+    typeof resolution !== "string" ||
+    !AI_VIDEO_RESOLUTIONS.includes(resolution as AiVideoResolution) ||
+    typeof aspectRatio !== "string" ||
+    !AI_VIDEO_ASPECT_RATIOS.includes(aspectRatio as AiVideoAspectRatio) ||
+    typeof generateAudio !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    prompt: input.prompt,
+    durationSeconds,
+    resolution: resolution as AiVideoResolution,
+    aspectRatio: aspectRatio as AiVideoAspectRatio,
+    generateAudio,
+    ...(seed === undefined ? {} : { seed }),
+  };
+}
+
+type RetrySource<Request> = {
+  userId: string;
+  job: { model: string | null; provider: string | null };
+  request: Request;
+  catalog: AiModelCatalog;
+  idempotencyKey: unknown;
+};
+
+async function prepareImageRetry({
+  userId,
+  job,
+  request,
+  catalog,
+  idempotencyKey,
+}: RetrySource<ImageRetryRequest>): Promise<AiJobRetry> {
   const model = retryEntryFor(catalog, "image.generate", job);
   if (!model) return refuse("aiModelUnavailable", 400);
   // Capabilities may have narrowed since the original run. Validate the
@@ -241,26 +369,16 @@ async function prepareImageRetry({
     unsupportedImageRequestReason(
       imageCapabilityOf(await loadAiImageModelCapabilities([model]), model),
       {
-        aspectRatio,
-        background: background ?? "auto",
-        ...(seed === undefined ? {} : { seed }),
+        aspectRatio: request.aspectRatio,
+        background: request.background ?? "auto",
+        ...(request.seed === undefined ? {} : { seed: request.seed }),
         referenceImages: 0,
       },
     )
   ) {
     return refuse("aiModelDoesNotSupportRequest", 400);
   }
-  const request = {
-    prompt: input.prompt,
-    aspectRatio,
-    ...(background ? { background } : {}),
-    ...(seed === undefined ? {} : { seed }),
-  };
-  const identity = await toAiRequestIdentity({
-    idempotencyKey,
-    operation: "image.generate",
-    input: { model: model.modelId, ...request },
-  });
+  const identity = await retryIdentity(idempotencyKey, "image", model.modelId, request);
   if (!identity) return refuse("invalidRequestBody", 400);
   const reservation = await createReservedAiJob({
     userId,
@@ -274,7 +392,7 @@ async function prepareImageRetry({
     ...identity,
   });
   if (!reservation.ok) return refuse(reservation.errorCode, reservation.status);
-  // A repeated call with the same key answers with the job the first one made.
+  // Two first attempts with one key arriving together; the reservation settles it.
   if (reservation.outcome === "existing") {
     return { ok: true, kind: "image", outcome: "existing", job: reservation.job };
   }
@@ -331,46 +449,12 @@ async function prepareImageRetry({
 async function prepareVideoRetry({
   userId,
   job,
-  input,
+  request,
   catalog,
   idempotencyKey,
-}: RetrySource): Promise<AiJobRetry> {
-  // The frames are not stored, so this would submit a different video and
-  // charge for it. The button is hidden for these, but the rule belongs here.
-  if (input.firstFrame !== undefined || input.lastFrame !== undefined) {
-    return refuse("invalidRequestBody", 400);
-  }
-  // Jobs created before these existed carry none; the defaults reproduce what
-  // they were actually submitted with.
-  const durationSeconds = input.durationSeconds === undefined ? 4 : input.durationSeconds;
-  const resolution = input.resolution === undefined ? "720p" : input.resolution;
-  const aspectRatio = input.aspectRatio === undefined ? "16:9" : input.aspectRatio;
-  const generateAudio = input.generateAudio === undefined ? true : input.generateAudio;
-  let seed: number | undefined;
-  if (input.seed !== undefined) {
-    if (!isAiSeed(input.seed)) return refuse("invalidRequestBody", 400);
-    seed = input.seed;
-  }
-  if (typeof durationSeconds !== "number" || !isAiVideoDurationSeconds(durationSeconds)) {
-    return refuse("invalidRequestBody", 400);
-  }
-  if (typeof resolution !== "string" || !AI_VIDEO_RESOLUTIONS.includes(resolution as AiVideoResolution)) {
-    return refuse("invalidRequestBody", 400);
-  }
-  if (typeof aspectRatio !== "string" || !AI_VIDEO_ASPECT_RATIOS.includes(aspectRatio as AiVideoAspectRatio)) {
-    return refuse("invalidRequestBody", 400);
-  }
+}: RetrySource<VideoRetryRequest>): Promise<AiJobRetry> {
   const model = retryEntryFor(catalog, "video.generate", job);
   if (!model) return refuse("aiModelUnavailable", 400);
-  if (typeof generateAudio !== "boolean") return refuse("invalidRequestBody", 400);
-  const request = {
-    prompt: input.prompt,
-    durationSeconds,
-    resolution: resolution as AiVideoResolution,
-    aspectRatio: aspectRatio as AiVideoAspectRatio,
-    generateAudio,
-    ...(seed === undefined ? {} : { seed }),
-  };
   // What the model accepts can have changed since the original run, and a
   // rerun that the provider now refuses would be charged for first.
   if (
@@ -378,21 +462,17 @@ async function prepareVideoRetry({
       videoCapabilityOf(await loadAiVideoModelCapabilities(), model),
       {
         resolution: request.resolution,
-        durationSeconds,
+        durationSeconds: request.durationSeconds,
         aspectRatio: request.aspectRatio,
-        generateAudio,
-        ...(seed === undefined ? {} : { seed }),
-        promptCharacters: input.prompt.length,
+        generateAudio: request.generateAudio,
+        ...(request.seed === undefined ? {} : { seed: request.seed }),
+        promptCharacters: request.prompt.length,
       },
     )
   ) {
     return refuse("aiModelDoesNotSupportRequest", 400);
   }
-  const identity = await toAiRequestIdentity({
-    idempotencyKey,
-    operation: "video.generate",
-    input: { model: model.modelId, ...request },
-  });
+  const identity = await retryIdentity(idempotencyKey, "video", model.modelId, request);
   if (!identity) return refuse("invalidRequestBody", 400);
   const callbackNonce = await createCallbackNonce();
   const reservation = await createReservedAiJob({
@@ -431,14 +511,7 @@ async function submitVideoRetry({
   userId: string;
   job: ReservedAiJob;
   model: CatalogEntry;
-  request: {
-    prompt: string;
-    durationSeconds: number;
-    resolution: AiVideoResolution;
-    aspectRatio: AiVideoAspectRatio;
-    generateAudio: boolean;
-    seed?: number;
-  };
+  request: VideoRetryRequest;
   callbackNonce: { nonce: string; hash: string };
   target: AiVideoRetryTarget;
 }): Promise<AiVideoRetryResult> {
