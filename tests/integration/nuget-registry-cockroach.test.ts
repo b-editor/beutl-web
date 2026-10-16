@@ -557,6 +557,62 @@ suite("NuGet publication invariants on CockroachDB", () => {
       await db.package.deleteMany({ where: { id: { in: names } } });
     }
   });
+  it("returns only page-sized ID lists for a tag shared by many releases", async () => {
+    const names = Array.from({ length: 260 }, (_, index) => `TagVolume.${String(index).padStart(3, "0")}`);
+    const raw = vi.spyOn(db, "$queryRaw");
+    try {
+      await db.$executeRaw(Prisma.sql`INSERT INTO "Package" ("id", "name", "audience") VALUES
+        ${Prisma.join(names.map((name) => Prisma.sql`(${name}, ${name}, 'DEVELOPMENT')`))}`);
+      await db.release.createMany({ data: names.flatMap((name) => ["1.0.0", "2.0.0"].map((version) => ({
+        packageId: name, version, nugetVersion: version, published: true, fileId: "original", title: "", description: "", targetVersion: "",
+        nugetMetadata: parseNuspec(`<package><metadata><id>${name}</id><version>${version}</version><authors>Owner</authors>
+          <description>Library</description><tags>CommonPageTag</tags></metadata></package>`),
+      }))) });
+      for (const [skip, take] of [[0, 20], [240, 20], [260, 20], [0, 0]]) {
+        raw.mockClear();
+        const result = await searchNugetPackages({ query: "commonpagetag", skip, take, filterReadable: true });
+        expect(result.totalHits).toBe(names.length);
+        expect(result.packages.map((pkg) => pkg.name)).toEqual(names.slice(skip, skip + take));
+        // Neither all matching release IDs nor all package IDs enter Worker memory.
+        expect(raw).toHaveBeenCalledTimes(1);
+        const rows = await raw.mock.results[0].value;
+        expect(rows).toEqual([{ totalHits: BigInt(names.length), ids: names.slice(skip, skip + take) }]);
+      }
+    } finally {
+      raw.mockRestore();
+      await db.release.deleteMany({ where: { packageId: { in: names } } });
+      await db.package.deleteMany({ where: { id: { in: names } } });
+    }
+  });
+  it("chooses search metadata using NuGet numeric, revision and prerelease ordering in SQL", async () => {
+    const pairs = [
+      ["1.9.0", "1.10.0"], ["1.0.0", "1.0.0.2"], ["1.0.0-beta.9", "1.0.0-beta.10"],
+      ["1.0.0-beta.10", "1.0.0-beta.10.1"], ["1.0.0-9999", "1.0.0-alpha"],
+      ["1.0.0-beta-a.2", "1.0.0-beta-a.10"], ["1.0.0-beta.10", "1.0.0"],
+      ["1.0.0-123456789012345678901234567890", "1.0.0-123456789012345678901234567891"],
+    ];
+    const names = pairs.map((_, index) => `MetadataOrder.${index}`);
+    try {
+      for (const [index, name] of names.entries()) {
+        await db.$executeRaw`INSERT INTO "Package" ("id", "name", "audience") VALUES (${name}, ${name}, 'DEVELOPMENT')`;
+        for (const [versionIndex, version] of pairs[index].entries()) {
+          const metadata = parseNuspec(`<package><metadata><id>${name}</id><version>${version}</version><authors>Owner</authors>
+            <title>${versionIndex ? "LatestOrder" : "PreviousOrder"}</title><description>Library</description></metadata></package>`);
+          await db.release.create({ data: { packageId: name, version, nugetVersion: normalizeNugetVersion(version),
+            nugetSemVer2: requiresNugetSemVer2(version, metadata), published: true, fileId: "original",
+            title: "", description: "", targetVersion: "", nugetMetadata: metadata } });
+        }
+      }
+      const latest = await searchNugetPackages({ query: "LatestOrder", prerelease: true, semVer2: true });
+      expect(latest.totalHits).toBe(names.length);
+      expect(latest.packages.map((pkg) => pkg.name)).toEqual(names);
+      expect(await searchNugetPackages({ query: "PreviousOrder", prerelease: true, semVer2: true }))
+        .toEqual({ totalHits: 0, packages: [] });
+    } finally {
+      await db.release.deleteMany({ where: { packageId: { in: names } } });
+      await db.package.deleteMany({ where: { id: { in: names } } });
+    }
+  });
   it("keeps search terms in sync when the highest SDK version is unlisted and relisted", async () => {
     const pkg = await createDevPackage({ name: "Search.Package", audience: "DEVELOPMENT", userId: "owner" });
     await db.package.update({ where: { id: pkg.id }, data: { published: true } });

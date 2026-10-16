@@ -7,6 +7,7 @@ import { normalizeNugetId, normalizeNugetVersion, sanitizePayloadPath, type Nuge
 import type { ReleaseNugetData } from "@beutl/db";
 import { getR2Bucket } from "../ai/r2-provider";
 import { isValidNugetDependencyRange } from "./version-range";
+import { isValidNugetTargetFramework } from "./framework";
 
 const METADATA_LIMIT = 2 * 1024 * 1024;
 const DIRECTORY_LIMIT = 4 * 1024 * 1024;
@@ -66,8 +67,13 @@ export function parseNuspec(nuspec: string): NugetMetadata {
       if (!isValidNugetDependencyRange(range)) return invalid(`Invalid dependency version range for ${id}`);
       return { id, range };
     });
+  if (m.dependencies?.dependency !== undefined && m.dependencies?.group !== undefined) return invalid("Cannot mix flat and grouped package dependencies");
   const groups = list(m.dependencies?.group as { "@_targetFramework"?: string; dependency?: { "@_id"?: string; "@_version"?: string }[] } | undefined)
-    .map((g) => ({ targetFramework: text(g["@_targetFramework"]), dependencies: dependencies(g.dependency) }));
+    .map((g) => {
+      const targetFramework = text(g["@_targetFramework"]);
+      if (g["@_targetFramework"] !== undefined && !isValidNugetTargetFramework(targetFramework)) return invalid("Invalid dependency target framework");
+      return { targetFramework, dependencies: dependencies(g.dependency) };
+    });
   if (m.dependencies?.dependency) groups.unshift({ targetFramework: "", dependencies: dependencies(m.dependencies.dependency) });
   const license = text(m.license?.["#text"]) || text(m.license);
   let licenseType: NugetMetadata["licenseType"];
@@ -76,11 +82,13 @@ export function parseNuspec(nuspec: string): NugetMetadata {
     if (!license || (type !== "file" && type !== "expression")) return invalid("Invalid package license metadata");
     licenseType = type;
   }
+  const acceptance = m.requireLicenseAcceptance === undefined ? "false" : text(m.requireLicenseAcceptance);
+  if (!["true", "false", "1", "0"].includes(acceptance)) return invalid("Invalid requireLicenseAcceptance boolean");
   return validateMetadata({
     id, version, title: text(m.title) || id, authors: text(m.authors), description: text(m.description),
     summary: text(m.summary), tags: text(m.tags).split(/[\s,;]+/u).filter(Boolean),
     projectUrl: text(m.projectUrl), licenseUrl: text(m.licenseUrl), license, ...(licenseType ? { licenseType } : {}),
-    releaseNotes: text(m.releaseNotes), requireLicenseAcceptance: text(m.requireLicenseAcceptance).toLowerCase() === "true",
+    releaseNotes: text(m.releaseNotes), requireLicenseAcceptance: acceptance === "true" || acceptance === "1",
     icon: text(m.icon), iconUrl: text(m.iconUrl), readme: text(m.readme), dependencyGroups: groups,
     packageTypes: list(m.packageTypes?.packageType as { "@_name"?: string; "@_version"?: string } | undefined)
       .map((p) => {

@@ -9,6 +9,44 @@ function archive(manifest: string | Uint8Array = nuspec) { return new Blob([zipS
 
 describe("NuGet package identities and metadata", () => {
   it.each([
+    [undefined, false], ["true", true], ["false", false], ["1", true], ["0", false], [" 1 ", true],
+  ])("preserves XML license acceptance boolean %s", async (value, expected) => {
+    const manifest = value === undefined ? nuspec : nuspec.replace("</metadata>", `<requireLicenseAcceptance>${value}</requireLicenseAcceptance></metadata>`);
+    await expect(readNugetPackage(blobReader(archive(manifest)))).resolves.toHaveProperty("metadata.requireLicenseAcceptance", expected);
+  });
+  it.each(["", " ", "TRUE", "False", "yes", "2"])("rejects invalid XML license acceptance boolean %s", (value) => {
+    expect(() => parseNuspec(nuspec.replace("</metadata>", `<requireLicenseAcceptance>${value}</requireLicenseAcceptance></metadata>`)))
+      .toThrow("Invalid requireLicenseAcceptance boolean");
+  });
+  it.each(["<group />", '<group targetFramework="net10.0"><dependency id="Grouped" version="1.0" /></group>'])(
+    "rejects flat dependencies mixed with %s", async (group) => {
+      const manifest = nuspec.replace(/<dependencies>.*<\/dependencies>/u, `<dependencies><dependency id="Flat" version="1.0" />${group}</dependencies>`);
+      await expect(readNugetPackage(blobReader(archive(manifest)))).rejects.toThrow("Cannot mix flat and grouped");
+    },
+  );
+  it.each([
+    "net10.0", "net8.0-windows10.0.19041.0", "net8.0-android35.0", "net8.0-ios", "netstandard2.0", "net481",
+    ".NETFramework4.8", ".NETFramework,Version=v4.8,Profile=Client", ".NETCoreApp,Version=v10.0", "netcoreapp3.1",
+    "net45-client", "native", "monoandroid10.0", "uap10.0", "portable-net45+win8", "portable-Profile259",
+    ".NETPortable,Version=v4.5,Profile=Profile259", "Custom,Version=v1.0", "any", "agnostic", "net%38.0",
+  ])("accepts NuGet target framework %s", (targetFramework) => {
+    expect(parseNuspec(nuspec.replace('targetFramework="net10.0"', `targetFramework="${targetFramework}"`)).dependencyGroups[0].targetFramework)
+      .toBe(targetFramework);
+  });
+  it.each([
+    "not-a-framework", "", "unsupported", "net8.0-", "net8.0.0.0.0", "net2147483648.0", "net8.0-windows10.bad",
+    "net8.0-windows2147483648", "portable", "portable-net45-client+win8", "Custom,Version=bad",
+  ])("rejects unsupported NuGet target framework %s", async (targetFramework) => {
+    const manifest = nuspec.replace('targetFramework="net10.0"', `targetFramework="${targetFramework}"`);
+    await expect(readNugetPackage(blobReader(archive(manifest)))).rejects.toThrow("Invalid dependency target framework");
+  });
+  it("accepts flat dependencies and groups without a target framework separately", () => {
+    const flat = nuspec.replace(/<group[^>]*>(.*)<\/group>/u, "$1");
+    const grouped = nuspec.replace(' targetFramework="net10.0"', "");
+    expect(parseNuspec(flat).dependencyGroups).toEqual(parseNuspec(grouped).dependencyGroups);
+    expect(parseNuspec(grouped).dependencyGroups[0].targetFramework).toBe("");
+  });
+  it.each([
     ["LICENSE.txt", "LICENSE.txt"], ["licenses/LICENSE.MD", "licenses/LICENSE.MD"],
     ["LICENSE", "LICENSE"], ["licenses\\LICENSE.txt", "licenses/LICENSE.txt"],
     ["/LICENSE.txt", "LICENSE.txt"],

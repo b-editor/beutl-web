@@ -117,31 +117,39 @@ export async function classifyNugetReleases(where: Prisma.ReleaseWhereInput, sem
   return excluded;
 }
 
-async function packagesMatchingOlderMetadata(releaseWhere: Prisma.ReleaseWhereInput, metadataWhere: Prisma.ReleaseWhereInput, query: string, audience?: PackageAudience) {
-  const db = await getDb();
-  const where: Prisma.PackageWhereInput = { published: true, audience,
-    NOT: { name: { contains: query, mode: "insensitive" } },
-    Release: { some: { ...releaseWhere, ...metadataWhere } },
-  };
-  const excluded: string[] = [];
-  if (!await db.release.count({ where: { ...releaseWhere, package: where } })) return excluded;
-  let after: string | undefined;
-  while (true) {
-    // Search JSON in SQL first, then check the latest eligible identity. Older
-    // nuspec matches must not make a package match metadata it no longer shows.
-    const batch = await db.package.findMany({
-      where: { ...where, ...(after ? { id: { gt: after } } : {}) }, orderBy: { id: "asc" }, take: 64,
-      select: { id: true, Release: { where: releaseWhere, select: { id: true, version: true } } },
-    });
-    if (!batch.length) break;
-    const latest = batch.map((pkg) => ({ packageId: pkg.id, release: sortNugetReleases(pkg.Release)[0] }));
-    const matches = new Set((await db.release.findMany({
-      where: { ...metadataWhere, id: { in: latest.flatMap(({ release }) => release ? [release.id] : []) } }, select: { id: true },
-    })).map((release) => release.id));
-    for (const { packageId, release } of latest) if (!release || !matches.has(release.id)) excluded.push(packageId);
-    after = batch[batch.length - 1].id;
-  }
-  return excluded;
+async function matchingPackagePage(query: string, skip: number, take: number, prerelease: boolean, semVer2: boolean, audience?: PackageAudience) {
+  const pattern = `%${query.replace(/[\\%_]/gu, "\\$&")}%`;
+  // Choose the latest eligible nuspec and match its tags entirely in SQL.
+  // Only the requested page's IDs cross the Worker/database boundary.
+  const [page] = await (await getDb()).$queryRaw<{ totalHits: bigint; ids: string[] }[]>(Prisma.sql`
+    WITH matching AS (
+      SELECT p."id", p."name" FROM "Package" p
+      CROSS JOIN LATERAL (
+        SELECT r."nugetMetadata" FROM "Release" r
+        WHERE r."packageId" = p."id" AND r."published" AND r."nugetListed" AND r."fileId" IS NOT NULL
+          AND NOT r."nugetMetadataInvalid" AND r."nugetMetadata" IS NOT NULL AND r."nugetMetadata" <> 'null'::JSONB
+          AND (${semVer2} OR NOT r."nugetSemVer2")
+          AND (${prerelease} OR r."nugetVersion" NOT LIKE '%-%')
+        -- Normalized identities have numeric core components and lowercase labels.
+        -- Pad numeric labels to the version-length limit so beta.10 follows beta.9,
+        -- with numeric labels below text and a shorter equal prefix below a longer one.
+        ORDER BY string_to_array(split_part(r."nugetVersion", '-', 1), '.')::INT[] DESC,
+          (r."nugetVersion" NOT LIKE '%-%') DESC,
+          ARRAY(SELECT CASE WHEN label ~ '^[0-9]+$' THEN '0' || lpad(label, 128, '0') ELSE '1' || label END
+            FROM unnest(string_to_array(substr(r."nugetVersion", length(split_part(r."nugetVersion", '-', 1)) + 2), '.'))
+              WITH ORDINALITY AS labels(label, ordinal) ORDER BY ordinal) DESC
+        LIMIT 1
+      ) latest
+      WHERE p."published" ${audience ? Prisma.sql`AND p."audience" = ${audience}::"PackageAudience"` : Prisma.empty}
+        AND (p."name" ILIKE ${pattern} OR latest."nugetMetadata"->>'title' ILIKE ${pattern}
+          OR latest."nugetMetadata"->>'description' ILIKE ${pattern}
+          OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(latest."nugetMetadata"->'tags') AS tag(value)
+            WHERE lower(tag.value) = lower(${query})))
+    )
+    SELECT (SELECT count(*) FROM matching) AS "totalHits",
+      ARRAY(SELECT "id" FROM matching ORDER BY "name" LIMIT ${take} OFFSET ${skip}) AS ids
+  `);
+  return { totalHits: Number(page.totalHits), ids: page.ids };
 }
 
 export async function searchNugetPackages({ query = "", skip = 0, take = 20, prerelease = true, semVer2 = true, audience, filterReadable = false }: {
@@ -155,32 +163,8 @@ export async function searchNugetPackages({ query = "", skip = 0, take = 20, pre
     ...(!semVer2 ? { nugetSemVer2: false } : {}),
     ...(!prerelease ? { NOT: { nugetVersion: { contains: "-" } } } : {}) };
   const term = query.trim();
-  // Prisma's string filters use LIKE patterns; search input is literal text.
-  const literalTerm = term.replace(/[\\%_]/gu, "\\$&");
   const db = await getDb();
-  // Prisma's JSON array_contains is case-sensitive. Compare the individual
-  // cached tags in SQL, preserving their original spelling for display.
-  const tagMatches = term ? await db.$queryRaw<{ id: string }[]>(Prisma.sql`
-    SELECT r."id" FROM "Release" r JOIN "Package" p ON p."id" = r."packageId"
-    WHERE r."published" AND r."nugetListed" AND r."fileId" IS NOT NULL
-      AND NOT r."nugetMetadataInvalid" AND p."published"
-      AND (${semVer2} OR NOT r."nugetSemVer2")
-      AND (${prerelease} OR r."nugetVersion" NOT LIKE '%-%')
-      ${audience ? Prisma.sql`AND p."audience" = ${audience}::"PackageAudience"` : Prisma.empty}
-      AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(r."nugetMetadata"->'tags') AS tag(value)
-        WHERE lower(tag.value) = lower(${term}))
-  `) : [];
-  const metadataWhere: Prisma.ReleaseWhereInput = { OR: [
-    { nugetMetadata: { path: ["title"], string_contains: literalTerm, mode: "insensitive" } },
-    { nugetMetadata: { path: ["description"], string_contains: literalTerm, mode: "insensitive" } },
-    { id: { in: tagMatches.map((release) => release.id) } },
-  ] };
-  const baseWhere: Prisma.PackageWhereInput = { published: true, audience, Release: { some: releaseWhere } };
-  const queryWhere: Prisma.PackageWhereInput = term ? { OR: [
-    { name: { contains: literalTerm, mode: "insensitive" } },
-    { Release: { some: { AND: [releaseWhere, metadataWhere] } } },
-  ] } : {};
-  const where: Prisma.PackageWhereInput = { ...baseWhere, ...queryWhere };
+  const where: Prisma.PackageWhereInput = { published: true, audience, Release: { some: releaseWhere } };
   const include = { Release: { where: releaseWhere, select: catalogReleaseSelect } };
   const offset = Math.max(0, skip), limit = Math.max(0, Math.min(100, take));
   const readable = async (pkg: CatalogPackage) => {
@@ -192,13 +176,11 @@ export async function searchNugetPackages({ query = "", skip = 0, take = 20, pre
     pkg.Release = releases;
     return releases.length > 0;
   };
-  if (term) {
-    const excluded = await packagesMatchingOlderMetadata(releaseWhere, metadataWhere, literalTerm, audience);
-    if (excluded.length) where.id = { notIn: excluded };
-  }
+  const page = term ? await matchingPackagePage(term, offset, limit, prerelease, semVer2, audience) : null;
+  if (page) where.id = { in: page.ids };
   const [totalHits, packages] = await Promise.all([
-    db.package.count({ where }),
-    db.package.findMany({ where, orderBy: { name: "asc" }, skip: offset, take: limit, include }),
+    page ? page.totalHits : db.package.count({ where }),
+    db.package.findMany({ where, orderBy: { name: "asc" }, skip: page ? 0 : offset, take: limit, include }),
   ]);
   if (filterReadable) {
     const filtered = [];

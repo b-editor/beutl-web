@@ -21,7 +21,7 @@ const file = () => ({ name: "library.nupkg", size: 4n, objectKey: "object", sha2
   Package: [], Profile: [], PackageScreenshot: [], aiJobResult: null,
   Release: [{ published: true, package: { ...pkg, packagePricing: paid ? [{ id: "price", price: 100 }] : [] } }] });
 const models = {
-  $queryRaw: vi.fn(async () => []),
+  $queryRaw: vi.fn(async () => [{ totalHits: 0n, ids: [] as string[] }]),
   package: { findFirst: vi.fn(async () => structuredClone(pkg)), findUniqueOrThrow: vi.fn(async () => pkg), findMany: vi.fn(async () => [] as (typeof pkg)[]), count: vi.fn(async () => 0), update: vi.fn() },
   release: { count: vi.fn(async () => 0), findFirst: vi.fn(async () => release), findMany: vi.fn(async () => [release]), updateMany: vi.fn(async () => ({ count: 1 })), update: vi.fn(async () => release) },
   file: { findFirst: vi.fn(async () => file()) },
@@ -128,7 +128,7 @@ describe("NuGet registry routes", () => {
       })),
     };
     models.package.findMany.mockResolvedValueOnce([catalog]);
-    models.package.count.mockResolvedValueOnce(1);
+    models.$queryRaw.mockResolvedValueOnce([{ totalHits: 1n, ids: [pkg.id] }]);
     const search = await app.request(`${origin}/v3/search?q=Library&skip=4&take=8&prerelease=true&semVerLevel=2.0.0`, {}, env);
     const result = await search.json();
     expect(result.totalHits).toBe(1);
@@ -141,7 +141,9 @@ describe("NuGet registry routes", () => {
         { version: "1.11.0-Beta.2+build", "@id": `${origin}/v3/registration/library/1.11.0-beta.2.json` },
       ],
     });
-    expect(models.package.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 4, take: 8 }));
+    expect(models.$queryRaw.mock.calls[0][0].values.slice(-2)).toEqual([8, 4]);
+    expect(models.package.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 0, take: 8,
+      where: expect.objectContaining({ id: { in: [pkg.id] } }) }));
 
     models.package.findFirst.mockResolvedValueOnce(catalog);
     models.release.findMany.mockResolvedValueOnce(catalog.Release);
@@ -204,7 +206,7 @@ describe("NuGet registry routes", () => {
     const where = models.package.count.mock.calls[0][0].where;
     expect(where.Release.some.nugetSemVer2).toBe(semVer2 ? undefined : false);
     expect(models.package.findMany.mock.calls[0][0].where).toEqual(where);
-    expect(models.package.count.mock.calls[1][0].where.Release.some.nugetSemVer2).toBe(semVer2 ? undefined : false);
+    expect(models.package.findMany.mock.calls[1][0].include.Release.where.nugetSemVer2).toBe(semVer2 ? undefined : false);
     models.package.findFirst.mockResolvedValueOnce({ ...pkg, Release: [
       { ...versionedRelease("1.0.0"), nugetListed: true },
       { ...versionedRelease("2.0.0+build"), nugetListed: true, nugetSemVer2: true },
