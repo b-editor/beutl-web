@@ -148,8 +148,8 @@ export function RepositoryConnectionDialog({ repository, lang, onClose }: {
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium">{token.name}</p>
                       <p className="truncate text-xs text-muted-foreground">
-                        {t(`account:apiKeys.${token.scope}`)} · …{token.hint} · {t("account:apiKeys.createdAt", { date: date(token.createdAt) })} · {token.lastUsedAt
-                          ? t("account:apiKeys.lastUsedAt", { date: date(token.lastUsedAt) })
+                        {t(`account:apiKeys.${token.scope}`)} · …{token.hint} · {t("account:apiKeys.createdAt", { date: date(token.createdAt), interpolation: { escapeValue: false } })} · {token.lastUsedAt
+                          ? t("account:apiKeys.lastUsedAt", { date: date(token.lastUsedAt), interpolation: { escapeValue: false } })
                           : t("account:apiKeys.neverUsed")}
                       </p>
                     </div>

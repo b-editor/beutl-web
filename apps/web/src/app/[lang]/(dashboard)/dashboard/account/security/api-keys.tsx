@@ -75,9 +75,9 @@ export function ApiKeys({ lang, initialResult, initialRepositoryId, nugetSource 
             <span className="text-muted-foreground">{t(`account:apiKeys.${key.scope === "read" && key.kind === "nuget" ? "download" : key.scope}`)}</span>
           </div>
           <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            <span>{t("account:apiKeys.createdAt", { date: date(key.createdAt) })}</span>
-            <span>{key.kind === "nuget" ? t("account:apiKeys.expiresAt", { date: date(key.expiresAt) }) : t("account:apiKeys.noExpiration")}</span>
-            {key.kind === "repository" && <span>{key.lastUsedAt ? t("account:apiKeys.lastUsedAt", { date: date(key.lastUsedAt) }) : t("account:apiKeys.neverUsed")}</span>}
+            <span>{t("account:apiKeys.createdAt", { date: date(key.createdAt), interpolation: { escapeValue: false } })}</span>
+            <span>{key.kind === "nuget" ? t("account:apiKeys.expiresAt", { date: date(key.expiresAt), interpolation: { escapeValue: false } }) : t("account:apiKeys.noExpiration")}</span>
+            {key.kind === "repository" && <span>{key.lastUsedAt ? t("account:apiKeys.lastUsedAt", { date: date(key.lastUsedAt), interpolation: { escapeValue: false } }) : t("account:apiKeys.neverUsed")}</span>}
           </div>
         </div>
         <Button size="icon" variant="ghost" disabled={pending} aria-label={`${t("account:apiKeys.revoke")} ${key.name}`} onClick={() => { setRevokeError(undefined); setRevoking(key); }}><Trash2 className="size-4" aria-hidden /></Button>
