@@ -6,6 +6,7 @@ import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { normalizeNugetId, normalizeNugetVersion, type NugetMetadata } from "@beutl/core";
 import type { ReleaseNugetData } from "@beutl/db";
 import { getR2Bucket } from "../ai/r2-provider";
+import { isValidNugetDependencyRange } from "./version-range";
 
 const METADATA_LIMIT = 2 * 1024 * 1024;
 const DIRECTORY_LIMIT = 4 * 1024 * 1024;
@@ -49,7 +50,9 @@ export function parseNuspec(nuspec: string): NugetMetadata {
     list(value).map((d) => {
       const id = text(d["@_id"]);
       try { normalizeNugetId(id); } catch (error) { return invalid("Invalid dependency ID", error); }
-      return { id, range: text(d["@_version"]) || "(,)" };
+      const range = d["@_version"] === undefined ? "(, )" : text(d["@_version"]);
+      if (!isValidNugetDependencyRange(range)) return invalid(`Invalid dependency version range for ${id}`);
+      return { id, range };
     });
   const groups = list(m.dependencies?.group as { "@_targetFramework"?: string; dependency?: { "@_id"?: string; "@_version"?: string }[] } | undefined)
     .map((g) => ({ targetFramework: text(g["@_targetFramework"]), dependencies: dependencies(g.dependency) }));

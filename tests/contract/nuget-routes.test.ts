@@ -49,6 +49,9 @@ describe("NuGet registry routes", () => {
     expect(result.resources).toContainEqual({ "@type": "SearchQueryService/3.4.0", "@id": "https://nuget.beditor.net/v3/search" });
     expect(result.resources).toContainEqual({ "@type": "SearchQueryService/3.0.0-beta", "@id": "https://nuget.beditor.net/v3/search" });
     expect(result.resources).toContainEqual({ "@type": "SearchAutocompleteService/3.0.0-beta", "@id": "https://nuget.beditor.net/v3/autocomplete" });
+    expect(result.resources.some((resource: { "@type": string }) => resource["@type"].endsWith("/3.5.0"))).toBe(false);
+    expect(result.resources).toContainEqual({ "@type": "RegistrationsBaseUrl/3.6.0", "@id": "https://nuget.beditor.net/v3/registration/" });
+    expect(result.resources).toContainEqual({ "@type": "RegistrationsBaseUrl/3.0.0-rc", "@id": "https://nuget.beditor.net/v3/registration-semver1/" });
     expect((await request("/ja/packages")).status).toBe(404);
   });
   it("keeps unlisted versions in the flat container and registration", async () => {
@@ -136,15 +139,16 @@ describe("NuGet registry routes", () => {
       data: semVer2 ? ["1.0.0", "2.0.0", "3.0.0-beta.1", "4.0.0"] : ["1.0.0"],
     });
   });
-  it("links bounded registration pages without loading every manifest or reading storage", async () => {
+  it.each(["registration", "registration-semver1"])("links bounded %s pages without loading every manifest or reading storage", async (hive) => {
     const releases = Array.from({ length: 130 }, (_, i) => ({ ...release, id: `r${i}`, version: `1.0.${i}` }));
     const catalog = { ...pkg, Release: releases.toReversed() };
     models.package.findFirst.mockResolvedValueOnce(catalog);
-    const index = await (await request("/v3/registration/library/index.json")).json();
+    const index = await (await request(`/v3/${hive}/library/index.json`)).json();
     expect(index.count).toBe(3);
     expect(index.items.map((p: { count: number; lower: string; upper: string }) => [p.count, p.lower, p.upper]))
       .toEqual([[64, "1.0.0", "1.0.63"], [64, "1.0.64", "1.0.127"], [2, "1.0.128", "1.0.129"]]);
     expect(index.items.every((p: object) => !("items" in p))).toBe(true);
+    expect(index.items.every((p: { "@id": string }) => p["@id"].includes(`/v3/${hive}/`))).toBe(true);
     expect(models.release.findMany).not.toHaveBeenCalled();
     expect(bucket.get).not.toHaveBeenCalled();
     for (const [i, page] of index.items.entries()) {
@@ -157,11 +161,40 @@ describe("NuGet registry routes", () => {
       expect(result.parent).toBe(index["@id"]);
     }
     const selection = models.release.findMany.mock.calls[0][0];
+    expect(selection.where.nugetSemVer2).toBe(hive === "registration-semver1" ? false : undefined);
+    expect(models.package.findFirst.mock.calls[0][0].select.Release.where.nugetSemVer2).toBe(hive === "registration-semver1" ? false : undefined);
     expect(selection.where.id.in).toHaveLength(64);
     expect(selection.select).not.toHaveProperty("nuspec");
     expect(selection.select).not.toHaveProperty("readme");
     models.package.findFirst.mockResolvedValueOnce(catalog);
-    expect((await request("/v3/registration/library/page/1.0.0/1.0.129.json")).status).toBe(404);
+    expect((await request(`/v3/${hive}/library/page/1.0.0/1.0.129.json`)).status).toBe(404);
+  });
+  it("keeps legacy leaf, dependency and search links in the legacy hive", async () => {
+    const metadata = { ...release.nugetMetadata, dependencyGroups: [{ targetFramework: "", dependencies: [{ id: "Dependency", range: "[1.0,2.0)" }] }] };
+    models.release.findFirst.mockResolvedValueOnce({ ...release, nugetMetadata: metadata });
+    const item = await (await request("/v3/registration-semver1/library/1.0.0.json")).json();
+    expect(item["@id"]).toBe("https://nuget.beditor.net/v3/registration-semver1/library/1.0.0.json");
+    expect(item.registration).toBe("https://nuget.beditor.net/v3/registration-semver1/library/index.json");
+    expect(item.catalogEntry.dependencyGroups[0].dependencies[0].registration)
+      .toBe("https://nuget.beditor.net/v3/registration-semver1/dependency/index.json");
+    expect(models.release.findFirst.mock.calls[0][0].where.nugetSemVer2).toBe(false);
+    models.package.findMany.mockResolvedValueOnce([pkg]);
+    const search = await (await request("/v3/search")).json();
+    expect(search.data[0]["@id"]).toBe(item.registration);
+    expect(search.data[0].versions[0]["@id"]).toBe(item["@id"]);
+  });
+  it("omits SemVer 2 dependencies discovered during legacy archive extraction", async () => {
+    const nuspec = manifest.replace("</metadata>", '<dependencies><dependency id="Dependency" version="[1.0.0-beta.1,2.0)" /></dependencies></metadata>');
+    const bytes = zipSync({ "Library.nuspec": strToU8(nuspec) });
+    setR2BucketProvider(() => ({ get: async (_key, options) => ({
+      arrayBuffer: async () => bytes.slice(options!.range!.offset, options!.range!.offset + options!.range!.length).buffer,
+    }) }) as never);
+    const legacy = { ...release, nugetMetadata: null, nuspec: null, file: { ...release.file, size: BigInt(bytes.length) } } as unknown as typeof release;
+    models.release.findMany.mockResolvedValueOnce([legacy]);
+    expect((await request("/v3/registration-semver1/library/index.json")).status).toBe(404);
+    models.release.findFirst.mockResolvedValueOnce(legacy);
+    expect((await request("/v3/registration-semver1/library/1.0.0.json")).status).toBe(404);
+    expect(models.release.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ nugetSemVer2: true }) }));
   });
   it("parses legacy registration archives sequentially", async () => {
     let active = 0, maximum = 0;

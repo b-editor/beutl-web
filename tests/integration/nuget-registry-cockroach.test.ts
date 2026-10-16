@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDevPackage, existsPackageName, PackageIdentityReservedError, createRelease, updateRelease, ReleaseArtifactLockedError, ReleaseIdentityConflictError, setReleasePublishedByAdmin, setDbProvider, packageNameFilter } from "@beutl/db";
 import { refreshNugetPackageMetadata, searchNugetPackages } from "../../packages/api/src/nuget/catalog";
 import { parseNuspec } from "../../packages/api/src/nuget/archive";
+import nugetApp from "../../packages/api/src/nuget/app";
 
 const connectionString = process.env.TEST_DATABASE_URL;
 const suite = connectionString ? describe : describe.skip;
@@ -89,6 +90,33 @@ suite("NuGet publication invariants on CockroachDB", () => {
     expect(await db.publishedPackageVersion.findUniqueOrThrow({ where: { releaseId: "published" } }))
       .toMatchObject({ name: "user.package", version: "1.0.0" });
   }, 90000);
+  it("isolates SemVer 2 versions and dependency bounds from legacy registration", async () => {
+    await db.$executeRaw`INSERT INTO "Package" ("id", "name", "audience") VALUES ('registration', 'Registration.Package', 'DEVELOPMENT')`;
+    const versions = ["1.0.0", "2.0.0+build", "3.0.0-beta.1", "4.0.0"];
+    try {
+      for (const [i, version] of versions.entries()) {
+        const nuspec = `<package><metadata><id>Registration.Package</id><version>${version}</version><authors>Owner</authors><description>SDK</description>
+          ${i === 3 ? '<dependencies><dependency id="Dependency" version="[1.0.0-beta.1,2.0)" /></dependencies>' : ""}</metadata></package>`;
+        const r = await draft("registration", version);
+        await updateRelease({ id: r.id, title: "SDK", description: "SDK", targetVersion: "", published: true, fileId: "original",
+          nuget: { metadata: parseNuspec(nuspec), nuspec, readme: null } });
+      }
+      for (const [hive, expected] of [["registration", ["1.0.0", "2.0.0", "3.0.0-beta.1", "4.0.0"]], ["registration-semver1", ["1.0.0"]]] as const) {
+        const base = `https://nuget.test/v3/${hive}/registration.package`;
+        const index = await (await nugetApp.request(`${base}/index.json`)).json();
+        expect(index.items[0].items.map((item: { catalogEntry: { version: string } }) => item.catalogEntry.version)).toEqual(expected);
+        const page = await (await nugetApp.request(`${base}/page/1.0.0/4.0.0.json`)).json();
+        expect(page.items.map((item: { catalogEntry: { version: string } }) => item.catalogEntry.version)).toEqual(expected);
+        expect((await nugetApp.request(`${base}/1.0.0.json`)).status).toBe(200);
+        for (const version of ["2.0.0", "3.0.0-beta.1", "4.0.0"]) {
+          expect((await nugetApp.request(`${base}/${version}.json`)).status).toBe(hive === "registration" ? 200 : 404);
+        }
+      }
+    } finally {
+      await db.release.deleteMany({ where: { packageId: "registration" } });
+      await db.package.delete({ where: { id: "registration" } });
+    }
+  });
   it("keeps stable build metadata in search counts and pagination", async () => {
     for (const [id, version, canonical] of [
       ["A.Build", "1.0.0+linux-x64", "1.0.0"],

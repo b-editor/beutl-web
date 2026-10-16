@@ -1,5 +1,5 @@
 import type { Context } from "hono";
-import { NUGET_ORIGIN, normalizeNugetId, normalizeNugetVersion, nugetPackageUrl } from "@beutl/core";
+import { NUGET_ORIGIN, normalizeNugetId, normalizeNugetVersion, nugetPackageUrl, requiresNugetSemVer2 } from "@beutl/core";
 import type { createStorageOperations } from "../storage/files";
 import { catalogMetadata, sortNugetReleases, type NugetPackage, type CatalogRelease } from "./catalog";
 
@@ -17,12 +17,10 @@ export function nugetOrigin(c: Context<NugetEnv>): string {
 const resources = [
   ["/v3/package/", "PackageBaseAddress/3.0.0"],
   ["/v3/registration/", "RegistrationsBaseUrl/3.6.0"],
-  ["/v3/registration/", "RegistrationsBaseUrl/3.0.0-rc"],
-  ["/v3/search", "SearchQueryService/3.5.0"],
+  ["/v3/registration-semver1/", "RegistrationsBaseUrl/3.0.0-rc"],
   ["/v3/search", "SearchQueryService/3.4.0"],
   ["/v3/search", "SearchQueryService/3.0.0-beta"],
   ["/v3/search", "SearchQueryService/3.0.0-rc"],
-  ["/v3/autocomplete", "SearchAutocompleteService/3.5.0"],
   ["/v3/autocomplete", "SearchAutocompleteService/3.0.0-rc"],
   ["/v3/autocomplete", "SearchAutocompleteService/3.0.0-beta"],
   ["/api/v2/package", "PackagePublish/2.0.0"],
@@ -35,17 +33,18 @@ export function serviceIndex(origin: string) {
   };
 }
 
-export function registrationUrl(id: string, origin: string, version?: string): string {
+export function registrationUrl(id: string, origin: string, version?: string, semVer2 = true): string {
   const leaf = version === undefined ? "index" : normalizeNugetVersion(version);
-  return `${origin}/v3/registration/${normalizeNugetId(id)}/${leaf}.json`;
+  return `${origin}/v3/${semVer2 ? "registration" : "registration-semver1"}/${normalizeNugetId(id)}/${leaf}.json`;
 }
 
-export async function searchItem(pkg: Pick<NugetPackage, "name"> & { Release: CatalogRelease[] }, origin: string) {
+export async function searchItem(pkg: Pick<NugetPackage, "name"> & { Release: CatalogRelease[] }, origin: string, semVer2 = true) {
   const releases = sortNugetReleases(pkg.Release);
   let metadata;
   while (releases.length) {
     metadata = await catalogMetadata(pkg, releases[0]);
-    if (metadata) break;
+    if (metadata && (semVer2 || !requiresNugetSemVer2(releases[0].version, metadata))) break;
+    metadata = null;
     releases.shift();
   }
   if (!metadata) return null;
@@ -54,7 +53,7 @@ export async function searchItem(pkg: Pick<NugetPackage, "name"> & { Release: Ca
   const version = normalizeNugetVersion(latest.version);
 
   return {
-    "@id": registrationUrl(name, origin),
+    "@id": registrationUrl(name, origin, undefined, semVer2),
     id: pkg.name,
     version,
     title: metadata.title,
@@ -70,17 +69,17 @@ export async function searchItem(pkg: Pick<NugetPackage, "name"> & { Release: Ca
     versions: releases.reverse().map((release) => ({
       version: normalizeNugetVersion(release.version),
       downloads: Number(release.downloads),
-      "@id": registrationUrl(name, origin, release.version),
+      "@id": registrationUrl(name, origin, release.version, semVer2),
     })),
   };
 }
 
-export async function registrationItem(pkg: Pick<NugetPackage, "name">, release: CatalogRelease, origin: string) {
+export async function registrationItem(pkg: Pick<NugetPackage, "name">, release: CatalogRelease, origin: string, semVer2 = true) {
   const version = normalizeNugetVersion(release.version);
   const metadata = await catalogMetadata(pkg, release);
-  if (!metadata) return null;
+  if (!metadata || (!semVer2 && requiresNugetSemVer2(release.version, metadata))) return null;
   const packageContent = nugetPackageUrl(pkg.name, version, origin);
-  const url = registrationUrl(pkg.name, origin, version);
+  const url = registrationUrl(pkg.name, origin, version, semVer2);
 
   return {
     "@id": url,
@@ -105,7 +104,7 @@ export async function registrationItem(pkg: Pick<NugetPackage, "name">, release:
         dependencies: group.dependencies.map((dependency) => ({
           id: dependency.id,
           range: dependency.range,
-          registration: registrationUrl(dependency.id, origin),
+          registration: registrationUrl(dependency.id, origin, undefined, semVer2),
         })),
       })),
     },

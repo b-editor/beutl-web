@@ -20,6 +20,25 @@ describe("NuGet package identities and metadata", () => {
     const metadata = parseNuspec(nuspec.replace("[1.0,2.0)", "[1.0.0-beta,2.0.0)").replace("01.2.0.0-Beta.2+build", "1.0.0"));
     expect(requiresNugetSemVer2("1.0.0", metadata)).toBe(false);
   });
+  it.each([
+    "1", "1.0", "[1.0]", "(,1.0]", "(,1.0)", "(1.0,)", "[1.0,2.0)",
+    "[1.0,1.0]", "(1.0,1.0)", "[,2.0]", "(, )", " [ 1.0 , 2.0 ) ",
+    "[1.0.0-beta.1,2.0.0+build)", "1.2.3.4", "*", "*-*", "1.*", "1.0.*",
+    "1.0.0.*", "1.0.0-*", "1.0.0-beta.*", "1.0.0-beta-*", "1.*-preview.*", "[1.*,2.0)",
+  ])("accepts NuGet dependency range %s", (range) => {
+    expect(parseNuspec(nuspec.replace("[1.0,2.0)", range)).dependencyGroups[0].dependencies[0].range).toBe(range.trim());
+  });
+  it.each([
+    "(1.0)", "[1.0)", "(1.0]", "(,)", "[]", "[,]", "", " ", "[2.0,1.0]",
+    "[1.0,1.0)", "(1.0,1.0]", "[1.0,2.0,3.0]", "[1.0,2.0", "1.0,2.0",
+    "latest", "^1.0", ">=1.0", "v1.0", "1.0.0-01", "[1.0,2.*)", "[*]",
+    "1.*.0", "1.0.*-beta", "1.0.0+*", "**", "1.0.**", "1.0.0.0.*", "[2147483648.0,)",
+  ])("rejects invalid NuGet dependency range %s", (range) => {
+    expect(() => parseNuspec(nuspec.replace("[1.0,2.0)", range))).toThrow("Invalid dependency version range");
+  });
+  it("uses a NuGet-readable unbounded range when the dependency version is omitted", () => {
+    expect(parseNuspec(nuspec.replace(' version="[1.0,2.0)"', "")).dependencyGroups[0].dependencies[0].range).toBe("(, )");
+  });
   it.each([["title", 256], ["description", 4000], ["authors", 1024], ["summary", 4000], ["projectUrl", 2048]] as const)(
     "bounds %s before accepting an archive", async (field, limit) => {
       const manifest = (length: number) => `<package><metadata><id>Sample.Library</id><version>1.0.0</version>

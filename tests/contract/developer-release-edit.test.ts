@@ -4,7 +4,7 @@ import { setDbProvider } from "@beutl/db";
 import { MATERIAL_TAG } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 import { createDedicatedStorageFile } from "@/lib/storage";
-import { blobReader, readNugetPackage } from "../../packages/api/src/nuget/archive";
+import { blobReader, parseNuspec, readNugetPackage } from "../../packages/api/src/nuget/archive";
 
 vi.mock("@/lib/auth-guard", () => ({ authenticated: async (fn: (session: unknown) => unknown) => fn({ user: { id: "owner", name: "Owner" } }) }));
 vi.mock("@beutl/next/language", () => ({ getLanguage: async () => "en" }));
@@ -14,12 +14,15 @@ vi.mock("@/lib/storage", () => ({ createDedicatedStorageFile: vi.fn() }));
 import { updateRelease } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/projects/[name]/actions/release";
 
 const RELEASE_ID = "c7bc502e-aee6-4fbf-87f9-0c413659b1fe";
+const manifest = '<package><metadata><id>Package</id><version>2.0.0</version><authors>Owner</authors><title>Latest SDK</title><description>Latest searchable description</description><tags>latest sdk</tags><projectUrl>https://sdk.example.test</projectUrl></metadata></package>';
 describe("editing a release without replacing its artifact", () => {
   let row: {
     id: string; packageId: string; version: string; published: boolean;
     artifactLocked: boolean; package: { audience: "USER" | "DEVELOPMENT" };
     file: { id: string; userId: string } | null;
+    fileId: string | undefined; nugetListed: boolean; nugetMetadata: ReturnType<typeof parseNuspec>; nuspec: string;
   };
+  let previousReleases: typeof row[];
   let update: ReturnType<typeof vi.fn>;
   let beforeTransaction: (() => void) | undefined;
   let models: {
@@ -31,7 +34,9 @@ describe("editing a release without replacing its artifact", () => {
   beforeEach(() => {
     beforeTransaction = undefined;
     vi.mocked(createDedicatedStorageFile).mockReset();
-    row = { id: RELEASE_ID, packageId: "pkg", version: "2.0.0", published: false, artifactLocked: false, package: { audience: "USER" }, file: { id: "existing-file", userId: "owner" } };
+    previousReleases = [];
+    row = { id: RELEASE_ID, packageId: "pkg", version: "2.0.0", published: false, artifactLocked: false, package: { audience: "USER" }, file: { id: "existing-file", userId: "owner" },
+      fileId: "existing-file", nugetListed: true, nugetMetadata: parseNuspec(manifest), nuspec: manifest };
     update = vi.fn(async ({ data }) => Object.assign(row, data));
     models = {
       profile: { findFirst: async () => ({ userName: "author" }) },
@@ -43,7 +48,7 @@ describe("editing a release without replacing its artifact", () => {
         update,
       },
       package: {
-        findUniqueOrThrow: async () => ({ name: "Package" }),
+        findUniqueOrThrow: async () => ({ id: "pkg", name: "Package", audience: row.package.audience, Release: [...previousReleases, { ...row }] }),
         findFirst: async () => ({ id: "pkg", name: "Package", userId: "owner", tags: [] }),
         update: vi.fn(async () => ({ name: "Package" })),
       },
@@ -69,6 +74,45 @@ describe("editing a release without replacing its artifact", () => {
     const result = await updateRelease(input(published));
     expect(result.success).toBe(true);
     expect(row).toMatchObject({ title: "Updated title", published, fileId: "existing-file" });
+    expect(models.package.update).not.toHaveBeenCalled();
+  });
+  it.each([true, false])("reindexes SDK metadata transactionally when publication becomes %s", async (published) => {
+    row.package.audience = "DEVELOPMENT";
+    row.published = !published;
+    const older = { ...row, id: "older", version: "1.0.0", published: true,
+      nugetMetadata: { ...row.nugetMetadata, title: "Older SDK", description: "Older description", tags: ["older"] } };
+    previousReleases = [older];
+    expect((await updateRelease(input(published))).success).toBe(true);
+    const metadata = published ? row.nugetMetadata : older.nugetMetadata;
+    expect(models.package.update).toHaveBeenCalledWith({ where: { id: "pkg" }, data: {
+      displayName: metadata.title, description: metadata.description, shortDescription: metadata.description,
+      tags: metadata.tags, webSite: metadata.projectUrl,
+    } });
+  });
+  it("clears SDK search metadata when its last published release is hidden", async () => {
+    row.package.audience = "DEVELOPMENT"; row.published = true;
+    expect((await updateRelease(input(false))).success).toBe(true);
+    expect(models.package.update).toHaveBeenCalledWith({ where: { id: "pkg" }, data: {
+      displayName: null, description: "", shortDescription: "", tags: [], webSite: "",
+    } });
+  });
+  it("indexes the uploaded SDK nuspec on publication and keeps drafts out of search", async () => {
+    row.package.audience = "DEVELOPMENT"; row.file = null;
+    const file = { id: "replacement-file", objectKey: "replacement-key", size: 7n };
+    vi.mocked(createDedicatedStorageFile).mockImplementation(async ({ publish }) => {
+      await publish?.(models as never, file);
+      return { kind: "created", record: file } as never;
+    });
+    const form = input(false);
+    form.append("file", new File([zipSync({ "Package.nuspec": strToU8(manifest.replace("Latest SDK", "Uploaded SDK")) })], "package.nupkg"));
+    expect((await updateRelease(form)).success).toBe(true);
+    expect(models.package.update).toHaveBeenLastCalledWith(expect.objectContaining({ data: expect.objectContaining({ displayName: null }) }));
+    row.file = { id: file.id, userId: "owner" };
+    expect((await updateRelease(input(true))).success).toBe(true);
+    expect(models.package.update).toHaveBeenLastCalledWith(expect.objectContaining({ data: {
+      displayName: "Uploaded SDK", description: "Latest searchable description", shortDescription: "Latest searchable description",
+      tags: ["latest", "sdk"], webSite: "https://sdk.example.test",
+    } }));
   });
   it("allows editing a draft before uploading its first file", async () => {
     row.file = null;
