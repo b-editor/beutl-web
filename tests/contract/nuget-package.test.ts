@@ -8,6 +8,39 @@ const nuspec = `<package><metadata><id>Sample.Library</id><version>01.2.0.0-Beta
 function archive(manifest: string | Uint8Array = nuspec) { return new Blob([zipSync({ "Sample.Library.nuspec": typeof manifest === "string" ? strToU8(manifest) : manifest, "README.md": strToU8("# Library"), "lib/net10.0/sample.dll": new Uint8Array(1024) })]); }
 
 describe("NuGet package identities and metadata", () => {
+  it.each([
+    ["LICENSE.txt", "LICENSE.txt"], ["licenses/LICENSE.MD", "licenses/LICENSE.MD"],
+    ["LICENSE", "LICENSE"], ["licenses\\LICENSE.txt", "licenses/LICENSE.txt"],
+    ["/LICENSE.txt", "LICENSE.txt"],
+  ])("accepts the embedded license %s with matching ZIP casing", async (path, entry) => {
+    const manifest = nuspec.replace("</metadata>", `<license type="file">${path}</license></metadata>`);
+    const bytes = zipSync({ "Sample.Library.nuspec": strToU8(manifest), "README.md": strToU8("# SDK"), [entry]: strToU8("License terms") });
+    await expect(readNugetPackage(blobReader(new Blob([bytes]))))
+      .resolves.toHaveProperty("metadata", expect.objectContaining({ license: path, licenseType: "file" }));
+  });
+  it.each([
+    ["LICENSE.txt", "other.txt"], ["LICENSE.txt", "license.txt"], ["licenses/LICENSE.txt", "Licenses/LICENSE.txt"],
+    ["LICENSE.txt/", "LICENSE.txt/"], ["LICENSE.pdf", "LICENSE.pdf"],
+  ])("rejects the license %s when the only archive entry is %s", async (path, entry) => {
+    const manifest = nuspec.replace("</metadata>", `<license type="file">${path}</license></metadata>`);
+    const bytes = zipSync({ "Sample.Library.nuspec": strToU8(manifest), "README.md": strToU8("# SDK"),
+      [entry]: entry.endsWith("/") ? new Uint8Array() : strToU8("License terms") });
+    await expect(readNugetPackage(blobReader(new Blob([bytes])))).rejects.toThrow(/license file/u);
+  });
+  it("preserves license expressions and legacy license URLs without requiring a file", async () => {
+    const expression = nuspec.replace("</metadata>", '<license type="expression">MIT</license></metadata>');
+    await expect(readNugetPackage(blobReader(archive(expression))))
+      .resolves.toHaveProperty("metadata", expect.objectContaining({ license: "MIT", licenseType: "expression" }));
+    const legacy = nuspec.replace("</metadata>", '<licenseUrl>https://example.test/license</licenseUrl></metadata>');
+    const parsed = await readNugetPackage(blobReader(archive(legacy)));
+    expect(parsed.metadata.licenseUrl).toBe("https://example.test/license");
+    expect(parsed.metadata.licenseType).toBeUndefined();
+  });
+  it.each(['<license type="file" />', '<license type="unknown">MIT</license>', '<license>LICENSE.txt</license>'])(
+    "rejects invalid license metadata %s", (license) => {
+      expect(() => parseNuspec(nuspec.replace("</metadata>", `${license}</metadata>`))).toThrow("Invalid package license metadata");
+    },
+  );
   it.each([undefined, "1.2", "1.2.3", "1.2.3.4", "01.02", " +1 . 02 ", "0.-0", "1.2147483647"])(
     "accepts System.Version package type version %s", (version) => {
       const type = `<packageType name="Custom.Package_Type-1"${version === undefined ? "" : ` version="${version}"`} />`;

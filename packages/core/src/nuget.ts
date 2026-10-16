@@ -23,6 +23,12 @@ export function normalizeNugetVersion(version: string): string {
   return numbers.slice(0, numbers[3] ? 4 : 3).join(".") + (match[5] ? `-${match[5].toLowerCase()}` : "");
 }
 
+export function fullNugetVersion(version: string): string {
+  // NuGet's ToFullString normalizes core numbers but preserves the manifest's
+  // prerelease spelling and build metadata. URLs still use identity versions.
+  return normalizeNugetVersion(version).split("-")[0] + (version.match(/[-+].*$/u)?.[0] ?? "");
+}
+
 export function isValidNugetVersion(version: string): boolean {
   try { normalizeNugetVersion(version); return true; }
   catch (error) {
@@ -81,6 +87,7 @@ export type NugetMetadata = {
   projectUrl: string;
   licenseUrl: string;
   license: string;
+  licenseType?: "file" | "expression";
   releaseNotes: string;
   requireLicenseAcceptance: boolean;
   icon: string;

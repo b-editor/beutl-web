@@ -1,5 +1,5 @@
 import type { Context } from "hono";
-import { NUGET_ORIGIN, normalizeNugetId, normalizeNugetVersion, nugetPackageUrl, type NugetMetadata } from "@beutl/core";
+import { NUGET_ORIGIN, fullNugetVersion, normalizeNugetId, normalizeNugetVersion, nugetPackageUrl, type NugetMetadata } from "@beutl/core";
 import type { createStorageOperations } from "../storage/files";
 import { catalogMetadata, sortNugetReleases, type NugetPackage, type CatalogRelease } from "./catalog";
 
@@ -36,12 +36,6 @@ export function serviceIndex(origin: string) {
 export function registrationUrl(id: string, origin: string, version?: string, semVer2 = true): string {
   const leaf = version === undefined ? "index" : normalizeNugetVersion(version);
   return `${origin}/v3/${semVer2 ? "registration" : "registration-semver1"}/${normalizeNugetId(id)}/${leaf}.json`;
-}
-
-export function fullNugetVersion(version: string): string {
-  // NuGet's ToFullString normalizes core numbers but preserves the manifest's
-  // prerelease spelling and build metadata. URLs still use identity versions.
-  return normalizeNugetVersion(version).split("-")[0] + (version.match(/[-+].*$/u)?.[0] ?? "");
 }
 
 export async function searchItem(pkg: Pick<NugetPackage, "name"> & { Release: CatalogRelease[] }, origin: string, semVer2 = true) {

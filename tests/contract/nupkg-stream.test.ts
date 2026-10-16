@@ -55,14 +55,18 @@ describe("streamed NuGet packages", () => {
     })).resolves.toEqual({ ok: false, message: "developer:upload.invalidFileName" });
   });
 
-  it.each([["v1.0.0", "1.0.0"], ["v01.2.0.0-Beta.2+build", "1.2.0-beta.2"]])(
-    "canonicalizes legacy draft %s in both the generated archive and cached manifest", async (version, expected) => {
+  it.each([
+    ["v1.0.0", "1.0.0", "1.0.0"],
+    ["v01.2.0.0-Beta.2+Build.X64", "1.2.0-Beta.2+Build.X64", "1.2.0-beta.2"],
+    ["1.0.0+linux-x64", "1.0.0+linux-x64", "1.0.0"],
+  ])(
+    "preserves the full version of %s in the generated archive and cached manifest", async (version, expected, identity) => {
       const built = await buildDataPackageNupkgFile({ files: [new File(["material"], "a.png")], ...metadata,
         version, username: metadata.authors, t: ((key: string) => key) as never });
       if (!built.ok) throw new Error(built.message);
       const bytes = await read(built.file.stream());
       const parsed = await readNugetPackage(blobReader(new Blob([bytes])), { id: metadata.id, version });
-      expect(built.file.name).toBe(`${metadata.id}.${expected}.nupkg`);
+      expect(built.file.name).toBe(`${metadata.id}.${identity}.nupkg`);
       expect(parsed).toEqual(built.nuget);
       expect(parsed.metadata.version).toBe(expected);
       expect(built.file.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));

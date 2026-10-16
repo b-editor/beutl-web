@@ -523,6 +523,40 @@ suite("NuGet publication invariants on CockroachDB", () => {
       await db.package.deleteMany({ where: { id: { in: names } } });
     }
   });
+  it.each(["USER", "DEVELOPMENT"] as const)("searches %s names and nuspec metadata with literal SQL wildcard characters", async (audience) => {
+    const names = ["0.Literal_value", "1.LiteralXvalue", "2.LiteralYvalue", "3.Title", "4.Description", "5.Tags"]
+      .map((suffix) => `Escapes.${audience}.${suffix}`);
+    const terms = ["Literal_value", "Literal%value", "Literal\\value"];
+    try {
+      for (const [index, name] of names.entries()) {
+        await db.$executeRaw`INSERT INTO "Package" ("id", "name", "audience") VALUES (${name}, ${name}, ${audience}::"PackageAudience")`;
+        for (const version of index === 2 ? ["1.0.0", "2.0.0"] : ["1.0.0"]) {
+          const oldMatch = index === 2 && version === "1.0.0";
+          const title = index === 3 || oldMatch ? terms.join(" ") : "Library";
+          const description = index === 4 ? terms.join(" ") : index === 1 ? "LiteralXvalue Literalvalue" : "Library";
+          const tags = index === 5 ? terms.join(" ") : "";
+          const manifest = `<package><metadata><id>${name}</id><version>${version}</version><authors>Owner</authors>
+            <title>${title}</title><description>${description}</description><tags>${tags}</tags></metadata></package>`;
+          await db.release.create({ data: { packageId: name, version, nugetVersion: version, published: true, fileId: "original",
+            title: "", description: "", targetVersion: "", nugetMetadata: parseNuspec(manifest) } });
+        }
+      }
+      for (const term of terms) {
+        const query = term.toLowerCase(), expected = term.includes("_") ? [names[0], ...names.slice(3)] : names.slice(3);
+        const result = await searchNugetPackages({ audience, query, filterReadable: true });
+        expect(result.totalHits).toBe(expected.length);
+        expect(result.packages.map((pkg) => pkg.name)).toEqual(expected);
+        const suffix = new URLSearchParams({ q: query, skip: "1", take: "1" });
+        const search = await (await nugetApp.request(`https://nuget.test/v3/search?${suffix}`)).json();
+        expect(search).toMatchObject({ totalHits: expected.length, data: [{ id: expected[1] }] });
+        const autocomplete = await (await nugetApp.request(`https://nuget.test/v3/autocomplete?${suffix}`)).json();
+        expect(autocomplete).toEqual({ totalHits: expected.length, data: [expected[1]] });
+      }
+    } finally {
+      await db.release.deleteMany({ where: { packageId: { in: names } } });
+      await db.package.deleteMany({ where: { id: { in: names } } });
+    }
+  });
   it("keeps search terms in sync when the highest SDK version is unlisted and relisted", async () => {
     const pkg = await createDevPackage({ name: "Search.Package", audience: "DEVELOPMENT", userId: "owner" });
     await db.package.update({ where: { id: pkg.id }, data: { published: true } });

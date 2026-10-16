@@ -69,10 +69,17 @@ export function parseNuspec(nuspec: string): NugetMetadata {
   const groups = list(m.dependencies?.group as { "@_targetFramework"?: string; dependency?: { "@_id"?: string; "@_version"?: string }[] } | undefined)
     .map((g) => ({ targetFramework: text(g["@_targetFramework"]), dependencies: dependencies(g.dependency) }));
   if (m.dependencies?.dependency) groups.unshift({ targetFramework: "", dependencies: dependencies(m.dependencies.dependency) });
+  const license = text(m.license?.["#text"]) || text(m.license);
+  let licenseType: NugetMetadata["licenseType"];
+  if (m.license !== undefined) {
+    const type = text(m.license?.["@_type"]).trim().toLowerCase();
+    if (!license || (type !== "file" && type !== "expression")) return invalid("Invalid package license metadata");
+    licenseType = type;
+  }
   return validateMetadata({
     id, version, title: text(m.title) || id, authors: text(m.authors), description: text(m.description),
     summary: text(m.summary), tags: text(m.tags).split(/[\s,;]+/u).filter(Boolean),
-    projectUrl: text(m.projectUrl), licenseUrl: text(m.licenseUrl), license: text(m.license?.["#text"]) || text(m.license),
+    projectUrl: text(m.projectUrl), licenseUrl: text(m.licenseUrl), license, ...(licenseType ? { licenseType } : {}),
     releaseNotes: text(m.releaseNotes), requireLicenseAcceptance: text(m.requireLicenseAcceptance).toLowerCase() === "true",
     icon: text(m.icon), iconUrl: text(m.iconUrl), readme: text(m.readme), dependencyGroups: groups,
     packageTypes: list(m.packageTypes?.packageType as { "@_name"?: string; "@_version"?: string } | undefined)
@@ -181,6 +188,13 @@ export async function readNugetPackage(reader: Reader, expected?: { id: string; 
   const metadata = parseNuspec(nuspec);
   if (expected && (normalizeNugetId(expected.id) !== normalizeNugetId(metadata.id) ||
     normalizeNugetVersion(expected.version) !== normalizeNugetVersion(metadata.version))) return invalid("Package ID and version must match the release");
+  if (metadata.licenseType === "file") {
+    const path = metadata.license.replaceAll("\\", "/").replace(/^\/+/, "");
+    const extension = /\.[^./]+$/u.exec(path)?.[0].toLowerCase();
+    // NuGet permits .txt, .md and extensionless licenses, with exact ZIP casing.
+    if (extension && extension !== ".txt" && extension !== ".md") return invalid("Invalid package license file extension");
+    if (!entries.some((entry) => !entry.isDirectory && entry.name.replaceAll("\\", "/") === path)) return invalid("Package license file is missing");
+  }
   const find = (path: string) => entries.find((e) => e.name.replaceAll("\\", "/").toLowerCase() === path.replaceAll("\\", "/").toLowerCase());
   const readme = metadata.readme ? find(metadata.readme) : null;
   if (metadata.readme && !readme) return invalid("Package readme is missing");

@@ -155,6 +155,8 @@ export async function searchNugetPackages({ query = "", skip = 0, take = 20, pre
     ...(!semVer2 ? { nugetSemVer2: false } : {}),
     ...(!prerelease ? { NOT: { nugetVersion: { contains: "-" } } } : {}) };
   const term = query.trim();
+  // Prisma's string filters use LIKE patterns; search input is literal text.
+  const literalTerm = term.replace(/[\\%_]/gu, "\\$&");
   const db = await getDb();
   // Prisma's JSON array_contains is case-sensitive. Compare the individual
   // cached tags in SQL, preserving their original spelling for display.
@@ -169,13 +171,13 @@ export async function searchNugetPackages({ query = "", skip = 0, take = 20, pre
         WHERE lower(tag.value) = lower(${term}))
   `) : [];
   const metadataWhere: Prisma.ReleaseWhereInput = { OR: [
-    { nugetMetadata: { path: ["title"], string_contains: term, mode: "insensitive" } },
-    { nugetMetadata: { path: ["description"], string_contains: term, mode: "insensitive" } },
+    { nugetMetadata: { path: ["title"], string_contains: literalTerm, mode: "insensitive" } },
+    { nugetMetadata: { path: ["description"], string_contains: literalTerm, mode: "insensitive" } },
     { id: { in: tagMatches.map((release) => release.id) } },
   ] };
   const baseWhere: Prisma.PackageWhereInput = { published: true, audience, Release: { some: releaseWhere } };
   const queryWhere: Prisma.PackageWhereInput = term ? { OR: [
-    { name: { contains: term, mode: "insensitive" } },
+    { name: { contains: literalTerm, mode: "insensitive" } },
     { Release: { some: { AND: [releaseWhere, metadataWhere] } } },
   ] } : {};
   const where: Prisma.PackageWhereInput = { ...baseWhere, ...queryWhere };
@@ -191,7 +193,7 @@ export async function searchNugetPackages({ query = "", skip = 0, take = 20, pre
     return releases.length > 0;
   };
   if (term) {
-    const excluded = await packagesMatchingOlderMetadata(releaseWhere, metadataWhere, term, audience);
+    const excluded = await packagesMatchingOlderMetadata(releaseWhere, metadataWhere, literalTerm, audience);
     if (excluded.length) where.id = { notIn: excluded };
   }
   const [totalHits, packages] = await Promise.all([

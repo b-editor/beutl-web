@@ -1,8 +1,8 @@
 import { Hono, type Context } from "hono";
-import { compareNugetVersions, isValidNugetVersion, normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
+import { compareNugetVersions, fullNugetVersion, isValidNugetVersion, normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
 import { getDb, packageNameFilter } from "@beutl/db";
 import { catalogMetadata, catalogReleaseSelect, classifyNugetReleases, searchNugetPackages, sortNugetReleases } from "../catalog";
-import { fullNugetVersion, nugetOrigin, registrationItem, registrationUrl, searchItem, serviceIndex, type NugetEnv } from "../protocol";
+import { nugetOrigin, registrationItem, registrationUrl, searchItem, serviceIndex, type NugetEnv } from "../protocol";
 
 const routes = new Hono<NugetEnv>();
 

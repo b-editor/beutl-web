@@ -4,6 +4,7 @@ import {
   buildNuspec,
   createNupkgStream,
   blobStream,
+  fullNugetVersion,
   MATERIAL_TAG,
   normalizeNugetVersion,
   rewriteTemplateReferences,
@@ -144,13 +145,13 @@ export async function buildDataPackageNupkgFile({
     return { ok: false, message: t("developer:upload.descriptionRequired") };
   }
 
-  let normalizedVersion: string;
-  try { normalizedVersion = normalizeNugetVersion(version); }
+  let manifestVersion: string;
+  try { manifestVersion = fullNugetVersion(version); }
   catch {
     // Invalid version input uses the same validation response as the archive builder.
     return { ok: false, message: t("developer:upload.invalidFileName") };
   }
-  const metadata = { id, version: normalizedVersion, title, description, tags, authors: username };
+  const metadata = { id, version: manifestVersion, title, description, tags, authors: username };
   const stream = () => createNupkgStream(metadata, nupkgFiles);
   // Count a streamed first pass to reserve the exact stored size before upload.
   // Subsequent passes reuse immutable inputs and deterministic ZIP metadata.
@@ -171,6 +172,6 @@ export async function buildDataPackageNupkgFile({
     }
   } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
   return { ok: true, file: {
-    name: `${id}.${normalizedVersion}.nupkg`, type: "application/octet-stream", size, stream, sha256: hash.digest("hex"),
+    name: `${id}.${normalizeNugetVersion(manifestVersion)}.nupkg`, type: "application/octet-stream", size, stream, sha256: hash.digest("hex"),
   }, tags, nuget: { nuspec: buildNuspec({ ...metadata, files: [] }), metadata: parseNuspec(buildNuspec({ ...metadata, files: [] })), readme: null } };
 }
