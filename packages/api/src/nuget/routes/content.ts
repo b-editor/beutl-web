@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
+import { getDb, packageNameFilter } from "@beutl/db";
 import { readNugetIcon, storedPackageReader } from "../archive";
 import { findNugetPackage, findNugetVersion, releaseMetadata, sortNugetReleases } from "../catalog";
 import { downloadPackage } from "../download";
@@ -8,7 +9,12 @@ import type { NugetEnv } from "../protocol";
 const routes = new Hono<NugetEnv>();
 
 routes.on(["GET", "HEAD"], "/package/:id/index.json", async (c) => {
-  const pkg = await findNugetPackage(c.req.param("id"));
+  const pkg = await (await getDb()).package.findFirst({
+    where: { name: packageNameFilter(normalizeNugetId(c.req.param("id"))), published: true },
+    select: { Release: {
+      where: { published: true, fileId: { not: null } }, select: { version: true },
+    } },
+  });
   if (!pkg?.Release.length) return c.notFound();
   return c.json({
     versions: sortNugetReleases(pkg.Release).reverse().map((release) => normalizeNugetVersion(release.version)),
@@ -18,7 +24,7 @@ routes.on(["GET", "HEAD"], "/package/:id/index.json", async (c) => {
 routes.on(["GET", "HEAD"], "/files/:fileId", (c) => downloadPackage(c.req.raw, c.req.param("fileId"), c.env?.execution));
 
 routes.on(["GET", "HEAD"], "/package/:id/:version/:fileName", async (c) => {
-  const pkg = await findNugetPackage(c.req.param("id"));
+  const pkg = await findNugetPackage(c.req.param("id"), undefined, c.req.param("version"));
   const release = pkg && findNugetVersion(pkg, c.req.param("version"));
   if (!pkg || !release?.file) return c.notFound();
 

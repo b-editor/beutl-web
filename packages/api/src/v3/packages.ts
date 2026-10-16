@@ -9,6 +9,10 @@ import { findReleaseByPackageAndVersion, findReleasesForPackage } from "@beutl/d
 import { compareNugetVersions } from "@beutl/core";
 
 const app = new Hono()
+  .use("*", async (c, next) => {
+    c.header("Cache-Control", "private, no-store");
+    await next();
+  })
   .get("/:name", async (c) => {
     const name = c.req.param("name");
     const userId = await getUserId(c);
@@ -68,7 +72,7 @@ const app = new Hono()
         description: r.description,
         targetVersion: r.targetVersion,
         fileId: r.fileId,
-        fileUrl: r.fileId ? await nugetFileUrl(r.fileId) : null,
+        fileUrl: r.fileId ? await nugetFileUrl(r.fileId, userId) : null,
       })),
     ));
   })
@@ -107,7 +111,7 @@ const app = new Hono()
       description: release.description,
       targetVersion: release.targetVersion,
       fileId: release.fileId,
-      fileUrl: release.fileId ? await nugetFileUrl(release.fileId) : null,
+      fileUrl: release.fileId ? await nugetFileUrl(release.fileId, userId) : null,
     });
   });
 

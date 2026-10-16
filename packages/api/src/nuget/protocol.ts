@@ -1,5 +1,5 @@
 import type { Context } from "hono";
-import { NUGET_ORIGIN, normalizeNugetId, normalizeNugetVersion, nugetPackageUrl, requiresNugetSemVer2 } from "@beutl/core";
+import { NUGET_ORIGIN, normalizeNugetId, normalizeNugetVersion, nugetPackageUrl } from "@beutl/core";
 import type { createStorageOperations } from "../storage/files";
 import { catalogMetadata, sortNugetReleases, type NugetPackage, type CatalogRelease } from "./catalog";
 
@@ -39,13 +39,15 @@ export function registrationUrl(id: string, origin: string, version?: string, se
 }
 
 export async function searchItem(pkg: Pick<NugetPackage, "name"> & { Release: CatalogRelease[] }, origin: string, semVer2 = true) {
-  const releases = sortNugetReleases(pkg.Release);
-  let metadata;
-  while (releases.length) {
-    metadata = await catalogMetadata(pkg, releases[0]);
-    if (metadata && (semVer2 || !requiresNugetSemVer2(releases[0].version, metadata))) break;
-    metadata = null;
-    releases.shift();
+  const releases: CatalogRelease[] = [];
+  let metadata = null;
+  // Every advertised version must be readable by this client, including older
+  // uncached releases whose dependencies have not been classified yet.
+  for (const release of sortNugetReleases(pkg.Release)) {
+    const candidate = await catalogMetadata(pkg, release, semVer2);
+    if (!candidate) continue;
+    metadata ??= candidate;
+    releases.push(release);
   }
   if (!metadata) return null;
   const latest = releases[0];
@@ -76,8 +78,8 @@ export async function searchItem(pkg: Pick<NugetPackage, "name"> & { Release: Ca
 
 export async function registrationItem(pkg: Pick<NugetPackage, "name">, release: CatalogRelease, origin: string, semVer2 = true) {
   const version = normalizeNugetVersion(release.version);
-  const metadata = await catalogMetadata(pkg, release);
-  if (!metadata || (!semVer2 && requiresNugetSemVer2(release.version, metadata))) return null;
+  const metadata = await catalogMetadata(pkg, release, semVer2);
+  if (!metadata) return null;
   const packageContent = nugetPackageUrl(pkg.name, version, origin);
   const url = registrationUrl(pkg.name, origin, version, semVer2);
 

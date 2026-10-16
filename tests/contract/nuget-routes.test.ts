@@ -61,6 +61,12 @@ describe("NuGet registry routes", () => {
     expect(await (await request("/v3/package/library/1.0.0/library.1.0.0.nupkg")).text()).toBe("test");
     expect(models.nugetToken.findUnique).not.toHaveBeenCalled();
   });
+  it("loads only version identities for the flat index and the requested artifact for downloads", async () => {
+    await request("/v3/package/library/index.json");
+    expect(models.package.findFirst.mock.calls[0][0].select.Release.select).toEqual({ version: true });
+    await request("/v3/package/library/01.0.0.0/library.1.0.0.nupkg");
+    expect(models.package.findFirst.mock.calls[1][0].include.Release.where.nugetVersion).toBe("1.0.0");
+  });
   it("uses the configured origin and normalized links across catalog responses", async () => {
     const origin = "https://packages.example.test";
     const env = { NUGET_PUBLIC_ORIGIN: `${origin}/` };
@@ -196,6 +202,45 @@ describe("NuGet registry routes", () => {
     expect((await request("/v3/registration-semver1/library/1.0.0.json")).status).toBe(404);
     expect(models.release.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ nugetSemVer2: true }) }));
   });
+  it.each(["/v3/autocomplete?id=Library", "/v3/autocomplete?q=Library", "/v3/search?q=Library"])(
+    "resolves uncached dependency compatibility before returning %s", async (path) => {
+      const nuspec = manifest.replace("</metadata>", '<dependencies><dependency id="Dependency" version="[1.0.0-beta.1,2.0)" /></dependencies></metadata>');
+      const bytes = zipSync({ "Library.nuspec": strToU8(nuspec) });
+      const get = vi.fn(async (_key, options) => ({
+        arrayBuffer: async () => bytes.slice(options.range.offset, options.range.offset + options.range.length).buffer,
+      }));
+      setR2BucketProvider(() => ({ get }) as never);
+      const legacy = { ...release, nugetListed: true, nugetMetadata: null, nuspec: null,
+        file: { ...release.file, size: BigInt(bytes.length) } } as unknown as typeof release;
+      const catalog = { ...pkg, Release: [legacy] };
+      const fetchCatalog = (suffix = "") => {
+        if (path.includes("id=")) models.package.findFirst.mockResolvedValueOnce(catalog);
+        else models.package.findMany.mockResolvedValueOnce([catalog]);
+        return request(path + suffix);
+      };
+      models.release.updateMany.mockImplementationOnce(async ({ data }) => { Object.assign(legacy, data); return { count: 1 }; });
+      expect((await (await fetchCatalog()).json()).data).toEqual([]);
+      expect(legacy.nugetSemVer2).toBe(true);
+      const reads = get.mock.calls.length;
+      expect(reads).toBeGreaterThan(0);
+      // An older incompatible release must not leak through the versions list
+      // just because a newer compatible release supplies the search metadata.
+      catalog.Release.push({ ...release, version: "2.0.0", nugetListed: true,
+        nugetMetadata: parseNuspec(manifest.replace("1.0.0", "2.0.0")) });
+      const result = (await (await fetchCatalog()).json()).data;
+      expect(result).toEqual(path.includes("id=") ? ["2.0.0"] : path.includes("/search")
+        ? [expect.objectContaining({ version: "2.0.0", versions: [expect.objectContaining({ version: "2.0.0" })] })]
+        : ["Library"]);
+      expect(get).toHaveBeenCalledTimes(reads);
+      if (path.includes("id=")) {
+        const modern = (await (await fetchCatalog("&semVerLevel=2.0.0")).json()).data;
+        expect(modern).toEqual(["1.0.0", "2.0.0"]);
+        const select = models.package.findFirst.mock.calls[0][0].select.Release.select;
+        expect(select).not.toHaveProperty("nuspec");
+        expect(select).not.toHaveProperty("readme");
+      }
+    },
+  );
   it.each(["registration", "search"])("parses legacy %s archives sequentially", async (resource) => {
     let active = 0, maximum = 0;
     const releases = ["1.0.0", "2.0.0"].map((version) => {

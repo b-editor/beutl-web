@@ -7,6 +7,19 @@ DO $$ BEGIN
   IF EXISTS (SELECT 1 FROM "Package" GROUP BY lower("name") HAVING count(*) > 1) THEN
     RAISE EXCEPTION 'Package has duplicate case-insensitive IDs; resolve their ownership before retrying';
   END IF;
+  -- The previous Web form accepted three-part SemVer, but allowed longer
+  -- strings and larger numeric components than NuGet can read.
+  IF EXISTS (
+    SELECT 1 FROM "Release"
+    WHERE CASE
+      WHEN length("version") > 128 OR "version" !~ '^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' THEN true
+      ELSE split_part(regexp_replace("version", '^v', ''), '.', 1)::DECIMAL > 2147483647
+        OR split_part("version", '.', 2)::DECIMAL > 2147483647
+        OR split_part(split_part(split_part("version", '.', 3), '-', 1), '+', 1)::DECIMAL > 2147483647
+    END
+  ) THEN
+    RAISE EXCEPTION 'Release has unsupported legacy versions; resolve the versions described in docs/deployment.md before retrying';
+  END IF;
   IF EXISTS (
     SELECT 1 FROM "Release"
     GROUP BY "packageId", lower(regexp_replace(split_part("version", '+', 1), '^v', ''))

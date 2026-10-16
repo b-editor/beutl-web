@@ -85,13 +85,17 @@ async function createResponse(pkgId: string, userId: string | null, request?: Re
         description: latestRelease.description,
         targetVersion: latestRelease.targetVersion,
         fileId: latestRelease.fileId,
-        fileUrl: latestRelease.fileId ? await nugetFileUrl(latestRelease.fileId) : null,
+        fileUrl: latestRelease.fileId ? await nugetFileUrl(latestRelease.fileId, userId) : null,
       }
       : null,
   };
 }
 
 const app = new Hono()
+  .use("*", async (c, next) => {
+    c.header("Cache-Control", "private, no-store");
+    await next();
+  })
   .post("/", zValidator("json", acquireSchema), async (c) => {
     const req = c.req.valid("json");
     const userId = await getUserId(c);

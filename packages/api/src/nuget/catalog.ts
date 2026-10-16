@@ -4,10 +4,11 @@ import { getDb, type PrismaTransaction } from "@beutl/db";
 import type { Prisma } from "@prisma/client";
 import { readNugetPackage, storedPackageReader } from "./archive";
 
-export async function findNugetPackage(id: string, audience?: PackageAudience) {
+export async function findNugetPackage(id: string, audience?: PackageAudience, version?: string) {
   return (await getDb()).package.findFirst({
     where: { name: packageNameFilter(normalizeNugetId(id)), published: true, audience },
-    include: { Release: { where: { published: true, fileId: { not: null } }, include: { file: true } } },
+    include: { Release: { where: { published: true, fileId: { not: null },
+      ...(version !== undefined ? { nugetVersion: normalizeNugetVersion(version) } : {}) }, include: { file: true } } },
   });
 }
 
@@ -16,7 +17,7 @@ export type NugetRelease = NugetPackage["Release"][number];
 
 // Catalog responses need neither the manifest text nor the embedded readme.
 export const catalogReleaseSelect = {
-  id: true, version: true, nugetListed: true, nugetMetadata: true,
+  id: true, version: true, nugetListed: true, nugetMetadata: true, nugetSemVer2: true,
   fileId: true, file: true, downloads: true, createdAt: true,
 } satisfies Prisma.ReleaseSelect;
 export type CatalogRelease = Prisma.ReleaseGetPayload<{ select: typeof catalogReleaseSelect }>;
@@ -59,9 +60,11 @@ export async function tryReleaseMetadata(pkg: Pick<NugetPackage, "name">, releas
   }
 }
 
-export async function catalogMetadata(pkg: Pick<NugetPackage, "name">, release: CatalogRelease) {
-  return release.nugetMetadata as NugetMetadata | null ??
+export async function catalogMetadata(pkg: Pick<NugetPackage, "name">, release: CatalogRelease, semVer2 = true) {
+  if (!semVer2 && (release.nugetSemVer2 || requiresNugetSemVer2(release.version))) return null;
+  const metadata = release.nugetMetadata as NugetMetadata | null ??
     (await tryReleaseMetadata(pkg, { ...release, nuspec: null, readme: null }))?.metadata ?? null;
+  return metadata && (semVer2 || !requiresNugetSemVer2(release.version, metadata)) ? metadata : null;
 }
 
 export async function searchNugetPackages({ query = "", skip = 0, take = 20, prerelease = true, semVer2 = true, audience }: {

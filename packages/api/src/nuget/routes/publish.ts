@@ -25,15 +25,16 @@ routes.put("/", requirePushKey, async (c) => {
 });
 
 routes.on(["DELETE", "POST"], "/:id/:version", requirePushKey, async (c) => {
+  const version = normalizeNugetVersion(c.req.param("version"));
   const result = await startRetryableTransaction(async (tx) => {
     const pkg = await tx.package.findFirst({
       where: { name: packageNameFilter(normalizeNugetId(c.req.param("id"))) },
-      include: { Release: { include: { file: true } } },
+      include: { Release: { where: { nugetVersion: version },
+        select: { id: true, packageId: true, version: true, published: true, fileId: true } } },
     });
     if (!pkg) return 404;
     if (pkg.userId !== c.get("publisherId")) return 403;
 
-    const version = normalizeNugetVersion(c.req.param("version"));
     const release = pkg.Release.find((candidate) => normalizeNugetVersion(candidate.version) === version);
     if (!release?.published || !release.fileId) return 404;
     await reservePublishedReleaseIdentity(tx, release);

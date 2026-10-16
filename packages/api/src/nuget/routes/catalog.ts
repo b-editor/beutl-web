@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
-import { compareNugetVersions, isValidNugetVersion, normalizeNugetId, normalizeNugetVersion, requiresNugetSemVer2 } from "@beutl/core";
+import { compareNugetVersions, isValidNugetVersion, normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
 import { getDb, packageNameFilter } from "@beutl/db";
-import { catalogReleaseSelect, findNugetPackage, searchNugetPackages, sortNugetReleases } from "../catalog";
+import { catalogMetadata, catalogReleaseSelect, searchNugetPackages, sortNugetReleases } from "../catalog";
 import { nugetOrigin, registrationItem, registrationUrl, searchItem, serviceIndex, type NugetEnv } from "../protocol";
 
 const routes = new Hono<NugetEnv>();
@@ -40,16 +40,27 @@ routes.get("/autocomplete", async (c) => {
   const id = c.req.query("id");
   const options = searchOptions(c);
   if (id) {
-    const pkg = await findNugetPackage(id);
-    const releases = pkg?.Release.filter((release) =>
-      release.nugetListed && (options.prerelease || !normalizeNugetVersion(release.version).includes("-")) &&
-      (options.semVer2 || !(release.nugetSemVer2 || requiresNugetSemVer2(release.version)))) ?? [];
-    return c.json({
-      data: sortNugetReleases(releases).reverse().map((release) => normalizeNugetVersion(release.version)),
+    const pkg = await (await getDb()).package.findFirst({
+      where: { name: packageNameFilter(normalizeNugetId(id)), published: true },
+      select: { name: true, Release: {
+        where: { published: true, nugetListed: true, fileId: { not: null } }, select: catalogReleaseSelect,
+      } },
     });
+    const data = [];
+    for (const release of sortNugetReleases(pkg?.Release ?? []).reverse()) {
+      if (!release.nugetListed || (!options.prerelease && normalizeNugetVersion(release.version).includes("-"))) continue;
+      if (await catalogMetadata(pkg!, release, options.semVer2)) data.push(normalizeNugetVersion(release.version));
+    }
+    return c.json({ data });
   }
   const { totalHits, packages } = await searchNugetPackages(options);
-  return c.json({ totalHits, data: packages.map((pkg) => pkg.name) });
+  const data = [];
+  for (const pkg of packages) {
+    for (const release of pkg.Release) {
+      if (await catalogMetadata(pkg, release, options.semVer2)) { data.push(pkg.name); break; }
+    }
+  }
+  return c.json({ totalHits, data });
 });
 
 const REGISTRATION_PAGE_SIZE = 64;

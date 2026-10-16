@@ -75,6 +75,26 @@ suite("NuGet publication invariants on CockroachDB", () => {
       }
     },
   );
+  it.each([
+    "9999999999.1.1", "v1.2147483648.0", "1.0.2147483648+build", "9007199254740991.0.0",
+    `1.0.0+${"x".repeat(123)}`, "not-a-version",
+  ])("rejects unsupported legacy version %s before schema changes", async (version) => {
+    await db.$executeRaw`INSERT INTO "Release" ("id", "packageId", "version", "targetVersion", "title", "description", "published")
+      VALUES ('unsupported', 'user', ${version}, '', '', '', true)`;
+    try {
+      await expect(db.$executeRawUnsafe(`${preflight}END $$;`)).rejects.toThrow("unsupported legacy versions");
+      expect(await db.$queryRaw`SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'Release' AND column_name = 'nugetVersion' AND table_schema = 'public'`).toEqual([]);
+    } finally { await db.$executeRaw`DELETE FROM "Release" WHERE "id" = 'unsupported'`; }
+  });
+  it.each(["v2147483647.2147483647.2147483647-beta+build", `2.0.0+${"x".repeat(122)}`])(
+    "accepts supported legacy version at the boundary: %s", async (version) => {
+      await db.$executeRaw`INSERT INTO "Release" ("id", "packageId", "version", "targetVersion", "title", "description", "published")
+        VALUES ('boundary', 'user', ${version}, '', '', '', false)`;
+      try { await expect(db.$executeRawUnsafe(`${preflight}END $$;`)).resolves.toBeDefined(); }
+      finally { await db.$executeRaw`DELETE FROM "Release" WHERE "id" = 'boundary'`; }
+    },
+  );
   it("backfills canonical identities and locks only currently published releases", async () => {
     await db.$executeRawUnsafe(`${preflight}END $$;`);
     for (const statement of ddl.split(";").filter((s) => s.trim())) await db.$executeRawUnsafe(statement);

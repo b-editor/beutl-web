@@ -59,6 +59,25 @@ row's `id` and ownership. Otherwise publish corrected artifacts under a valid
 project ID through the old dashboard, then remove the obsolete project before
 retrying. Renaming the database row alone cannot fix an invalid nuspec ID.
 
+Historical versions must also fit NuGet's 128-character limit and numeric
+component range (0–2147483647). The preflight rejects unsupported versions before
+changing the schema. Find affected releases on the old schema with:
+
+```sql
+SELECT "id", "packageId", "version" FROM "Release"
+WHERE CASE
+  WHEN length("version") > 128 OR "version" !~ '^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' THEN true
+  ELSE split_part(regexp_replace("version", '^v', ''), '.', 1)::DECIMAL > 2147483647
+    OR split_part("version", '.', 2)::DECIMAL > 2147483647
+    OR split_part(split_part(split_part("version", '.', 3), '-', 1), '+', 1)::DECIMAL > 2147483647
+END;
+```
+
+Publish a corrected artifact with a supported version through the old dashboard,
+then remove the unsupported release and retry. If the artifact already declares
+a supported version, correct the release row to match it after checking for
+collisions. Changing the database version cannot repair an unsupported nuspec.
+
 Before changing the schema, it also rejects duplicate release identities,
 including drafts, `v` prefixes, build metadata and prerelease casing. Inspect
 collisions on the old schema with:
