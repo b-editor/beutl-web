@@ -14,7 +14,7 @@ export async function DevelopmentPackages({ lang, query, page: requestedPage }: 
 }) {
   const { t } = await getTranslation(lang);
   const page = /^\d+$/u.test(requestedPage ?? "") ? Math.max(1, Math.min(5000, Number(requestedPage))) : 1;
-  const { packages, totalHits } = await searchNugetPackages({ audience: "DEVELOPMENT", query, skip: (page - 1) * 20, take: 20 });
+  const { packages, totalHits } = await searchNugetPackages({ audience: "DEVELOPMENT", query, skip: (page - 1) * 20, take: 20, filterReadable: true });
   const cards = (await Promise.all(packages.map(async (pkg) => {
     const latest = sortNugetReleases(pkg.Release)[0];
     const metadata = await catalogMetadata(pkg, latest);

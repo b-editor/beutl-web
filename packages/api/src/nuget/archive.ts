@@ -44,6 +44,9 @@ export function parseNuspec(nuspec: string): NugetMetadata {
     removeNSPrefix: true, processEntities: true }).parse(nuspec)?.package?.metadata;
   if (!m || typeof m !== "object") return invalid("Missing package metadata");
   const id = text(m.id), version = text(m.version);
+  // The v prefix is compatible only with historical Web release records;
+  // NuGet clients reject it inside the package manifest itself.
+  if (version.startsWith("v")) return invalid("Invalid package ID or version");
   try { normalizeNugetId(id); normalizeNugetVersion(version); } catch (error) { return invalid("Invalid package ID or version", error); }
   if (!text(m.authors).trim() || !text(m.description).trim()) return invalid("Authors and description are required");
   const dependencies = (value: { "@_id"?: string; "@_version"?: string } | { "@_id"?: string; "@_version"?: string }[] | undefined) =>

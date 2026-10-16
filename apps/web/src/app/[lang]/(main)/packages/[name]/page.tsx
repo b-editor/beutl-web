@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, Download, ExternalLink, PackageOpen } from "lucide-react";
-import { findNugetPackage, findNugetVersion, releaseMetadata, sortNugetReleases } from "@beutl/api/nuget/catalog";
+import { findNugetPackage, findNugetPackageVersions, findNugetVersion, tryReleaseMetadata, sortNugetReleases } from "@beutl/api/nuget/catalog";
 import { InvalidNugetIdentityError, NUGET_ORIGIN, nugetPackageUrl, normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 import { Button } from "@beutl/ui/ui/button";
@@ -20,12 +20,25 @@ export default async function Page({ params, searchParams }: {
     if (error instanceof InvalidNugetIdentityError) notFound();
     throw error;
   }
-  const pkg = await findNugetPackage(name, "DEVELOPMENT");
+  const pkg = await findNugetPackageVersions(name, "DEVELOPMENT");
   if (!pkg?.Release.length) notFound();
   const releases = sortNugetReleases(pkg.Release);
-  const release = version ? findNugetVersion(pkg, version) : releases.find((r) => r.nugetListed) ?? releases[0];
-  if (!release) notFound();
-  const { metadata: m, readme } = await releaseMetadata(pkg, release);
+  const listed = releases.filter((r) => r.nugetListed);
+  const candidates = version ? [findNugetVersion(pkg, version)] : listed.length ? listed : releases;
+  const readVersion = async (candidate: { version: string }) => {
+    const record = await findNugetPackage(name, "DEVELOPMENT", candidate.version);
+    const release = record?.Release[0];
+    if (!release) return null;
+    const data = await tryReleaseMetadata(pkg, release);
+    return data ? { release, ...data } : null;
+  };
+  let selected: Awaited<ReturnType<typeof readVersion>> = null;
+  for (const candidate of candidates) {
+    if (candidate) selected = await readVersion(candidate);
+    if (selected) break;
+  }
+  if (!selected) notFound();
+  const { release, metadata: m, readme } = selected;
   const { t } = await getTranslation(lang);
   const origin = (process.env.NUGET_PUBLIC_ORIGIN || NUGET_ORIGIN).replace(/\/$/u, "");
   const serviceIndex = `${origin}/v3/index.json`;

@@ -49,7 +49,7 @@ export default async function Page(props: {
 
         <div className="flex max-lg:flex-col mt-6">
           <div className="lg:basis-2/3 lg:pr-6">
-            <PackageDescriptionForm pkg={pkg} lang={lang} />
+            {pkg.audience === "USER" && <PackageDescriptionForm pkg={pkg} lang={lang} />}
             <ReleaseForm pkg={pkg} lang={lang} beutlVersions={beutlVersions} />
           </div>
           <div className="lg:basis-1/3">

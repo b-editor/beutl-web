@@ -4,11 +4,21 @@ import { getDb, type PrismaTransaction } from "@beutl/db";
 import { Prisma } from "@prisma/client";
 import { readNugetPackage, storedPackageReader } from "./archive";
 
-export async function findNugetPackage(id: string, audience?: PackageAudience, version?: string) {
+export async function findNugetPackage(id: string, audience: PackageAudience | undefined, version: string) {
   return (await getDb()).package.findFirst({
     where: { name: packageNameFilter(normalizeNugetId(id)), published: true, audience },
     include: { Release: { where: { published: true, fileId: { not: null },
-      ...(version !== undefined ? { nugetVersion: normalizeNugetVersion(version) } : {}) }, include: { file: true } } },
+      nugetVersion: normalizeNugetVersion(version) }, include: { file: true } } },
+  });
+}
+
+export async function findNugetPackageVersions(id: string, audience?: PackageAudience) {
+  return (await getDb()).package.findFirst({
+    where: { name: packageNameFilter(normalizeNugetId(id)), published: true, audience },
+    select: { name: true, Release: {
+      where: { published: true, fileId: { not: null } },
+      select: { id: true, version: true, nugetListed: true },
+    } },
   });
 }
 
@@ -28,7 +38,7 @@ export function sortNugetReleases<T extends { version: string }>(releases: T[]):
   return [...releases].sort((a, b) => compareNugetVersions(b.version, a.version));
 }
 
-export function findNugetVersion(pkg: NugetPackage, version: string) {
+export function findNugetVersion<T extends { version: string }>(pkg: { Release: T[] }, version: string) {
   const normalized = normalizeNugetVersion(version);
   return pkg.Release.find((r) => normalizeNugetVersion(r.version) === normalized);
 }
@@ -84,7 +94,7 @@ export async function searchNugetPackages({ query = "", skip = 0, take = 20, pre
   };
   const db = await getDb();
   const include = { Release: { where: releaseWhere, select: catalogReleaseSelect } };
-  const offset = Math.max(0, skip), limit = Math.max(1, Math.min(100, take));
+  const offset = Math.max(0, skip), limit = Math.max(0, Math.min(100, take));
   const readable = async (pkg: CatalogPackage) => {
     const releases = [];
     for (const release of pkg.Release) {
@@ -101,23 +111,22 @@ export async function searchNugetPackages({ query = "", skip = 0, take = 20, pre
     // classified. Walk by name and apply the client offset to readable hits,
     // not to candidates. Start at the beginning on later pages too: unreadable
     // archives remain unknown and cannot safely be hidden by a transient GET.
-    const packages: CatalogPackage[] = [], excluded: string[] = [];
+    const packages: CatalogPackage[] = [];
     let after: string | undefined, accepted = 0;
-    while (packages.length < limit) {
+    while (true) {
       const batch: CatalogPackage[] = await db.package.findMany({
         where: after === undefined ? where : { AND: [where, { name: { gt: after } }] },
-        orderBy: { name: "asc" }, take: limit, include,
+        orderBy: { name: "asc" }, take: Math.max(20, limit), include,
       });
       if (!batch.length) break;
       for (const pkg of batch) {
         after = pkg.name;
-        if (!await readable(pkg)) { excluded.push(pkg.id); continue; }
-        if (accepted++ >= offset) packages.push(pkg);
-        if (packages.length === limit) break;
+        if (!await readable(pkg)) continue;
+        if (accepted++ >= offset && packages.length < limit) packages.push(pkg);
       }
     }
-    const totalHits = await db.package.count({ where: { AND: [where, { id: { notIn: excluded } }] } });
-    return { totalHits, packages };
+    // Count the complete readable result, including candidates after this page.
+    return { totalHits: accepted, packages };
   }
   const [totalHits, packages] = await Promise.all([
     db.package.count({ where }),

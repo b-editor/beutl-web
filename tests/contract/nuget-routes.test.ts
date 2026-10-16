@@ -5,7 +5,7 @@ import { setDbProvider } from "@beutl/db";
 import { setR2BucketProvider } from "@beutl/api/ai/r2-provider";
 import app from "../../packages/api/src/nuget/app";
 import { parseNuspec } from "../../packages/api/src/nuget/archive";
-import { releaseMetadata, type NugetRelease } from "../../packages/api/src/nuget/catalog";
+import { findNugetPackageVersions, releaseMetadata, type NugetRelease } from "../../packages/api/src/nuget/catalog";
 import { nugetFileUrl, verifyDownloadTicket } from "../../packages/api/src/nuget/tickets";
 
 const secret = `bn_${"a".repeat(64)}`;
@@ -103,6 +103,14 @@ describe("NuGet registry routes", () => {
     expect(index.resources.every((resource: { "@id": string }) => resource["@id"].startsWith(`${origin}/`))).toBe(true);
     expect(models.nugetToken.findUnique).not.toHaveBeenCalled();
   });
+  it("loads lightweight SDK version summaries without fetching archive bodies", async () => {
+    await findNugetPackageVersions("LIBRARY", "DEVELOPMENT");
+    expect(models.package.findFirst).toHaveBeenCalledWith({
+      where: { name: { equals: "library", mode: "insensitive" }, published: true, audience: "DEVELOPMENT" },
+      select: { name: true, Release: { where: { published: true, fileId: { not: null } },
+        select: { id: true, version: true, nugetListed: true } } },
+    });
+  });
   it("preserves security and CORS headers on catalog and content routes", async () => {
     for (const path of ["/v3/index.json", "/v3/registration/library/1.0.0.json", "/v3/files/file"]) {
       const response = await request(path, { headers: { Origin: "https://beutl.example" } });
@@ -125,6 +133,18 @@ describe("NuGet registry routes", () => {
     ] });
     expect(await (await request("/v3/autocomplete?id=Library&semVerLevel=2.0.0")).json()).toEqual({ data: ["1.0.0"] });
   });
+  it.each([[0, 2, ["1.0.0", "3.0.0"]], [1, 1, ["3.0.0"]], [2, 5, []], [0, 0, []]] as const)(
+    "paginates version autocomplete after filtering (skip=%s, take=%s)", async (skip, take, expected) => {
+      models.package.findFirst.mockResolvedValueOnce({ ...pkg, Release: [
+        { ...release, version: "4.0.0", nugetListed: false },
+        { ...release, version: "3.0.0", nugetListed: true },
+        { ...release, version: "2.0.0", nugetListed: true, nugetSemVer2: true },
+        { ...release, version: "1.5.0-beta", nugetListed: true },
+        { ...release, version: "1.0.0", nugetListed: true },
+      ] });
+      expect(await (await request(`/v3/autocomplete?id=Library&skip=${skip}&take=${take}`)).json()).toEqual({ data: expected });
+    },
+  );
   it.each([undefined, "1.0.0", "2.0.0-beta", "invalid", "2.0.0", "3.0.0"])("honors semVerLevel=%s in search and autocomplete", async (level) => {
     const suffix = level ? `&semVerLevel=${level}` : "";
     const semVer2 = level === "2.0.0" || level === "3.0.0";

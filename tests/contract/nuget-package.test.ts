@@ -23,8 +23,7 @@ describe("NuGet package identities and metadata", () => {
   it.each([
     "1", "1.0", "[1.0]", "(,1.0]", "(,1.0)", "(1.0,)", "[1.0,2.0)",
     "[1.0,1.0]", "(1.0,1.0)", "[,2.0]", "(, )", " [ 1.0 , 2.0 ) ",
-    "[1.0.0-beta.1,2.0.0+build)", "1.2.3.4", "*", "*-*", "1.*", "1.0.*",
-    "1.0.0.*", "1.0.0-*", "1.0.0-beta.*", "1.0.0-beta-*", "1.*-preview.*", "[1.*,2.0)",
+    "[1.0.0-beta.1,2.0.0+build)", "1.2.3.4",
   ])("accepts NuGet dependency range %s", (range) => {
     expect(parseNuspec(nuspec.replace("[1.0,2.0)", range)).dependencyGroups[0].dependencies[0].range).toBe(range.trim());
   });
@@ -33,6 +32,8 @@ describe("NuGet package identities and metadata", () => {
     "[1.0,1.0)", "(1.0,1.0]", "[1.0,2.0,3.0]", "[1.0,2.0", "1.0,2.0",
     "latest", "^1.0", ">=1.0", "v1.0", "1.0.0-01", "[1.0,2.*)", "[*]",
     "1.*.0", "1.0.*-beta", "1.0.0+*", "**", "1.0.**", "1.0.0.0.*", "[2147483648.0,)",
+    "*", "*-*", "1.*", "6.*", "1.0.*", "1.0.0.*", "1.0.0-*", "1.0.0-beta.*",
+    "1.0.0-beta-*", "1.*-preview.*", "[1.*,2.0)",
   ])("rejects invalid NuGet dependency range %s", (range) => {
     expect(() => parseNuspec(nuspec.replace("[1.0,2.0)", range))).toThrow("Invalid dependency version range");
   });
@@ -74,6 +75,20 @@ describe("NuGet package identities and metadata", () => {
       .toEqual(["1.0.0-beta.9", "1.0.0-beta.10", "1.0.0", "1.0.0.2"]);
     expect(compareNugetVersions("1.0.0-beta-x.2", "1.0.0-beta-x.10")).toBeLessThan(0);
   });
+  it.each(["1.0.0-01", "1.0.0-alpha.01", "1.0.0-alpha.0.00", "1.0.0-01.alpha+build"])(
+    "rejects leading zeroes in numeric prerelease components: %s", async (version) => {
+      expect(isValidNugetVersion(version)).toBe(false);
+      expect(() => normalizeNugetVersion(version)).toThrow("Invalid NuGet version");
+      await expect(readNugetPackage(blobReader(archive(nuspec.replace("01.2.0.0-Beta.2+build", version)))))
+        .rejects.toThrow("Invalid package ID or version");
+    },
+  );
+  it.each(["1.0.0-alpha.0", "1.0.0-alpha.0a", "1.0.0-alpha.10+001.02", "1.0.0+01"])(
+    "accepts zero, alphanumeric labels and padded build metadata: %s", (version) => {
+      expect(isValidNugetVersion(version)).toBe(true);
+      expect(() => parseNuspec(nuspec.replace("01.2.0.0-Beta.2+build", version))).not.toThrow();
+    },
+  );
   it("keeps legacy v-prefixed releases compatible with canonical identities", async () => {
     expect(normalizeNugetVersion("v1.2.0-Beta.2+linux-x64")).toBe("1.2.0-beta.2");
     expect(compareNugetVersions("v1.2.0+linux-x64", "1.2.0")).toBe(0);
@@ -81,6 +96,8 @@ describe("NuGet package identities and metadata", () => {
     expect(isValidNugetVersion("invalid")).toBe(false);
     await expect(readNugetPackage(blobReader(archive()), { id: "sample.library", version: "v1.2.0-Beta.2" }))
       .resolves.toHaveProperty("metadata.id", "Sample.Library");
+    await expect(readNugetPackage(blobReader(archive(nuspec.replace("01.2.0.0-Beta.2+build", "v1.2.0-Beta.2")))))
+      .rejects.toThrow("Invalid package ID or version");
   });
   it("reads the nuspec, framework groups and declared readme without changing numeric text", async () => {
     const parsed = await readNugetPackage(blobReader(archive()), { id: "sample.library", version: "1.2.0-beta.2" });

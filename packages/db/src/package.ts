@@ -544,6 +544,7 @@ export async function updateDevPackageDisplay({
   return await db.package.update({
     where: {
       id: packageId,
+      audience: "USER",
     },
     data: {
       displayName: displayName,
@@ -568,6 +569,7 @@ export async function updateDevPackageDescription({
   return await db.package.update({
     where: {
       id: packageId,
+      audience: "USER",
     },
     data: {
       description: description,
@@ -760,6 +762,7 @@ export async function updateDevPackageTags({
   return await db.package.update({
     where: {
       id: packageId,
+      audience: "USER",
     },
     data: {
       tags: tags,

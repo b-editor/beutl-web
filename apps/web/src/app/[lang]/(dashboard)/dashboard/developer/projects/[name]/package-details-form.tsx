@@ -156,13 +156,13 @@ export function PackageDetailsForm({
       <div className="flex gap-2 flex-col my-4">
         <h4>{t("developer:details.tags")}</h4>
         <div className="flex gap-1 flex-wrap">
-          {visiblePackageTags(tags).map((tag) => (
-            <Badge key={tag} onClick={() => handleDeleteTag(tag)} className={isPending ? "pointer-events-none opacity-60" : undefined}>
+          {(pkg.audience === "USER" ? visiblePackageTags(tags) : tags).map((tag) => (
+            <Badge key={tag} onClick={pkg.audience === "USER" ? () => handleDeleteTag(tag) : undefined} className={isPending ? "pointer-events-none opacity-60" : undefined}>
               {tag}
-              <X className="ml-1 w-4 h-4" />
+              {pkg.audience === "USER" && <X className="ml-1 w-4 h-4" />}
             </Badge>
           ))}
-          <Popover>
+          {pkg.audience === "USER" && <Popover>
             <PopoverTrigger>
               <Badge className="h-full">
                 <Plus className="w-4 h-4" />
@@ -181,7 +181,7 @@ export function PackageDetailsForm({
                 </Button>
               </form>
             </PopoverContent>
-          </Popover>
+          </Popover>}
         </div>
       </div>
       <Separator />

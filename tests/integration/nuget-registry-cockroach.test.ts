@@ -5,7 +5,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { strToU8, zipSync } from "fflate";
 import { setR2BucketProvider } from "@beutl/api/ai/r2-provider";
-import { createDevPackage, existsPackageName, PackageIdentityReservedError, createRelease, updateRelease, ReleaseArtifactLockedError, ReleaseIdentityConflictError, setReleasePublishedByAdmin, setDbProvider, packageNameFilter, refreshNugetPackageMetadata, deleteReleaseWithStorageCleanup } from "@beutl/db";
+import { createDevPackage, existsPackageName, PackageIdentityReservedError, createRelease, updateRelease, ReleaseArtifactLockedError, ReleaseIdentityConflictError, setReleasePublishedByAdmin, setDbProvider, packageNameFilter, refreshNugetPackageMetadata, deleteReleaseWithStorageCleanup, updateDevPackageDisplay, updateDevPackageDescription, updateDevPackageTags } from "@beutl/db";
 import { searchNugetPackages } from "../../packages/api/src/nuget/catalog";
 import { parseNuspec } from "../../packages/api/src/nuget/archive";
 import nugetApp from "../../packages/api/src/nuget/app";
@@ -139,6 +139,77 @@ suite("NuGet publication invariants on CockroachDB", () => {
       await db.package.delete({ where: { id: "registration" } });
     }
   });
+  it("classifies legacy registration leaves before partitioning pages", async () => {
+    const name = "Registration.Pages", packageId = "registration-pages";
+    const broken = new Set([0, 64, 69]);
+    const manifest = (version: string) => `<package><metadata><id>${name}</id><version>${version}</version><authors>Owner</authors><description>SDK</description></metadata></package>`;
+    const semver2 = zipSync({ "Library.nuspec": strToU8(manifest("1.0.31").replace("</metadata>",
+      '<dependencies><dependency id="Dependency" version="[1.0.0-beta.1,2.0)" /></dependencies></metadata>')) });
+    const archives = { broken: strToU8("not a ZIP"), semver2 };
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const get = vi.fn(async (key: keyof typeof archives, options) => ({
+      arrayBuffer: async () => archives[key].slice(options.range.offset, options.range.offset + options.range.length).buffer,
+    }));
+    setR2BucketProvider(() => ({ get }) as never);
+    await db.$executeRaw`INSERT INTO "Package" ("id", "name", "audience") VALUES (${packageId}, ${name}, 'DEVELOPMENT')`;
+    for (const [key, bytes] of Object.entries(archives)) await db.$executeRaw`
+      INSERT INTO "File" ("id", "name", "objectKey", "size") VALUES (${`${packageId}-${key}`}, 'legacy.nupkg', ${key}, ${BigInt(bytes.length)})`;
+    try {
+      await db.release.createMany({ data: Array.from({ length: 70 }, (_, i) => ({
+        id: `${packageId}-${String(i).padStart(2, "0")}`, packageId, version: `1.0.${i}`, nugetVersion: `1.0.${i}`,
+        published: true, title: "", description: "", targetVersion: "",
+        fileId: broken.has(i) ? `${packageId}-broken` : i === 31 ? `${packageId}-semver2` : "original",
+        nugetMetadata: broken.has(i) || i === 31 ? Prisma.DbNull : parseNuspec(manifest(`1.0.${i}`)),
+      })) });
+      for (const hive of ["registration-semver1", "registration"]) {
+        const expected = Array.from({ length: 70 }, (_, i) => i)
+          .filter((i) => !broken.has(i) && (hive === "registration" || i !== 31)).map((i) => `1.0.${i}`);
+        const indexResponse = await nugetApp.request(`https://nuget.test/v3/${hive}/registration.pages/index.json`);
+        expect(indexResponse.status).toBe(200);
+        const index = await indexResponse.json();
+        expect(index.count).toBe(2);
+        const versions: string[] = [];
+        for (const descriptor of index.items) {
+          const response = await nugetApp.request(descriptor["@id"]);
+          expect(response.status).toBe(200);
+          const page = await response.json();
+          const leaves = page.items.map((item: { catalogEntry: { version: string } }) => item.catalogEntry.version);
+          expect(page.count).toBe(leaves.length);
+          expect(page).toMatchObject({ count: descriptor.count, lower: descriptor.lower, upper: descriptor.upper });
+          expect(page.lower).toBe(leaves[0]);
+          expect(page.upper).toBe(leaves.at(-1));
+          expect(page.count).toBeLessThanOrEqual(64);
+          versions.push(...leaves);
+        }
+        expect(versions).toEqual(expected);
+      }
+      expect(await db.release.findUniqueOrThrow({ where: { id: `${packageId}-31` } })).toMatchObject({ nugetSemVer2: true });
+      expect(get).toHaveBeenCalled();
+    } finally {
+      await db.release.deleteMany({ where: { packageId } });
+      await db.package.delete({ where: { id: packageId } });
+      await db.file.deleteMany({ where: { id: { in: [`${packageId}-broken`, `${packageId}-semver2`] } } });
+      errors.mockRestore();
+    }
+  });
+  it.each(["DEVELOPMENT", "USER"] as const)("allows editorial updates only for user packages (%s)", async (audience) => {
+    const pkg = await createDevPackage({ name: `Editorial.${audience}`, audience, userId: "owner" });
+    try {
+      const edits = [
+        () => updateDevPackageDisplay({ packageId: pkg.id, displayName: "Editorial", shortDescription: "Summary" }),
+        () => updateDevPackageDescription({ packageId: pkg.id, description: "Editorial description" }),
+        () => updateDevPackageTags({ packageId: pkg.id, tags: ["editorial"] }),
+      ];
+      for (const edit of edits) {
+        if (audience === "DEVELOPMENT") await expect(edit()).rejects.toMatchObject({ code: "P2025" });
+        else await expect(edit()).resolves.toMatchObject({ name: pkg.name });
+      }
+      const stored = await db.package.findUniqueOrThrow({ where: { id: pkg.id } });
+      expect(stored).toMatchObject(audience === "DEVELOPMENT"
+        ? { displayName: pkg.displayName, shortDescription: pkg.shortDescription, description: pkg.description, tags: pkg.tags }
+        : { displayName: "Editorial", shortDescription: "Summary", description: "Editorial description", tags: ["editorial"] });
+    } finally { await db.package.delete({ where: { id: pkg.id } }); }
+  });
   it("keeps stable build metadata in search counts and pagination", async () => {
     for (const [id, version, canonical] of [
       ["A.Build", "1.0.0+linux-x64", "1.0.0"],
@@ -164,12 +235,14 @@ suite("NuGet publication invariants on CockroachDB", () => {
     }
   });
   it.each([
-    ["search", "semver2"], ["autocomplete", "semver2"], ["search", "unreadable"], ["autocomplete", "unreadable"],
-  ])("fills %s pages after excluding a %s legacy package", async (resource, kind) => {
+    ["search", "semver2", 0], ["autocomplete", "semver2", 0], ["search", "unreadable", 0], ["autocomplete", "unreadable", 0],
+    ["search", "semver2", 21], ["autocomplete", "semver2", 21], ["search", "unreadable", 21], ["autocomplete", "unreadable", 21],
+    ["store", "unreadable", 0], ["store", "unreadable", 21],
+  ] as const)("fills %s pages excluding a %s legacy package at index %s", async (resource, kind, badIndex) => {
     const prefix = `Page.${resource}.${kind}`;
     const names = Array.from({ length: 22 }, (_, i) => `${prefix}.${String(i).padStart(2, "0")}`);
     const manifest = (name: string) => `<package><metadata><id>${name}</id><version>1.0.0</version><authors>Owner</authors><description>Library</description></metadata></package>`;
-    const bytes = kind === "unreadable" ? strToU8("not a ZIP") : zipSync({ "Library.nuspec": strToU8(manifest(names[0])
+    const bytes = kind === "unreadable" ? strToU8("not a ZIP") : zipSync({ "Library.nuspec": strToU8(manifest(names[badIndex])
       .replace("</metadata>", '<dependencies><dependency id="Dependency" version="[1.0.0-beta.1,2.0)" /></dependencies></metadata>')) });
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     setR2BucketProvider(() => ({ get: async (_key, options) => ({
@@ -178,22 +251,38 @@ suite("NuGet publication invariants on CockroachDB", () => {
     await db.$executeRaw`INSERT INTO "File" ("id", "name", "size") VALUES (${prefix}, 'legacy.nupkg', ${BigInt(bytes.length)})`;
     try {
       for (const [i, name] of names.entries()) {
-        await db.$executeRaw`INSERT INTO "Package" ("id", "name") VALUES (${name}, ${name})`;
+        await db.$executeRaw`INSERT INTO "Package" ("id", "name", "audience") VALUES (${name}, ${name}, 'DEVELOPMENT')`;
         await db.release.create({ data: { id: name, packageId: name, version: "1.0.0", nugetVersion: "1.0.0", published: true,
-          title: "", description: "", targetVersion: "", fileId: prefix, nugetMetadata: i ? parseNuspec(manifest(name)) : Prisma.DbNull } });
+          title: "", description: "", targetVersion: "", fileId: prefix, nugetMetadata: i !== badIndex ? parseNuspec(manifest(name)) : Prisma.DbNull } });
       }
+      if (resource === "store") await db.release.create({ data: {
+        packageId: names[10], version: "2.0.0", nugetVersion: "2.0.0", published: true, fileId: prefix,
+        title: "", description: "", targetVersion: "",
+      } });
       const page = async (skip: number) => {
+        if (resource === "store") {
+          const result = await searchNugetPackages({ query: prefix, audience: "DEVELOPMENT", skip, take: 20, filterReadable: true });
+          expect(result.totalHits).toBe(21);
+          expect(result.packages.flatMap((pkg) => pkg.Release).every((r) => r.version === "1.0.0")).toBe(true);
+          return result.packages.map((pkg) => pkg.name);
+        }
         const response = await nugetApp.request(`https://nuget.test/v3/${resource}?q=${prefix}&take=20&skip=${skip}`);
         expect(response.status).toBe(200);
         const result = await response.json();
         expect(result.totalHits).toBe(21);
         return resource === "search" ? result.data.map((item: { id: string }) => item.id) : result.data;
       };
-      // Direct navigation to a later page must also count only readable hits.
-      expect(await page(20)).toEqual(names.slice(21));
+      const expected = names.filter((_, i) => i !== badIndex);
+      // Exercise both direct later-page navigation and a cold first-page request
+      // with an incompatible candidate beyond the page boundary.
+      if (badIndex === 0) expect(await page(20)).toEqual(expected.slice(20));
       const first = await page(0), last = await page(20);
       expect(first).toHaveLength(20);
-      expect([...first, ...last]).toEqual(names.slice(1));
+      expect([...first, ...last]).toEqual(expected);
+      if (resource !== "store") {
+        const empty = await (await nugetApp.request(`https://nuget.test/v3/${resource}?q=${prefix}&take=0`)).json();
+        expect(empty).toEqual({ totalHits: 21, data: [] });
+      }
     } finally {
       await db.release.deleteMany({ where: { packageId: { in: names } } });
       await db.package.deleteMany({ where: { id: { in: names } } });

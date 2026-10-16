@@ -12,11 +12,12 @@ export function normalizeNugetId(id: string): string {
   return id.toLowerCase();
 }
 
-/** NuGet identity ignores build metadata, leading zeroes and a zero revision.
+/** NuGet identity ignores build metadata, padded core numbers and a zero revision.
  * Also accept the v prefix stored by the previous Web release form. */
 export function normalizeNugetVersion(version: string): string {
   const match = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u.exec(version);
   if (!match || version.length > 128) throw new InvalidNugetIdentityError("Invalid NuGet version");
+  if (match[5]?.split(".").some((label) => /^0\d+$/u.test(label))) throw new InvalidNugetIdentityError("Invalid NuGet version");
   const numbers = match.slice(1, 5).map((n) => Number(n ?? 0));
   if (numbers.some((n) => !Number.isSafeInteger(n) || n > 2147483647)) throw new InvalidNugetIdentityError("Invalid NuGet version");
   return numbers.slice(0, numbers[3] ? 4 : 3).join(".") + (match[5] ? `-${match[5].toLowerCase()}` : "");
