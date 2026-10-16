@@ -24,7 +24,7 @@ export default async function Page({ params, searchParams }: {
   if (!pkg?.Release.length) notFound();
   const releases = sortNugetReleases(pkg.Release);
   const listed = releases.filter((r) => r.nugetListed);
-  const candidates = version ? [findNugetVersion(pkg, version)] : listed.length ? listed : releases;
+  const candidates = version ? [findNugetVersion(pkg, version)] : listed;
   const readVersion = async (candidate: { version: string }) => {
     const record = await findNugetPackage(name, "DEVELOPMENT", candidate.version);
     const release = record?.Release[0];
@@ -85,9 +85,9 @@ export default async function Page({ params, searchParams }: {
             {[[t("developer:nuget.project"), m.projectUrl], [t("developer:nuget.repository"), m.repository.url], [t("developer:nuget.license"), m.licenseUrl]].map(([label, url]) => safeUrl(url) && <a key={label} href={url} rel="noreferrer" className="text-sm flex items-center gap-2 underline underline-offset-4">{label}<ExternalLink className="size-3" /></a>)}
             <div className="flex gap-1.5 flex-wrap">{m.tags.map((tag) => <Badge variant="secondary" key={tag} className="break-all">{tag}</Badge>)}</div>
           </section>
-          <section className="rounded-xl border p-5 space-y-3"><h2 className="font-semibold">{t("developer:nuget.versions")} <span className="text-muted-foreground font-normal">({releases.length})</span></h2>
-            <ul className="space-y-1 max-h-96 overflow-y-auto">{releases.map((r) => <li key={r.id}><Link href={`/${lang}/packages/${encodeURIComponent(pkg.name)}?version=${encodeURIComponent(r.version)}`} aria-current={r.id === release.id ? "page" : undefined}
-              className={`flex justify-between rounded-md px-3 py-2 text-sm gap-2 ${r.id === release.id ? "bg-secondary font-medium" : "hover:bg-muted"}`}><span className="break-all">{r.version}</span>{!r.nugetListed && <span className="text-muted-foreground text-xs">{t("developer:nuget.unlisted")}</span>}</Link></li>)}</ul>
+          <section className="rounded-xl border p-5 space-y-3"><h2 className="font-semibold">{t("developer:nuget.versions")} <span className="text-muted-foreground font-normal">({listed.length})</span></h2>
+            <ul className="space-y-1 max-h-96 overflow-y-auto">{listed.map((r) => <li key={r.id}><Link href={`/${lang}/packages/${encodeURIComponent(pkg.name)}?version=${encodeURIComponent(r.version)}`} aria-current={r.id === release.id ? "page" : undefined}
+              className={`flex justify-between rounded-md px-3 py-2 text-sm gap-2 ${r.id === release.id ? "bg-secondary font-medium" : "hover:bg-muted"}`}><span className="break-all">{r.version}</span></Link></li>)}</ul>
           </section>
         </aside>
       </div>

@@ -392,6 +392,26 @@ suite("NuGet publication invariants on CockroachDB", () => {
       packageQueries.mockRestore();
     }
   });
+  it("matches autocomplete against IDs only while search also matches nuspec metadata", async () => {
+    const names = ["Autocomplete.Alpha", "Autocomplete.Logging.A", "Autocomplete.Logging.B"];
+    try {
+      for (const name of names) {
+        await db.$executeRaw`INSERT INTO "Package" ("id", "name", "audience") VALUES (${name}, ${name}, 'DEVELOPMENT')`;
+        const nugetMetadata = parseNuspec(`<package><metadata><id>${name}</id><version>1.0.0</version><authors>Owner</authors><description>logging</description></metadata></package>`);
+        await db.release.create({ data: { packageId: name, version: "1.0.0", nugetVersion: "1.0.0", published: true,
+          title: "", description: "", targetVersion: "", fileId: "original", nugetMetadata } });
+      }
+      const search = await (await nugetApp.request("https://nuget.test/v3/search?q=logging")).json();
+      expect(search.data.map((item: { id: string }) => item.id)).toEqual(names);
+      const first = await (await nugetApp.request("https://nuget.test/v3/autocomplete?q=logging&take=1")).json();
+      const second = await (await nugetApp.request("https://nuget.test/v3/autocomplete?q=logging&take=1&skip=1")).json();
+      expect(first).toEqual({ totalHits: 2, data: [names[1]] });
+      expect(second).toEqual({ totalHits: 2, data: [names[2]] });
+    } finally {
+      await db.release.deleteMany({ where: { packageId: { in: names } } });
+      await db.package.deleteMany({ where: { id: { in: names } } });
+    }
+  });
   it("searches the latest USER nuspec without using or overwriting editable store metadata", async () => {
     const users = ["NuspecSearch.A", "NuspecSearch.C", "NuspecSearch.E"], sdk = "NuspecSearch.B";
     const names = [...users, sdk];
@@ -441,7 +461,7 @@ suite("NuGet publication invariants on CockroachDB", () => {
       expect(await search("EditedStore")).toEqual({ totalHits: 0, data: [] });
       expect(await search(users[2])).toMatchObject({ totalHits: 1, data: [{ id: users[2], title: "OldNuspecTitle" }] });
       const autocomplete = await (await nugetApp.request("https://nuget.test/v3/autocomplete?q=FreshNuspecTitle&skip=2&take=1&semVerLevel=2.0.0")).json();
-      expect(autocomplete).toEqual({ totalHits: 3, data: [users[1]] });
+      expect(autocomplete).toEqual({ totalHits: 0, data: [] });
       await db.release.update({ where: { id: `${users[0]}-2.0.0` }, data: { nugetListed: false } });
       expect((await search("FreshNuspecTitle")).totalHits).toBe(2);
       await db.release.update({ where: { id: `${users[0]}-2.0.0` }, data: { nugetListed: true } });
@@ -488,7 +508,7 @@ suite("NuGet publication invariants on CockroachDB", () => {
       const suffix = `prerelease=${prerelease}${semVer2 ? "&semVerLevel=2.0.0" : ""}`;
       const search = await (await nugetApp.request(`https://nuget.test/v3/search?q=StableOnly&skip=1&take=1&${suffix}`)).json();
       expect(search).toMatchObject({ totalHits: 2, data: [{ id: names[1], version: "1.0.0", title: "StableOnly" }] });
-      expect(await (await nugetApp.request(`https://nuget.test/v3/autocomplete?q=StableOnly&skip=1&take=1&${suffix}`)).json())
+      expect(await (await nugetApp.request(`https://nuget.test/v3/autocomplete?q=Eligible.SDK&skip=1&take=1&${suffix}`)).json())
         .toEqual({ totalHits: 2, data: [names[1]] });
       expect((await searchNugetPackages({ ...options, prerelease: true, semVer2: true, query: "NewestOnly" })).totalHits).toBe(2);
       expect((await searchNugetPackages({ ...options, prerelease: true, semVer2: true, query: "StableOnly" })).totalHits).toBe(0);
@@ -516,7 +536,7 @@ suite("NuGet publication invariants on CockroachDB", () => {
         const search = await (await nugetApp.request(`https://nuget.test/v3/search?q=${query}&skip=1&take=1`)).json();
         expect(search).toMatchObject({ totalHits: 2, data: [{ id: names[1], tags: ["Logging"] }] });
         const autocomplete = await (await nugetApp.request(`https://nuget.test/v3/autocomplete?q=${query}&skip=1&take=1`)).json();
-        expect(autocomplete).toEqual({ totalHits: 2, data: [names[1]] });
+        expect(autocomplete).toEqual({ totalHits: 0, data: [] });
       }
     } finally {
       await db.release.deleteMany({ where: { packageId: { in: names } } });
@@ -550,7 +570,7 @@ suite("NuGet publication invariants on CockroachDB", () => {
         const search = await (await nugetApp.request(`https://nuget.test/v3/search?${suffix}`)).json();
         expect(search).toMatchObject({ totalHits: expected.length, data: [{ id: expected[1] }] });
         const autocomplete = await (await nugetApp.request(`https://nuget.test/v3/autocomplete?${suffix}`)).json();
-        expect(autocomplete).toEqual({ totalHits: expected.length, data: [expected[1]] });
+        expect(autocomplete).toEqual({ totalHits: term.includes("_") ? 1 : 0, data: [] });
       }
     } finally {
       await db.release.deleteMany({ where: { packageId: { in: names } } });

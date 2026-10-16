@@ -64,6 +64,24 @@ describe("NuGet registry routes", () => {
     expect(await (await request("/v3/package/library/1.0.0/library.1.0.0.nupkg")).text()).toBe("test");
     expect(models.nugetToken.findUnique).not.toHaveBeenCalled();
   });
+  it.each(["README.md", ""])("advertises a hosted README only when declared: %s", async (readme) => {
+    const current = { ...release, nugetListed: true, nugetMetadata: { ...release.nugetMetadata, readme }, readme: readme ? "# Library" : null };
+    const catalog = { ...pkg, Release: [current] };
+    models.package.findMany.mockResolvedValueOnce([catalog]);
+    models.package.count.mockResolvedValueOnce(1);
+    const search = await (await request("/v3/search")).json();
+    models.package.findFirst.mockResolvedValueOnce(catalog);
+    models.release.findMany.mockResolvedValueOnce([current]);
+    const registration = await (await request("/v3/registration/library/index.json")).json();
+    for (const item of [search.data[0], registration.items[0].items[0].catalogEntry]) {
+      if (readme) expect(item.readmeUrl).toBe("https://nuget.beditor.net/v3/package/library/1.0.0/readme");
+      else expect(item).not.toHaveProperty("readmeUrl");
+    }
+    if (readme) {
+      models.package.findFirst.mockResolvedValueOnce(catalog);
+      expect(await (await app.request(search.data[0].readmeUrl)).text()).toBe("# Library");
+    }
+  });
   it.each(["registration", "registration-semver1"])("serves the standalone %s leaf schema from an advertised URL", async (hive) => {
     const indexUrl = `https://nuget.beditor.net/v3/${hive}/library/index.json`;
     const index = await (await app.request(indexUrl)).json();

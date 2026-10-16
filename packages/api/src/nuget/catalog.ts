@@ -117,7 +117,7 @@ export async function classifyNugetReleases(where: Prisma.ReleaseWhereInput, sem
   return excluded;
 }
 
-async function matchingPackagePage(query: string, skip: number, take: number, prerelease: boolean, semVer2: boolean, audience?: PackageAudience) {
+async function matchingPackagePage(query: string, skip: number, take: number, prerelease: boolean, semVer2: boolean, audience: PackageAudience | undefined, idOnly: boolean) {
   const pattern = `%${query.replace(/[\\%_]/gu, "\\$&")}%`;
   // Choose the latest eligible nuspec and match its tags entirely in SQL.
   // Only the requested page's IDs cross the Worker/database boundary.
@@ -141,10 +141,10 @@ async function matchingPackagePage(query: string, skip: number, take: number, pr
         LIMIT 1
       ) latest
       WHERE p."published" ${audience ? Prisma.sql`AND p."audience" = ${audience}::"PackageAudience"` : Prisma.empty}
-        AND (p."name" ILIKE ${pattern} OR latest."nugetMetadata"->>'title' ILIKE ${pattern}
+        AND (p."name" ILIKE ${pattern} OR (${!idOnly} AND (latest."nugetMetadata"->>'title' ILIKE ${pattern}
           OR latest."nugetMetadata"->>'description' ILIKE ${pattern}
           OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(latest."nugetMetadata"->'tags') AS tag(value)
-            WHERE lower(tag.value) = lower(${query})))
+            WHERE lower(tag.value) = lower(${query})))))
     )
     SELECT (SELECT count(*) FROM matching) AS "totalHits",
       ARRAY(SELECT "id" FROM matching ORDER BY "name" LIMIT ${take} OFFSET ${skip}) AS ids
@@ -152,8 +152,8 @@ async function matchingPackagePage(query: string, skip: number, take: number, pr
   return { totalHits: Number(page.totalHits), ids: page.ids };
 }
 
-export async function searchNugetPackages({ query = "", skip = 0, take = 20, prerelease = true, semVer2 = true, audience, filterReadable = false }: {
-  query?: string; skip?: number; take?: number; prerelease?: boolean; semVer2?: boolean; audience?: PackageAudience; filterReadable?: boolean;
+export async function searchNugetPackages({ query = "", skip = 0, take = 20, prerelease = true, semVer2 = true, audience, filterReadable = false, idOnly = false }: {
+  query?: string; skip?: number; take?: number; prerelease?: boolean; semVer2?: boolean; audience?: PackageAudience; filterReadable?: boolean; idOnly?: boolean;
 }) {
   const releaseWhere: Prisma.ReleaseWhereInput = { published: true, nugetListed: true, fileId: { not: null }, nugetMetadataInvalid: false,
     // Historical archives are indexed by backfill:metadata before cutover.
@@ -176,7 +176,7 @@ export async function searchNugetPackages({ query = "", skip = 0, take = 20, pre
     pkg.Release = releases;
     return releases.length > 0;
   };
-  const page = term ? await matchingPackagePage(term, offset, limit, prerelease, semVer2, audience) : null;
+  const page = term ? await matchingPackagePage(term, offset, limit, prerelease, semVer2, audience, idOnly) : null;
   if (page) where.id = { in: page.ids };
   const [totalHits, packages] = await Promise.all([
     page ? page.totalHits : db.package.count({ where }),

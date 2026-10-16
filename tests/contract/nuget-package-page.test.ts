@@ -85,6 +85,24 @@ describe("SDK package installation links", () => {
     expect(findNugetPackage).toHaveBeenCalledExactlyOnceWith("Sample.Library", "DEVELOPMENT", "1.0.42");
     expect(tryReleaseMetadata).toHaveBeenCalledOnce();
   });
+  it("hides unlisted versions from public history while preserving exact-version access", async () => {
+    const withdrawn = { ...release, id: "withdrawn", version: "2.0.0", nugetListed: false };
+    vi.mocked(findNugetPackageVersions).mockResolvedValue({ name: "Sample.Library", Release: [release, withdrawn] });
+    try {
+      const params = Promise.resolve({ lang: "en", name: "Sample.Library" });
+      const html = renderToStaticMarkup(await Page({ params, searchParams: Promise.resolve({}) }));
+      expect(html).not.toContain("2.0.0");
+      expect(html).toContain("?version=1.0.0");
+      vi.mocked(findNugetPackage).mockResolvedValueOnce({ name: "Sample.Library", Release: [withdrawn] });
+      const exact = renderToStaticMarkup(await Page({ params, searchParams: Promise.resolve({ version: "2.0.0" }) }));
+      expect(exact).toContain("sample.library.2.0.0.nupkg");
+      expect(exact).not.toContain("?version=2.0.0");
+      vi.mocked(findNugetPackageVersions).mockResolvedValueOnce({ name: "Sample.Library", Release: [withdrawn] });
+      await expect(Page({ params, searchParams: Promise.resolve({}) })).rejects.toThrow();
+    } finally {
+      vi.mocked(findNugetPackageVersions).mockResolvedValue({ name: "Sample.Library", Release: [release] });
+    }
+  });
   it("falls back to a readable listed release when the newest archive is invalid", async () => {
     vi.mocked(findNugetPackageVersions).mockResolvedValueOnce({ name: "Sample.Library", Release:
       [release, { ...release, id: "unreadable", version: "2.0.0" }] });

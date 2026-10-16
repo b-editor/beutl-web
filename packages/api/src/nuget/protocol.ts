@@ -65,6 +65,7 @@ export async function searchItem(pkg: Pick<NugetPackage, "name"> & { Release: Ca
     tags: metadata.tags,
     projectUrl: metadata.projectUrl,
     licenseUrl: metadata.licenseUrl,
+    ...(metadata.readme ? { readmeUrl: `${origin}/v3/package/${name}/${version}/readme` } : {}),
     iconUrl: metadata.icon ? `${origin}/v3/package/${name}/${version}/icon` : metadata.iconUrl,
     totalDownloads: releases.reduce((sum, release) => sum + Number(release.downloads), 0),
     verified: false,
@@ -100,6 +101,7 @@ export async function registrationItem(pkg: Pick<NugetPackage, "name">, release:
       tags: metadata.tags,
       projectUrl: metadata.projectUrl,
       licenseUrl: metadata.licenseUrl,
+      ...(metadata.readme ? { readmeUrl: `${origin}/v3/package/${normalizeNugetId(pkg.name)}/${version}/readme` } : {}),
       requireLicenseAcceptance: metadata.requireLicenseAcceptance,
       dependencyGroups: metadata.dependencyGroups.map((group) => ({
         ...(group.targetFramework ? { targetFramework: group.targetFramework } : {}),
