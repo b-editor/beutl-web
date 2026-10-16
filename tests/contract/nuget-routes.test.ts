@@ -232,7 +232,7 @@ describe("NuGet registry routes", () => {
     expect((await request("/v3/registration-semver1/library/1.0.0.json")).status).toBe(404);
     expect(models.release.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ nugetSemVer2: true }) }));
   });
-  it.each(["/v3/autocomplete?id=Library", "/v3/autocomplete?q=Library", "/v3/search?q=Library"])(
+  it.each(["/v3/autocomplete?id=Library"])(
     "resolves uncached dependency compatibility before returning %s", async (path) => {
       const nuspec = manifest.replace("</metadata>", '<dependencies><dependency id="Dependency" version="[1.0.0-beta.1,2.0)" /></dependencies></metadata>');
       const bytes = zipSync({ "Library.nuspec": strToU8(nuspec) });
@@ -271,7 +271,7 @@ describe("NuGet registry routes", () => {
       }
     },
   );
-  it.each(["registration", "search"])("parses legacy %s archives sequentially", async (resource) => {
+  it("parses legacy registration archives sequentially", async () => {
     let active = 0, maximum = 0;
     const releases = ["1.0.0", "2.0.0"].map((version) => {
       const bytes = zipSync({ "Library.nuspec": strToU8(manifest.replace("1.0.0", version)) });
@@ -285,20 +285,28 @@ describe("NuGet registry routes", () => {
       const bytes = releases.find((r) => r.id === key)!.bytes;
       return { arrayBuffer: async () => bytes.slice(options!.range!.offset, options!.range!.offset + options!.range!.length).buffer };
     } }) as never);
-    if (resource === "registration") {
-      models.package.findFirst.mockResolvedValueOnce({ ...pkg, Release: releases } as unknown as typeof pkg);
-      models.release.findMany.mockResolvedValueOnce(releases as unknown as typeof pkg.Release);
-      const result = await (await request("/v3/registration/library/index.json")).json();
-      expect(result.items[0].count).toBe(2);
-    } else {
-      models.package.findMany.mockResolvedValueOnce(releases.map((release) => ({ ...pkg, Release: [release] })) as unknown as typeof pkg[]);
-      models.package.count.mockResolvedValueOnce(2);
-      const result = await (await request("/v3/search?take=100")).json();
-      expect(result.totalHits).toBe(2);
-      expect(result.data.map((item: { version: string }) => item.version)).toEqual(["1.0.0", "2.0.0"]);
-    }
+    models.package.findFirst.mockResolvedValueOnce({ ...pkg, Release: releases } as unknown as typeof pkg);
+    models.release.findMany.mockResolvedValueOnce(releases as unknown as typeof pkg.Release);
+    const result = await (await request("/v3/registration/library/index.json")).json();
+    expect(result.items[0].count).toBe(2);
     expect(maximum).toBe(1);
     expect(models.release.updateMany).toHaveBeenCalledTimes(2);
+  });
+  it.each(["search", "autocomplete"])("never extracts uncached archives while serving %s", async (resource) => {
+    // Even if a stale result contains unknown metadata, response construction
+    // must not bypass the SQL filter and restart archive extraction.
+    const legacy = { ...release, id: "legacy", version: "2.0.0", nugetMetadata: null };
+    models.package.findMany.mockResolvedValueOnce([{ ...pkg, Release: [legacy, release] }] as typeof pkg[]);
+    models.package.count.mockResolvedValueOnce(1);
+    const response = await request(`/v3/${resource}?take=20&semVerLevel=2.0.0`);
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    expect(result.totalHits).toBe(1);
+    expect(result.data).toEqual(resource === "search" ? [expect.objectContaining({ version: "1.0.0" })] : ["Library"]);
+    expect(bucket.get).not.toHaveBeenCalled();
+    expect(models.release.findMany).not.toHaveBeenCalled();
+    expect(models.release.updateMany).not.toHaveBeenCalled();
+    expect(models.package.findMany.mock.calls[0][0].include.Release.where.nugetMetadata).toHaveProperty("not");
   });
   it.each([
     ["invalid ZIP", strToU8("not a ZIP")],
@@ -313,7 +321,7 @@ describe("NuGet registry routes", () => {
     const unreadable = { ...release, id: "unreadable", version: "2.0.0", nugetMetadata: null, nuspec: null,
       file: { ...release.file, size: BigInt(bytes.length) } };
     const mixed = { ...pkg, Release: [unreadable, release] } as typeof pkg;
-    models.package.findMany.mockResolvedValueOnce([mixed, { ...pkg, name: "Broken", Release: [unreadable] } as typeof pkg]);
+    models.package.findMany.mockResolvedValueOnce([structuredClone(mixed), { ...pkg, name: "Broken", Release: [unreadable] } as typeof pkg]);
     models.package.count.mockResolvedValueOnce(2);
     const search = await request("/v3/search");
     expect(search.status).toBe(200);

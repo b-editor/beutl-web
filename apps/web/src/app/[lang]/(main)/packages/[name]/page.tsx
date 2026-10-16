@@ -42,10 +42,12 @@ export default async function Page({ params, searchParams }: {
   const { t } = await getTranslation(lang);
   const origin = (process.env.NUGET_PUBLIC_ORIGIN || NUGET_ORIGIN).replace(/\/$/u, "");
   const serviceIndex = `${origin}/v3/index.json`;
+  const installVersion = normalizeNugetVersion(release.version);
   const snippets = [
-    [".NET CLI", `dotnet add package ${pkg.name} --version ${release.version} --source ${serviceIndex}`],
-    ["Package Manager", `Install-Package ${pkg.name} -Version ${release.version} -Source ${serviceIndex}`],
-    ["PackageReference", `<PackageReference Include="${pkg.name}" Version="${release.version}" />`],
+    [t("developer:nuget.feed"), `dotnet nuget add source ${serviceIndex} --name Beutl`],
+    [".NET CLI", `dotnet add package ${pkg.name} --version ${installVersion}`],
+    ["Package Manager", `Install-Package ${pkg.name} -Version ${installVersion}`],
+    ["PackageReference", `<PackageReference Include="${pkg.name}" Version="${installVersion}" />`],
   ];
   return (
     <main className="max-w-6xl mx-auto px-4 py-10 md:px-8 space-y-8">

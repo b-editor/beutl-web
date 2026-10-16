@@ -3,7 +3,7 @@
 import { unzipRaw } from "unzipit/dist/unzipit.js";
 import type { Reader, ZipEntry } from "unzipit";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
-import { normalizeNugetId, normalizeNugetVersion, type NugetMetadata } from "@beutl/core";
+import { normalizeNugetId, normalizeNugetVersion, sanitizePayloadPath, type NugetMetadata } from "@beutl/core";
 import type { ReleaseNugetData } from "@beutl/db";
 import { getR2Bucket } from "../ai/r2-provider";
 import { isValidNugetDependencyRange } from "./version-range";
@@ -108,7 +108,14 @@ async function entriesOf(reader: Reader) {
     if (entries.length > 20000) return invalid("Too many package entries");
     const names = new Set<string>();
     for (const entry of entries) {
-      const name = entry.name.replaceAll("\\", "/").toLowerCase();
+      // NuGet unescapes ZIP paths before extraction. Check that form too, on
+      // both Windows and Unix, without allowing encoded traversal or roots.
+      let name: string;
+      try {
+        name = decodeURIComponent(entry.name.replace(/%(?![0-9a-f]{2})/giu, "%25")).replaceAll("\\", "/");
+        name = sanitizePayloadPath(entry.isDirectory ? name.replace(/\/$/u, "") : name);
+      } catch (error) { return invalid("Unsafe package entry path", error); }
+      name = name.toLowerCase();
       if (names.has(name)) return invalid("Duplicate package entry");
       names.add(name);
     }

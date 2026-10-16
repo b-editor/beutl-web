@@ -107,6 +107,16 @@ browser authentication remain on Beutl Web. Store downloads redirect to NuGet
 with a short-lived, file-bound ticket; the Worker rechecks purchase access.
 Run the separate local Worker with `vp run dev:nuget-server`.
 
+After applying the NuGet schema migrations and before the manual cutover, run
+`vp run --filter @beutl/nuget-server backfill:metadata` with `DATABASE_URL`,
+`BEUTL_STORAGE_PROVIDER=s3`, and the `BEUTL_S3_*` credentials for the existing
+package bucket (R2 supports an S3 endpoint). The command resumes from uncached
+published releases; invalid archives are logged and excluded, while storage or
+cache failures leave the command unsuccessful and can be retried. Use
+`vp run --filter @beutl/nuget-server backfill:metadata --check` to verify completion
+without reading storage. NuGet search and the SDK store count and paginate only
+validated metadata, so run this backfill before making the registry public.
+
 ## Landing-page recording
 
 The editor demonstration is maintained in [beutl-demos](https://github.com/b-editor/beutl-demos).

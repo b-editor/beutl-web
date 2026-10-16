@@ -1,12 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { createServer } from "node:http";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { strToU8, zipSync } from "fflate";
 import { setR2BucketProvider } from "@beutl/api/ai/r2-provider";
 import { createDevPackage, existsPackageName, PackageIdentityReservedError, createRelease, updateRelease, ReleaseArtifactLockedError, ReleaseIdentityConflictError, setReleasePublishedByAdmin, setDbProvider, packageNameFilter, refreshNugetPackageMetadata, deleteReleaseWithStorageCleanup, updateDevPackageDisplay, updateDevPackageDescription, updateDevPackageTags } from "@beutl/db";
-import { searchNugetPackages } from "../../packages/api/src/nuget/catalog";
+import { classifyNugetReleases, searchNugetPackages } from "../../packages/api/src/nuget/catalog";
 import { parseNuspec } from "../../packages/api/src/nuget/archive";
 import nugetApp from "../../packages/api/src/nuget/app";
 
@@ -234,6 +238,7 @@ suite("NuGet publication invariants on CockroachDB", () => {
       await db.$executeRaw`INSERT INTO "Package" ("id", "name", "audience") VALUES (${id}, ${id}, 'DEVELOPMENT')`;
       await db.$executeRaw`INSERT INTO "Release" ("id", "packageId", "version", "nugetVersion", "nugetSemVer2", "targetVersion", "title", "description", "fileId", "published")
         VALUES (${id}, ${id}, ${version}, ${canonical}, true, '', '', '', 'original', true)`;
+      await db.release.update({ where: { id }, data: { nugetMetadata: parseNuspec(`<package><metadata><id>${id}</id><version>${version}</version><authors>Owner</authors><description>SDK</description></metadata></package>`) } });
     }
     try {
       const stable = await searchNugetPackages({ prerelease: false, audience: "DEVELOPMENT", skip: 1, take: 1 });
@@ -249,11 +254,76 @@ suite("NuGet publication invariants on CockroachDB", () => {
       await db.package.deleteMany({ where: { id: { in: ["A.Build", "B.Preview", "C.Build"] } } });
     }
   });
+  it("backfills legacy archives outside search requests, resumes storage failures and checks completion", async () => {
+    const names = Array.from({ length: 80 }, (_, i) => `Backfill.${String(i).padStart(2, "0")}`);
+    const archives = new Map<string, Uint8Array>();
+    const reads: string[] = [];
+    let unavailable = true;
+    const server = createServer((request, response) => {
+      const key = new URL(request.url!, "http://localhost").pathname.split("/").at(-1)!;
+      reads.push(key);
+      if (key === names[2] && unavailable) { response.writeHead(403); response.end("temporary storage access failure"); return; }
+      const bytes = archives.get(key), range = /^bytes=(\d+)-(\d+)$/u.exec(request.headers.range ?? "");
+      if (!bytes || !range) { response.writeHead(404); response.end(); return; }
+      const part = bytes.slice(Number(range[1]), Number(range[2]) + 1);
+      response.writeHead(206, { "content-length": part.length }); response.end(part);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = new URL(connectionString!); url.pathname = `/${database}`;
+    const env = { ...process.env, DATABASE_URL: url.toString(), BEUTL_STORAGE_PROVIDER: "s3",
+      BEUTL_S3_ENDPOINT: `http://127.0.0.1:${(server.address() as { port: number }).port}`, BEUTL_S3_BUCKET: "packages",
+      BEUTL_S3_ACCESS_KEY_ID: "test", BEUTL_S3_SECRET_ACCESS_KEY: "test", BEUTL_S3_SESSION_TOKEN: "",
+      BEUTL_S3_ALLOW_INSECURE_HTTP: "true", BEUTL_S3_FORCE_PATH_STYLE: "true" };
+    const command = (check = false) => promisify(execFile)(process.execPath,
+      [fileURLToPath(new URL("../../apps/nuget-server/scripts/backfill-metadata.mjs", import.meta.url)), ...(check ? ["--check"] : [])], { env });
+    // Keep the command scoped to this test's fixtures in the isolated database.
+    const previous = (await db.release.findMany({ where: { published: true }, select: { id: true } })).map((r) => r.id);
+    await db.release.updateMany({ where: { id: { in: previous } }, data: { published: false } });
+    const get = vi.fn(); setR2BucketProvider(() => ({ get }) as never);
+    try {
+      for (const [i, name] of names.entries()) {
+        const manifest = `<package><metadata><id>${name}</id><version>1.0.0</version><authors>Owner</authors><description>Legacy SDK</description></metadata></package>`;
+        const bytes = i === 1 ? strToU8("invalid archive") : zipSync({ "Library.nuspec": strToU8(manifest) });
+        archives.set(name, bytes);
+        await db.$executeRaw`INSERT INTO "File" ("id", "name", "objectKey", "size") VALUES (${name}, 'library.nupkg', ${name}, ${BigInt(bytes.length)})`;
+        await db.$executeRaw`INSERT INTO "Package" ("id", "name", "audience") VALUES (${name}, ${name}, 'DEVELOPMENT')`;
+        await db.release.create({ data: { id: name, packageId: name, version: "1.0.0", nugetVersion: "1.0.0", published: true,
+          fileId: name, title: "", description: "", targetVersion: "", nugetMetadata: i === 0 ? parseNuspec(manifest) : Prisma.DbNull } });
+      }
+      for (const resource of ["search", "autocomplete"]) {
+        const result = await (await nugetApp.request(`https://nuget.test/v3/${resource}?q=Backfill&take=20`)).json();
+        expect(result.totalHits).toBe(1); expect(result.data).toHaveLength(1);
+      }
+      expect(await searchNugetPackages({ audience: "DEVELOPMENT", query: "Backfill", filterReadable: true, skip: 20 }))
+        .toMatchObject({ totalHits: 1, packages: [] });
+      expect(get).not.toHaveBeenCalled();
+      await expect(command(true)).rejects.toMatchObject({ stdout: expect.stringContaining("79 pending") });
+      expect(reads).toEqual([]);
+      await expect(command()).rejects.toMatchObject({ stdout: expect.stringContaining("1 pending, 1 invalid") });
+      const beforeRetry = reads.length;
+      unavailable = false;
+      expect((await command()).stdout).toContain("0 pending, 1 invalid");
+      expect(new Set(reads.slice(beforeRetry))).toEqual(new Set([names[2]]));
+      const beforeCheck = reads.length;
+      expect((await command(true)).stdout).toContain("0 pending, 1 invalid");
+      expect(reads).toHaveLength(beforeCheck);
+      const result = await searchNugetPackages({ audience: "DEVELOPMENT", query: "Backfill", filterReadable: true, skip: 20, take: 20 });
+      expect(result.totalHits).toBe(79);
+      expect(result.packages.map((pkg) => pkg.name)).toEqual(names.filter((_, i) => i !== 1).slice(20, 40));
+      expect(get).not.toHaveBeenCalled();
+    } finally {
+      await db.release.deleteMany({ where: { packageId: { in: names } } });
+      await db.package.deleteMany({ where: { id: { in: names } } });
+      await db.file.deleteMany({ where: { id: { in: names } } });
+      await db.release.updateMany({ where: { id: { in: previous } }, data: { published: true } });
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  }, 60000);
   it.each([
     ["search", "semver2", 0], ["autocomplete", "semver2", 0], ["search", "unreadable", 0], ["autocomplete", "unreadable", 0],
     ["search", "semver2", 21], ["autocomplete", "semver2", 21], ["search", "unreadable", 21], ["autocomplete", "unreadable", 21],
     ["store", "unreadable", 0], ["store", "unreadable", 21],
-  ] as const)("fills %s pages excluding a %s legacy package at index %s", async (resource, kind, badIndex) => {
+  ] as const)("fills %s pages after backfilling a %s legacy package at index %s", async (resource, kind, badIndex) => {
     const prefix = `Page.${resource}.${kind}`;
     const names = Array.from({ length: 22 }, (_, i) => `${prefix}.${String(i).padStart(2, "0")}`);
     const manifest = (name: string) => `<package><metadata><id>${name}</id><version>1.0.0</version><authors>Owner</authors><description>Library</description></metadata></package>`;
@@ -276,6 +346,8 @@ suite("NuGet publication invariants on CockroachDB", () => {
         packageId: names[10], version: "2.0.0", nugetVersion: "2.0.0", published: true, fileId: prefix,
         title: "", description: "", targetVersion: "",
       } });
+      await classifyNugetReleases({ packageId: { in: names }, published: true, fileId: { not: null } }, true);
+      const readsAfterBackfill = get.mock.calls.length;
       const page = async (skip: number) => {
         const queryCount = packageQueries.mock.calls.length;
         if (resource === "store") {
@@ -293,14 +365,15 @@ suite("NuGet publication invariants on CockroachDB", () => {
         return resource === "search" ? result.data.map((item: { id: string }) => item.id) : result.data;
       };
       const expected = names.filter((_, i) => i !== badIndex);
-      // Exercise both direct later-page navigation and a cold first-page request
-      // with an incompatible candidate beyond the page boundary.
+      // Exercise direct later-page navigation after the out-of-band backfill,
+      // including an incompatible candidate beyond the first page boundary.
       if (badIndex === 0) expect(await page(20)).toEqual(expected.slice(20));
       const first = await page(0), last = await page(20);
       expect(first).toHaveLength(20);
       expect([...first, ...last]).toEqual(expected);
       const reads = get.mock.calls.length;
       expect(reads).toBeGreaterThan(0);
+      expect(reads).toBe(readsAfterBackfill);
       expect(await page(0)).toEqual(expected.slice(0, 20));
       expect(get).toHaveBeenCalledTimes(reads);
       expect(await db.release.findUniqueOrThrow({ where: { id: names[badIndex] } }))
@@ -345,6 +418,8 @@ suite("NuGet publication invariants on CockroachDB", () => {
       await updateDevPackageDisplay({ packageId: users[0], displayName: "EditedStoreTitle", shortDescription: "Store summary" });
       await updateDevPackageDescription({ packageId: users[0], description: "EditedStoreDescription" });
       await updateDevPackageTags({ packageId: users[0], tags: ["EditedStoreTag"] });
+      await classifyNugetReleases({ packageId: { in: names }, published: true, fileId: { not: null } }, true);
+      const readsAfterBackfill = get.mock.calls.length;
       const search = async (query: string, skip = 0, take = 20, prerelease = false) => {
         const response = await nugetApp.request(`https://nuget.test/v3/search?${new URLSearchParams({ q: query, skip: String(skip), take: String(take), prerelease: String(prerelease), semVerLevel: "2.0.0" })}`);
         expect(response.status).toBe(200);
@@ -357,6 +432,7 @@ suite("NuGet publication invariants on CockroachDB", () => {
         expect(result.data.every((item: { title: string }) => item.title === "FreshNuspecTitle")).toBe(true);
       }
       expect(get).toHaveBeenCalled();
+      expect(get).toHaveBeenCalledTimes(readsAfterBackfill);
       expect(await search("FreshNuspecTitle", 1, 1)).toMatchObject({ totalHits: 3, data: [{ id: sdk }] });
       expect(await search("FreshNuspecTitle", 0, 0)).toEqual({ totalHits: 3, data: [] });
       expect(await search("StoreOnly")).toEqual({ totalHits: 0, data: [] });

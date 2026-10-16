@@ -8,6 +8,23 @@ const nuspec = `<package><metadata><id>Sample.Library</id><version>01.2.0.0-Beta
 function archive(manifest: string | Uint8Array = nuspec) { return new Blob([zipSync({ "Sample.Library.nuspec": typeof manifest === "string" ? strToU8(manifest) : manifest, "README.md": strToU8("# Library"), "lib/net10.0/sample.dll": new Uint8Array(1024) })]); }
 
 describe("NuGet package identities and metadata", () => {
+  it.each([
+    "../../payload.dll", "lib/../../payload.dll", "lib/../payload.dll", "./payload.dll",
+    "..\\payload.dll", "/payload.dll", "\\payload.dll", "//host/payload.dll", "C:/payload.dll", "C:payload.dll",
+    "%2e%2e/payload.dll", "lib/%2E%2e%2fpayload.dll", "lib%2f..%5c..%5cpayload.dll",
+    "%2fpayload.dll", "C%3a%5cpayload.dll", "lib/payload%00.dll",
+  ])("rejects an unsafe ZIP entry %s even with a valid manifest", async (path) => {
+    const bytes = zipSync({ "Sample.Library.nuspec": strToU8(nuspec), "README.md": strToU8("# SDK"), [path]: strToU8("payload") });
+    await expect(readNugetPackage(blobReader(new Blob([bytes])))).rejects.toThrow("Unsafe package entry path");
+  });
+  it("allows ordinary NuGet paths and rejects decoded duplicate extraction paths", async () => {
+    const files = { "Sample.Library.nuspec": strToU8(nuspec), "README.md": strToU8("# SDK"),
+      "[Content_Types].xml": strToU8("types"), ".signature.p7s": strToU8("signature"),
+      "lib/net10.0/": new Uint8Array(), "content/100%.txt": strToU8("percent"), "content/a%20b.txt": strToU8("space") };
+    await expect(readNugetPackage(blobReader(new Blob([zipSync(files)])))).resolves.toHaveProperty("metadata.id", "Sample.Library");
+    await expect(readNugetPackage(blobReader(new Blob([zipSync({ ...files, "CONTENT/a b.txt": strToU8("duplicate") })]))))
+      .rejects.toThrow("Duplicate package entry");
+  });
   it.each(["utf-8", "utf-16le", "utf-16be"])("decodes valid %s manifests and serves a UTF-8 declaration", async (encoding) => {
     const xml = `<?xml version="1.0" encoding="${encoding === "utf-8" ? encoding : "utf-16"}"?>${nuspec.replace("A library", "日本語のライブラリ")}`;
     const bytes = encoding === "utf-8" ? Buffer.from(xml) : Buffer.from(xml, "utf16le");

@@ -148,6 +148,10 @@ export async function searchNugetPackages({ query = "", skip = 0, take = 20, pre
   query?: string; skip?: number; take?: number; prerelease?: boolean; semVer2?: boolean; audience?: PackageAudience; filterReadable?: boolean;
 }) {
   const releaseWhere: Prisma.ReleaseWhereInput = { published: true, nugetListed: true, fileId: { not: null }, nugetMetadataInvalid: false,
+    // Historical archives are indexed by backfill:metadata before cutover.
+    // Never extract archives from a catalog-wide search request: filtering and
+    // counting must use the same already-validated metadata, even for take=0.
+    nugetMetadata: { not: Prisma.AnyNull },
     ...(!semVer2 ? { nugetSemVer2: false } : {}),
     ...(!prerelease ? { NOT: { nugetVersion: { contains: "-" } } } : {}) };
   const term = query.trim();
@@ -172,20 +176,12 @@ export async function searchNugetPackages({ query = "", skip = 0, take = 20, pre
   const readable = async (pkg: CatalogPackage) => {
     const releases = [];
     for (const release of pkg.Release) {
-      const metadata = await catalogMetadata(pkg, release, semVer2);
+      const metadata = release.nugetMetadata && await catalogMetadata(pkg, release, semVer2);
       if (metadata) releases.push({ ...release, nugetMetadata: metadata });
     }
     pkg.Release = releases;
     return releases.length > 0;
   };
-  if (filterReadable || (term && audience !== "DEVELOPMENT")) {
-    // A legacy USER nuspec may contain the search term even when the editable
-    // store fields do not. Classify it before applying the metadata predicate.
-    const excluded = await classifyNugetReleases({ ...releaseWhere,
-      package: { ...baseWhere, ...(term ? { OR: [{ audience: "USER" }, queryWhere] } : {}) },
-    }, semVer2);
-    if (excluded.size) releaseWhere.id = { notIn: [...excluded] };
-  }
   if (term && audience !== "DEVELOPMENT") {
     const excluded = await userPackagesMatchingOlderMetadata(releaseWhere, metadataWhere, term);
     if (excluded.length) where.id = { notIn: excluded };

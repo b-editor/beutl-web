@@ -54,7 +54,11 @@ describe("SDK package installation links", () => {
   it.each(["ja", "en"])("uses the runtime registry origin for %s snippets and downloads", async (lang) => {
     vi.stubEnv("NUGET_PUBLIC_ORIGIN", "https://staging.nuget.example/");
     const html = renderToStaticMarkup(await Page({ params: Promise.resolve({ lang, name: "Sample.Library" }), searchParams: Promise.resolve({}) }));
-    expect(html.match(/https:\/\/staging.nuget.example\/v3\/index.json/gu)).toHaveLength(2);
+    expect(html.match(/https:\/\/staging.nuget.example\/v3\/index.json/gu)).toHaveLength(1);
+    expect(html).toContain("dotnet nuget add source https://staging.nuget.example/v3/index.json --name Beutl");
+    expect(html).toContain("dotnet add package Sample.Library --version 1.0.0");
+    expect(html).toContain("Install-Package Sample.Library -Version 1.0.0");
+    expect(html).not.toMatch(/--source|-Source/u);
     expect(html).toContain('href="https://staging.nuget.example/v3/package/sample.library/1.0.0/sample.library.1.0.0.nupkg"');
     expect(html).not.toContain("nuget.beditor.net");
     const store = renderToStaticMarkup(await DevelopmentPackages({ lang }));
