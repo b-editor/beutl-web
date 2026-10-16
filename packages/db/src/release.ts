@@ -1,4 +1,5 @@
 import { getDb } from "./provider";
+import { refreshNugetPackageMetadata } from "./nuget-package";
 import { deleteUnreferencedFileWithStorageCleanup } from "./file";
 import { startRetryableTransaction, type PrismaTransaction } from "./transaction";
 import { normalizeNugetId, normalizeNugetVersion, requiresNugetSemVer2, type NugetMetadata } from "@beutl/core";
@@ -314,7 +315,7 @@ export async function deleteReleaseWithStorageCleanup({
         version: true,
         artifactLocked: true,
         published: true,
-        package: { select: { userId: true } },
+        package: { select: { userId: true, audience: true } },
         file: { select: { id: true, userId: true } },
       },
     });
@@ -324,6 +325,7 @@ export async function deleteReleaseWithStorageCleanup({
 
     if (release.artifactLocked || release.published) await reservePublishedReleaseIdentity(tx, release);
     const deleted = await tx.release.delete({ where: { id } });
+    await refreshNugetPackageMetadata(tx, { id: release.packageId, audience: release.package.audience });
     if (release.file?.userId === userId) {
       await deleteUnreferencedFileWithStorageCleanup({
         fileId: release.file.id,

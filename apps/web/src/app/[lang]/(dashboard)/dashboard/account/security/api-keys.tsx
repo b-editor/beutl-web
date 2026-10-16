@@ -13,8 +13,8 @@ import { retrieveApiKeys, revokeApiKey } from "./api-key-actions";
 import { ApiKeyDialog } from "./api-key-dialog";
 import type { AccountApiKeys, ApiKeySummary } from "./api-key-types";
 
-export function ApiKeys({ lang, initialResult, initialRepositoryId }: {
-  lang: string; initialResult: ActionResult<AccountApiKeys>; initialRepositoryId?: string;
+export function ApiKeys({ lang, initialResult, initialRepositoryId, nugetSource }: {
+  lang: string; initialResult: ActionResult<AccountApiKeys>; initialRepositoryId?: string; nugetSource: string;
 }) {
   const { t } = useTranslation(lang);
   const [result, setResult] = useState(initialResult);
@@ -85,7 +85,7 @@ export function ApiKeys({ lang, initialResult, initialRepositoryId }: {
     </ul>}
     {notice && <p role="status" className="px-6 py-4 text-sm text-muted-foreground">{notice}</p>}
     {error && <p role="alert" className="px-6 py-4 text-sm text-destructive">{error}</p>}
-    {creating && data && <ApiKeyDialog lang={lang} repositories={data.repositories} gitAvailable={data.gitAvailable} initialRepositoryId={selectedRepositoryId}
+    {creating && data && <ApiKeyDialog lang={lang} repositories={data.repositories} gitAvailable={data.gitAvailable} initialRepositoryId={selectedRepositoryId} nugetSource={nugetSource}
       onCreated={(key) => updateKeys((keys) => [key, ...keys.filter((row) => row.kind !== key.kind || row.id !== key.id)])} onClose={() => setCreating(false)} />}
     <AlertDialog open={!!revoking} onOpenChange={(open) => { if (!open && !pending) setRevoking(undefined); }}>
       <AlertDialogContent>

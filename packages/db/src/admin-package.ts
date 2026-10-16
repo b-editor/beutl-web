@@ -1,4 +1,5 @@
 import { reservePublishedReleaseIdentity } from "./release";
+import { refreshNugetPackageMetadata } from "./nuget-package";
 import { startRetryableTransaction } from "./transaction";
 import { getDb } from "./provider";
 import { profileDisplayName } from "@beutl/core";
@@ -170,13 +171,15 @@ export async function setReleasePublishedByAdmin({
 > {
   const run = async (db: PrismaTransaction) => {
     const release = await db.release.findUnique({ where: { id: releaseId },
-      select: { id: true, packageId: true, version: true, published: true, fileId: true } });
+      select: { id: true, packageId: true, version: true, published: true, fileId: true, package: { select: { audience: true } } } });
     if (!release) return null;
     const missingFile = published && release.fileId === null;
     const changed = !missingFile && release.published !== published;
     if (!missingFile && published) await reservePublishedReleaseIdentity(db, release);
-    if (changed) await db.release.update({ where: { id: releaseId },
-      data: { published, ...(published ? { artifactLocked: true } : {}) } });
+    if (changed) {
+      await db.release.update({ where: { id: releaseId }, data: { published, ...(published ? { artifactLocked: true } : {}) } });
+      await refreshNugetPackageMetadata(db, { id: release.packageId, audience: release.package.audience });
+    }
     return { packageId: release.packageId, version: release.version, changed, missingFile };
   };
   return prisma ? run(prisma) : startRetryableTransaction(run);

@@ -28,7 +28,7 @@ describe("editing a release without replacing its artifact", () => {
   let models: {
     profile: { findFirst: () => Promise<{ userName: string }> };
     publishedPackageVersion: { upsert: () => Promise<{ releaseId: string }> };
-    release: { findUniqueOrThrow: () => Promise<unknown>; findFirst: () => Promise<typeof row>; findFirstOrThrow: () => Promise<typeof row>; update: ReturnType<typeof vi.fn> };
+    release: { findUniqueOrThrow: () => Promise<unknown>; findMany: () => Promise<typeof row[]>; findFirst: () => Promise<typeof row>; findFirstOrThrow: () => Promise<typeof row>; update: ReturnType<typeof vi.fn> };
     package: { findUniqueOrThrow: () => Promise<{ name: string }>; findFirst: () => Promise<{ id: string; name: string; userId: string; tags: string[] }>; update: ReturnType<typeof vi.fn> };
   };
   beforeEach(() => {
@@ -43,6 +43,7 @@ describe("editing a release without replacing its artifact", () => {
       publishedPackageVersion: { upsert: async () => ({ releaseId: RELEASE_ID }) },
       release: {
         findUniqueOrThrow: async () => ({ ...row, fileId: row.file?.id }),
+        findMany: async () => [...previousReleases, row].filter((r) => r.published && r.nugetListed && r.fileId),
         findFirst: async () => ({ ...row }),
         findFirstOrThrow: async () => ({ ...row }),
         update,

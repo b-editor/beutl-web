@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDevPackage, existsPackageName, PackageIdentityReservedError, createRelease, updateRelease, ReleaseArtifactLockedError, ReleaseIdentityConflictError, setReleasePublishedByAdmin, setDbProvider, packageNameFilter } from "@beutl/db";
-import { refreshNugetPackageMetadata, searchNugetPackages } from "../../packages/api/src/nuget/catalog";
+import { createDevPackage, existsPackageName, PackageIdentityReservedError, createRelease, updateRelease, ReleaseArtifactLockedError, ReleaseIdentityConflictError, setReleasePublishedByAdmin, setDbProvider, packageNameFilter, refreshNugetPackageMetadata, deleteReleaseWithStorageCleanup } from "@beutl/db";
+import { searchNugetPackages } from "../../packages/api/src/nuget/catalog";
 import { parseNuspec } from "../../packages/api/src/nuget/archive";
 import nugetApp from "../../packages/api/src/nuget/app";
 
@@ -168,6 +168,57 @@ suite("NuGet publication invariants on CockroachDB", () => {
     await edit("draft", false);
     await expect(edit("draft", false, "original")).rejects.toBeInstanceOf(ReleaseArtifactLockedError);
     expect(await db.release.findUniqueOrThrow({ where: { id: "draft" } })).toMatchObject({ fileId: "replacement", artifactLocked: true, published: false });
+  });
+  it.each(["DEVELOPMENT", "USER"] as const)("keeps %s search metadata consistent after moderation and deletion", async (audience) => {
+    const packageId = `metadata-${audience}`, name = `Metadata.${audience}`;
+    await db.$executeRaw`INSERT INTO "Package" ("id", "name", "audience", "displayName", "description", "shortDescription", "tags", "webSite")
+      VALUES (${packageId}, ${name}, ${audience}, 'Editorial title', 'Editorial description', 'Editorial summary', ARRAY['editorial'], 'https://editorial.test')`;
+    // Exercise metadata transactions independently of the separately tested storage cleanup.
+    await db.$executeRaw`INSERT INTO "File" ("id", "name", "userId") VALUES (${packageId}, 'sdk.nupkg', 'artifact-owner')`;
+    const editorial = { displayName: "Editorial title", description: "Editorial description", shortDescription: "Editorial summary", tags: ["editorial"], webSite: "https://editorial.test" };
+    const ids = [];
+    for (const [version, word] of [["1.0.0", "previous"], ["2.0.0", "latest"]]) {
+      const nuspec = `<package><metadata><id>${name}</id><version>${version}</version><authors>Owner</authors><title>${word}</title>
+        <description>${word} description</description><summary>${word} summary</summary><tags>${word}</tags><projectUrl>https://${word}.test</projectUrl></metadata></package>`;
+      const release = await draft(packageId, version);
+      await updateRelease({ id: release.id, published: false, fileId: packageId, title: "", description: "", targetVersion: "",
+        nuget: { metadata: parseNuspec(nuspec), nuspec, readme: null } });
+      ids.push(release.id);
+      await setReleasePublishedByAdmin({ releaseId: release.id, published: true });
+    }
+    const check = async (word?: string) => {
+      const expected = audience === "USER" ? editorial : word
+        ? { displayName: word, description: `${word} description`, shortDescription: `${word} summary`, tags: [word], webSite: `https://${word}.test` }
+        : { displayName: null, description: "", shortDescription: "", tags: [], webSite: "" };
+      expect(await db.package.findUniqueOrThrow({ where: { id: packageId } })).toMatchObject(expected);
+      if (audience === "DEVELOPMENT") {
+        for (const query of ["latest", "previous"]) {
+          const result = await searchNugetPackages({ query });
+          expect(result.packages.some((pkg) => pkg.id === packageId)).toBe(query === word);
+        }
+      }
+    };
+    await check("latest");
+    await expect(db.$transaction(async (tx) => {
+      await setReleasePublishedByAdmin({ releaseId: ids[1], published: false, prisma: tx });
+      throw new Error("Rollback visibility change");
+    })).rejects.toThrow("Rollback visibility change");
+    expect((await db.release.findUniqueOrThrow({ where: { id: ids[1] } })).published).toBe(true);
+    await check("latest");
+    await setReleasePublishedByAdmin({ releaseId: ids[1], published: false });
+    await check("previous");
+    await setReleasePublishedByAdmin({ releaseId: ids[1], published: true });
+    await check("latest");
+    await expect(db.$transaction(async (tx) => {
+      await deleteReleaseWithStorageCleanup({ id: ids[1], userId: "owner", prisma: tx });
+      throw new Error("Rollback deletion");
+    })).rejects.toThrow("Rollback deletion");
+    expect(await db.release.findUnique({ where: { id: ids[1] } })).not.toBeNull();
+    await check("latest");
+    await deleteReleaseWithStorageCleanup({ id: ids[1], userId: "owner" });
+    await check("previous");
+    await deleteReleaseWithStorageCleanup({ id: ids[0], userId: "owner" });
+    await check();
   });
   it("locks admin publications and preserves editorial updates", async () => {
     const r = await draft("dev", "2.0.0");

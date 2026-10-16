@@ -27,7 +27,12 @@ routes.get("/search", async (c) => {
   const options = searchOptions(c);
   const { totalHits, packages } = await searchNugetPackages(options);
   const origin = nugetOrigin(c);
-  const data = (await Promise.all(packages.map((pkg) => searchItem(pkg, origin, options.semVer2)))).filter((item) => item !== null);
+  const data = [];
+  // Legacy entries may extract multi-megabyte ZIP directories from storage.
+  for (const pkg of packages) {
+    const item = await searchItem(pkg, origin, options.semVer2);
+    if (item) data.push(item);
+  }
   return c.json({ totalHits, data });
 });
 

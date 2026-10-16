@@ -1,9 +1,8 @@
-import { assertPackageIdNotReserved, packageNameFilter } from "@beutl/db";
+import { assertPackageIdNotReserved, packageNameFilter, nugetSearchableMetadata } from "@beutl/db";
 import { boundedBody, compareNugetVersions, normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
 import { createRelease, getDb, ReleaseIdentityConflictError, updateRelease, type PrismaTransaction } from "@beutl/db";
 import { createStorageOperations } from "../storage/files";
 import { blobReader, InvalidNugetPackageError, readNugetPackage } from "./archive";
-import { nugetSearchableMetadata } from "./catalog";
 
 export const NUGET_PUSH_LIMIT = 50 * 1024 * 1024;
 export class NugetPushTooLargeError extends Error {}

@@ -196,7 +196,7 @@ describe("NuGet registry routes", () => {
     expect((await request("/v3/registration-semver1/library/1.0.0.json")).status).toBe(404);
     expect(models.release.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ nugetSemVer2: true }) }));
   });
-  it("parses legacy registration archives sequentially", async () => {
+  it.each(["registration", "search"])("parses legacy %s archives sequentially", async (resource) => {
     let active = 0, maximum = 0;
     const releases = ["1.0.0", "2.0.0"].map((version) => {
       const bytes = zipSync({ "Library.nuspec": strToU8(manifest.replace("1.0.0", version)) });
@@ -210,10 +210,18 @@ describe("NuGet registry routes", () => {
       const bytes = releases.find((r) => r.id === key)!.bytes;
       return { arrayBuffer: async () => bytes.slice(options!.range!.offset, options!.range!.offset + options!.range!.length).buffer };
     } }) as never);
-    models.package.findFirst.mockResolvedValueOnce({ ...pkg, Release: releases } as unknown as typeof pkg);
-    models.release.findMany.mockResolvedValueOnce(releases as unknown as typeof pkg.Release);
-    const result = await (await request("/v3/registration/library/index.json")).json();
-    expect(result.items[0].count).toBe(2);
+    if (resource === "registration") {
+      models.package.findFirst.mockResolvedValueOnce({ ...pkg, Release: releases } as unknown as typeof pkg);
+      models.release.findMany.mockResolvedValueOnce(releases as unknown as typeof pkg.Release);
+      const result = await (await request("/v3/registration/library/index.json")).json();
+      expect(result.items[0].count).toBe(2);
+    } else {
+      models.package.findMany.mockResolvedValueOnce(releases.map((release) => ({ ...pkg, Release: [release] })) as unknown as typeof pkg[]);
+      models.package.count.mockResolvedValueOnce(2);
+      const result = await (await request("/v3/search?take=100")).json();
+      expect(result.totalHits).toBe(2);
+      expect(result.data.map((item: { version: string }) => item.version)).toEqual(["1.0.0", "2.0.0"]);
+    }
     expect(maximum).toBe(1);
     expect(models.release.updateMany).toHaveBeenCalledTimes(2);
   });
@@ -309,6 +317,8 @@ describe("NuGet registry routes", () => {
     const catalog = { ...pkg, Release: [{ ...release, nugetListed: true }, updated] };
     models.package.findFirst.mockResolvedValueOnce(catalog);
     models.publishedPackageVersion.upsert.mockResolvedValueOnce({ releaseId: "latest" });
+    models.release.update.mockImplementationOnce(async ({ data }) => Object.assign(updated, data));
+    models.release.findMany.mockImplementationOnce(async () => catalog.Release.filter((r) => r.nugetListed));
     const response = await request("/api/v2/package/library/2.0.0", { method, headers: { "X-NuGet-ApiKey": secret } });
     expect(response.status).toBe(method === "DELETE" ? 204 : 200);
     const expected = method === "DELETE" ? release.nugetMetadata : updated.nugetMetadata;

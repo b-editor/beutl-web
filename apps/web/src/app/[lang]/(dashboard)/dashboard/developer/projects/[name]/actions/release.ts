@@ -3,8 +3,7 @@
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { applyPackageType, isValidNugetVersion, type ActionResult } from "@beutl/core";
 import { InvalidNugetPackageError } from "@beutl/api/nuget/archive";
-import { refreshNugetPackageMetadata } from "@beutl/api/nuget/catalog";
-import { ReleaseArtifactLockedError, ReleaseIdentityConflictError } from "@beutl/db";
+import { refreshNugetPackageMetadata, ReleaseArtifactLockedError, ReleaseIdentityConflictError } from "@beutl/db";
 import { authenticated } from "@/lib/auth-guard";
 import {
   getPackageNameFromPackageId,
@@ -134,13 +133,7 @@ export async function updateRelease(
             prisma: tx,
           });
 
-          if (current.package.audience === "DEVELOPMENT") {
-            const pkg = await tx.package.findUniqueOrThrow({
-              where: { id: release.packageId },
-              include: { Release: { where: { published: true, nugetListed: true, fileId: { not: null } }, include: { file: true } } },
-            });
-            await refreshNugetPackageMetadata(tx, pkg);
-          }
+          await refreshNugetPackageMetadata(tx, { id: release.packageId, audience: current.package.audience });
 
           // Merge the upload's kind into the current tags so concurrent edits survive.
           if (artifact?.packageType) {

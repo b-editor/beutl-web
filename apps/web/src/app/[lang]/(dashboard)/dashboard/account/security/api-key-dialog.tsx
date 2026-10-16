@@ -2,7 +2,7 @@
 
 import { useState, useTransition, type FormEvent } from "react";
 import { KeyRound, Loader2, Terminal } from "lucide-react";
-import { isValidGitAccessTokenName, NUGET_SERVICE_INDEX } from "@beutl/core";
+import { isValidGitAccessTokenName } from "@beutl/core";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { Button } from "@beutl/ui/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@beutl/ui/ui/dialog";
@@ -15,11 +15,12 @@ import { authenticatedCloneUrl, repositoryCloneCommand } from "../../repositorie
 import { createApiKey } from "./api-key-actions";
 import type { AccountApiKeys, ApiKeySettings, ApiKeySummary, CreatedApiKey } from "./api-key-types";
 
-export function ApiKeyDialog({ lang, repositories, gitAvailable, initialRepositoryId, onCreated, onClose }: {
+export function ApiKeyDialog({ lang, repositories, gitAvailable, initialRepositoryId, nugetSource, onCreated, onClose }: {
   lang: string;
   repositories: AccountApiKeys["repositories"];
   gitAvailable: boolean;
   initialRepositoryId?: string;
+  nugetSource: string;
   onCreated: (key: ApiKeySummary) => void;
   onClose: () => void;
 }) {
@@ -82,7 +83,7 @@ export function ApiKeyDialog({ lang, repositories, gitAvailable, initialReposito
         </>}
         {created.key.kind === "nuget" && <div className="space-y-2">
           <Label htmlFor="api-key-nuget-source">{t("account:apiKeys.nugetSource")}</Label>
-          <CopyableInput id="api-key-nuget-source" value={NUGET_SERVICE_INDEX} className="text-xs"
+          <CopyableInput id="api-key-nuget-source" value={nugetSource} className="text-xs"
             copyLabel={t("account:apiKeys.copyUrl")} onCopy={copy} />
         </div>}
       </div> : <form id="create-api-key" onSubmit={create} className="space-y-4">

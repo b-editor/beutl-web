@@ -24,6 +24,7 @@ export * from "./feedback";
 export * from "./file";
 export * from "./git-storage";
 export * from "./native-app-auth";
+export * from "./nuget-package";
 export * from "./package";
 export * from "./package-payment";
 export * from "./package-payment-refund-attempt";

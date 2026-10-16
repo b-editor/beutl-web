@@ -9,6 +9,7 @@ import { retrieveAccountsWithIdToken } from "@beutl/db";
 import { getPasskeysByUserId } from "@beutl/db";
 import { ApiKeys } from "./api-keys";
 import { retrieveApiKeys } from "./api-key-actions";
+import { NUGET_ORIGIN } from "@beutl/core";
 
 export default async function Page(
   props: {
@@ -86,6 +87,7 @@ export default async function Page(
 
   const { t } = await getTranslation(lang);
   const apiKeys = await retrieveApiKeys();
+  const nugetOrigin = (process.env.NUGET_PUBLIC_ORIGIN || NUGET_ORIGIN).replace(/\/$/u, "");
   const { repository } = await props.searchParams;
 
   return (
@@ -109,7 +111,7 @@ export default async function Page(
         {passkeysList.length !== 0 && <Separator />}
         <PasskeysList lang={lang} authenticators={passkeysList} />
       </div>
-      <ApiKeys lang={lang} initialResult={apiKeys} initialRepositoryId={repository} />
+      <ApiKeys lang={lang} initialResult={apiKeys} initialRepositoryId={repository} nugetSource={`${nugetOrigin}/v3/index.json`} />
     </div>
   );
 }

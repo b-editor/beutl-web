@@ -1,10 +1,9 @@
 import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
 import { normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
-import { packageNameFilter, reservePublishedReleaseIdentity, startRetryableTransaction } from "@beutl/db";
+import { packageNameFilter, refreshNugetPackageMetadata, reservePublishedReleaseIdentity, startRetryableTransaction } from "@beutl/db";
 import { authenticateNuget } from "../tokens";
 import { pushNugetPackage } from "../push";
-import { refreshNugetPackageMetadata } from "../catalog";
 import type { NugetEnv } from "../protocol";
 
 type PublishEnv = NugetEnv & { Variables: { publisherId: string } };
@@ -42,7 +41,6 @@ routes.on(["DELETE", "POST"], "/:id/:version", requirePushKey, async (c) => {
       where: { id: release.id },
       data: { nugetListed: c.req.method === "POST", artifactLocked: true },
     });
-    release.nugetListed = c.req.method === "POST";
     await refreshNugetPackageMetadata(tx, pkg);
     return c.req.method === "DELETE" ? 204 : 200;
   });

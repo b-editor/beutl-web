@@ -22,24 +22,6 @@ export const catalogReleaseSelect = {
 export type CatalogRelease = Prisma.ReleaseGetPayload<{ select: typeof catalogReleaseSelect }>;
 type ArchiveRelease = Pick<NugetRelease, "id" | "version" | "fileId" | "file" | "nugetMetadata" | "nuspec" | "readme">;
 
-export function nugetSearchableMetadata(metadata: NugetMetadata) {
-  return { displayName: metadata.title, description: metadata.description,
-    shortDescription: metadata.summary || metadata.description.slice(0, 200), tags: metadata.tags, webSite: metadata.projectUrl };
-}
-
-export async function refreshNugetPackageMetadata(tx: PrismaTransaction, pkg: NugetPackage) {
-  if (pkg.audience !== "DEVELOPMENT") return;
-  for (const release of sortNugetReleases(pkg.Release.filter((r) => r.published && r.nugetListed && r.fileId))) {
-    const parsed = await tryReleaseMetadata(pkg, release, tx);
-    if (!parsed) continue;
-    await tx.package.update({ where: { id: pkg.id }, data: nugetSearchableMetadata(parsed.metadata) });
-    return;
-  }
-  await tx.package.update({ where: { id: pkg.id }, data: {
-    displayName: null, description: "", shortDescription: "", tags: [], webSite: "",
-  } });
-}
-
 export function sortNugetReleases<T extends { version: string }>(releases: T[]): T[] {
   return [...releases].sort((a, b) => compareNugetVersions(b.version, a.version));
 }
