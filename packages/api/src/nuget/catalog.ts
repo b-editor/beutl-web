@@ -1,7 +1,7 @@
 import { packageNameFilter } from "@beutl/db";
 import { compareNugetVersions, normalizeNugetId, normalizeNugetVersion, requiresNugetSemVer2, type NugetMetadata, type PackageAudience } from "@beutl/core";
 import { getDb, type PrismaTransaction } from "@beutl/db";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { readNugetPackage, storedPackageReader } from "./archive";
 
 export async function findNugetPackage(id: string, audience?: PackageAudience, version?: string) {
@@ -21,6 +21,7 @@ export const catalogReleaseSelect = {
   fileId: true, file: true, downloads: true, createdAt: true,
 } satisfies Prisma.ReleaseSelect;
 export type CatalogRelease = Prisma.ReleaseGetPayload<{ select: typeof catalogReleaseSelect }>;
+type CatalogPackage = Prisma.PackageGetPayload<{ include: { Release: { select: typeof catalogReleaseSelect } } }>;
 type ArchiveRelease = Pick<NugetRelease, "id" | "version" | "fileId" | "file" | "nugetMetadata" | "nuspec" | "readme">;
 
 export function sortNugetReleases<T extends { version: string }>(releases: T[]): T[] {
@@ -67,8 +68,8 @@ export async function catalogMetadata(pkg: Pick<NugetPackage, "name">, release: 
   return metadata && (semVer2 || !requiresNugetSemVer2(release.version, metadata)) ? metadata : null;
 }
 
-export async function searchNugetPackages({ query = "", skip = 0, take = 20, prerelease = true, semVer2 = true, audience }: {
-  query?: string; skip?: number; take?: number; prerelease?: boolean; semVer2?: boolean; audience?: PackageAudience;
+export async function searchNugetPackages({ query = "", skip = 0, take = 20, prerelease = true, semVer2 = true, audience, filterReadable = false }: {
+  query?: string; skip?: number; take?: number; prerelease?: boolean; semVer2?: boolean; audience?: PackageAudience; filterReadable?: boolean;
 }) {
   const releaseWhere: Prisma.ReleaseWhereInput = { published: true, nugetListed: true, fileId: { not: null },
     ...(!semVer2 ? { nugetSemVer2: false } : {}),
@@ -82,10 +83,50 @@ export async function searchNugetPackages({ query = "", skip = 0, take = 20, pre
     ] } : {}),
   };
   const db = await getDb();
+  const include = { Release: { where: releaseWhere, select: catalogReleaseSelect } };
+  const offset = Math.max(0, skip), limit = Math.max(1, Math.min(100, take));
+  const readable = async (pkg: CatalogPackage) => {
+    const releases = [];
+    for (const release of pkg.Release) {
+      const metadata = await catalogMetadata(pkg, release, semVer2);
+      if (metadata) releases.push({ ...release, nugetMetadata: metadata });
+    }
+    pkg.Release = releases;
+    return releases.length > 0;
+  };
+  if (filterReadable && await db.release.count({ where: {
+    ...releaseWhere, package: where, nugetMetadata: { equals: Prisma.AnyNull },
+  } })) {
+    // Unknown legacy archives can disappear from the SQL result as they are
+    // classified. Walk by name and apply the client offset to readable hits,
+    // not to candidates. Start at the beginning on later pages too: unreadable
+    // archives remain unknown and cannot safely be hidden by a transient GET.
+    const packages: CatalogPackage[] = [], excluded: string[] = [];
+    let after: string | undefined, accepted = 0;
+    while (packages.length < limit) {
+      const batch: CatalogPackage[] = await db.package.findMany({
+        where: after === undefined ? where : { AND: [where, { name: { gt: after } }] },
+        orderBy: { name: "asc" }, take: limit, include,
+      });
+      if (!batch.length) break;
+      for (const pkg of batch) {
+        after = pkg.name;
+        if (!await readable(pkg)) { excluded.push(pkg.id); continue; }
+        if (accepted++ >= offset) packages.push(pkg);
+        if (packages.length === limit) break;
+      }
+    }
+    const totalHits = await db.package.count({ where: { AND: [where, { id: { notIn: excluded } }] } });
+    return { totalHits, packages };
+  }
   const [totalHits, packages] = await Promise.all([
     db.package.count({ where }),
-    db.package.findMany({ where, orderBy: { name: "asc" }, skip: Math.max(0, skip), take: Math.max(1, Math.min(100, take)),
-      include: { Release: { where: releaseWhere, select: catalogReleaseSelect } } }),
+    db.package.findMany({ where, orderBy: { name: "asc" }, skip: offset, take: limit, include }),
   ]);
+  if (filterReadable) {
+    const filtered = [];
+    for (const pkg of packages) if (await readable(pkg)) filtered.push(pkg);
+    return { totalHits, packages: filtered };
+  }
   return { totalHits, packages };
 }

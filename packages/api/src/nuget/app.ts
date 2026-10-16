@@ -3,7 +3,7 @@ import { cors } from "hono/cors";
 import { InvalidNugetIdentityError } from "@beutl/core";
 import { PackageIdentityReservedError, ReleaseArtifactLockedError, ReleaseIdentityConflictError } from "@beutl/db";
 import { InvalidNugetPackageError } from "./archive";
-import { NugetOwnershipError, NugetPushTooLargeError } from "./push";
+import { NugetOwnershipError, NugetPackageUnpublishedError, NugetPushTooLargeError } from "./push";
 import { nugetOrigin, type NugetEnv } from "./protocol";
 import catalogRoutes from "./routes/catalog";
 import contentRoutes from "./routes/content";
@@ -31,6 +31,7 @@ app.route("/v3", contentRoutes);
 app.route("/api/v2/package", publishRoutes);
 
 app.onError((error, c) => {
+  if (error instanceof NugetPackageUnpublishedError) return c.json({ message: error.message }, 400);
   if (error instanceof PackageIdentityReservedError) return c.json({ message: error.message }, 409);
   if (error instanceof ReleaseIdentityConflictError || error instanceof ReleaseArtifactLockedError ||
       ("code" in error && error.code === "P2002")) {

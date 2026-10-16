@@ -20,7 +20,7 @@ const file = () => ({ name: "library.nupkg", size: 4n, objectKey: "object", sha2
   Release: [{ published: true, package: { ...pkg, packagePricing: paid ? [{ id: "price", price: 100 }] : [] } }] });
 const models = {
   package: { findFirst: vi.fn(async () => structuredClone(pkg)), findUniqueOrThrow: vi.fn(async () => pkg), findMany: vi.fn(async () => [] as (typeof pkg)[]), count: vi.fn(async () => 0), update: vi.fn() },
-  release: { findFirst: vi.fn(async () => release), findMany: vi.fn(async () => [release]), updateMany: vi.fn(async () => ({ count: 1 })), update: vi.fn(async () => release) },
+  release: { count: vi.fn(async () => 0), findFirst: vi.fn(async () => release), findMany: vi.fn(async () => [release]), updateMany: vi.fn(async () => ({ count: 1 })), update: vi.fn(async () => release) },
   file: { findFirst: vi.fn(async () => file()) },
   nugetToken: { findUnique: vi.fn(async ({ where }: { where: { tokenHash: string } }) => where.tokenHash === createHash("sha256").update(secret).digest("hex") ?
     { userId: buyer || "owner", canPush, revokedAt: revoked ? new Date() : null, expiresAt: new Date(Date.now() + 100000) } : null) },
@@ -391,6 +391,14 @@ describe("NuGet registry routes", () => {
     buyer = null;
     expect((await request("/api/v2/package/library/1.0.0", { method: "DELETE", headers: { "X-NuGet-ApiKey": secret } })).status).toBe(204);
     expect(models.release.update).toHaveBeenCalledWith({ where: { id: "release" }, data: { nugetListed: false, artifactLocked: true } });
+    expect(bucket.put).not.toHaveBeenCalled();
+  });
+  it("rejects publishing to a hidden project without reporting a duplicate or storing bytes", async () => {
+    models.package.findFirst.mockResolvedValueOnce({ ...pkg, published: false });
+    const body = new Blob([zipSync({ "Library.nuspec": strToU8(manifest.replace("1.0.0", "2.0.0")) })]);
+    const response = await request("/api/v2/package", { method: "PUT", headers: { "X-NuGet-ApiKey": secret }, body });
+    expect(response.status).toBe(400);
+    expect((await response.json()).message).toContain("Publish the project");
     expect(bucket.put).not.toHaveBeenCalled();
   });
   it.each(["DELETE", "POST"])("requires authentication and push scope for %s listing changes", async (method) => {

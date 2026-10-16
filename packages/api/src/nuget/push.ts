@@ -7,6 +7,7 @@ import { blobReader, InvalidNugetPackageError, readNugetPackage } from "./archiv
 export const NUGET_PUSH_LIMIT = 50 * 1024 * 1024;
 export class NugetPushTooLargeError extends Error {}
 export class NugetOwnershipError extends Error {}
+export class NugetPackageUnpublishedError extends Error {}
 
 /** NuGet sends the archive in the first multipart part; its name/filename are immaterial. */
 export async function readPushBody(request: Request): Promise<Blob> {
@@ -51,6 +52,7 @@ export async function readPushBody(request: Request): Promise<Blob> {
 async function checkIdentity(tx: PrismaTransaction, name: string, version: string, userId: string) {
   const pkg = await tx.package.findFirst({ where: { name: packageNameFilter(name) }, include: { Release: { orderBy: { createdAt: "desc" }, select: { version: true, targetVersion: true, published: true, nugetListed: true } } } });
   if (pkg && pkg.userId !== userId) throw new NugetOwnershipError();
+  if (pkg && !pkg.published) throw new NugetPackageUnpublishedError("Publish the project before pushing a package version.");
   if (!pkg) await assertPackageIdNotReserved(tx, name);
   if (pkg?.Release.some((r) => normalizeNugetVersion(r.version) === version) ||
     await tx.publishedPackageVersion.findUnique({ where: { name_version: { name, version } } })) throw new ReleaseIdentityConflictError();

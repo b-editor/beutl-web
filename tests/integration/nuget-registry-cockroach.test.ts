@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { strToU8, zipSync } from "fflate";
+import { setR2BucketProvider } from "@beutl/api/ai/r2-provider";
 import { createDevPackage, existsPackageName, PackageIdentityReservedError, createRelease, updateRelease, ReleaseArtifactLockedError, ReleaseIdentityConflictError, setReleasePublishedByAdmin, setDbProvider, packageNameFilter, refreshNugetPackageMetadata, deleteReleaseWithStorageCleanup } from "@beutl/db";
 import { searchNugetPackages } from "../../packages/api/src/nuget/catalog";
 import { parseNuspec } from "../../packages/api/src/nuget/archive";
@@ -159,6 +161,44 @@ suite("NuGet publication invariants on CockroachDB", () => {
     } finally {
       await db.release.deleteMany({ where: { id: { in: ["A.Build", "B.Preview", "C.Build"] } } });
       await db.package.deleteMany({ where: { id: { in: ["A.Build", "B.Preview", "C.Build"] } } });
+    }
+  });
+  it.each([
+    ["search", "semver2"], ["autocomplete", "semver2"], ["search", "unreadable"], ["autocomplete", "unreadable"],
+  ])("fills %s pages after excluding a %s legacy package", async (resource, kind) => {
+    const prefix = `Page.${resource}.${kind}`;
+    const names = Array.from({ length: 22 }, (_, i) => `${prefix}.${String(i).padStart(2, "0")}`);
+    const manifest = (name: string) => `<package><metadata><id>${name}</id><version>1.0.0</version><authors>Owner</authors><description>Library</description></metadata></package>`;
+    const bytes = kind === "unreadable" ? strToU8("not a ZIP") : zipSync({ "Library.nuspec": strToU8(manifest(names[0])
+      .replace("</metadata>", '<dependencies><dependency id="Dependency" version="[1.0.0-beta.1,2.0)" /></dependencies></metadata>')) });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    setR2BucketProvider(() => ({ get: async (_key, options) => ({
+      arrayBuffer: async () => bytes.slice(options!.range!.offset, options!.range!.offset + options!.range!.length).buffer,
+    }) }) as never);
+    await db.$executeRaw`INSERT INTO "File" ("id", "name", "size") VALUES (${prefix}, 'legacy.nupkg', ${BigInt(bytes.length)})`;
+    try {
+      for (const [i, name] of names.entries()) {
+        await db.$executeRaw`INSERT INTO "Package" ("id", "name") VALUES (${name}, ${name})`;
+        await db.release.create({ data: { id: name, packageId: name, version: "1.0.0", nugetVersion: "1.0.0", published: true,
+          title: "", description: "", targetVersion: "", fileId: prefix, nugetMetadata: i ? parseNuspec(manifest(name)) : Prisma.DbNull } });
+      }
+      const page = async (skip: number) => {
+        const response = await nugetApp.request(`https://nuget.test/v3/${resource}?q=${prefix}&take=20&skip=${skip}`);
+        expect(response.status).toBe(200);
+        const result = await response.json();
+        expect(result.totalHits).toBe(21);
+        return resource === "search" ? result.data.map((item: { id: string }) => item.id) : result.data;
+      };
+      // Direct navigation to a later page must also count only readable hits.
+      expect(await page(20)).toEqual(names.slice(21));
+      const first = await page(0), last = await page(20);
+      expect(first).toHaveLength(20);
+      expect([...first, ...last]).toEqual(names.slice(1));
+    } finally {
+      await db.release.deleteMany({ where: { packageId: { in: names } } });
+      await db.package.deleteMany({ where: { id: { in: names } } });
+      await db.file.delete({ where: { id: prefix } });
+      errors.mockRestore();
     }
   });
   it("keeps search terms in sync when the highest SDK version is unlisted and relisted", async () => {

@@ -15,7 +15,7 @@ const tx = {
   package: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
   publishedPackageVersion: { findUnique: vi.fn(async () => null), findFirst: vi.fn() },
 };
-const existing = { id: "pkg", userId: "owner", audience: "DEVELOPMENT", Release: [
+const existing = { id: "pkg", userId: "owner", audience: "DEVELOPMENT", published: true, Release: [
   { version: "1.0.0", targetVersion: "", published: true, nugetListed: true },
 ] };
 
@@ -42,6 +42,17 @@ async function push(version = "2.0.0") {
 }
 
 describe("NuGet push searchable metadata", () => {
+  it.each(["USER", "DEVELOPMENT"])("rejects a hidden %s project before storing bytes", async (audience) => {
+    tx.package.findFirst.mockResolvedValue({ ...existing, audience, published: false });
+    await expect(push()).rejects.toThrow("Publish the project before pushing");
+    expect(publication.store).not.toHaveBeenCalled();
+    expect(publication.createRelease).not.toHaveBeenCalled();
+  });
+  it("rechecks project visibility in the publication transaction", async () => {
+    tx.package.findFirst.mockResolvedValueOnce(existing).mockResolvedValueOnce({ ...existing, published: false });
+    await expect(push()).rejects.toThrow("Publish the project before pushing");
+    expect(publication.createRelease).not.toHaveBeenCalled();
+  });
   it("rejects another version of a deleted published ID before storing bytes", async () => {
     tx.package.findFirst.mockResolvedValue(null);
     tx.publishedPackageVersion.findFirst.mockResolvedValue({ name: "library" });

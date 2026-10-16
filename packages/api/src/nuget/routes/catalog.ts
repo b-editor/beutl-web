@@ -25,7 +25,7 @@ routes.get("/index.json", (c) => c.json(serviceIndex(nugetOrigin(c))));
 
 routes.get("/search", async (c) => {
   const options = searchOptions(c);
-  const { totalHits, packages } = await searchNugetPackages(options);
+  const { totalHits, packages } = await searchNugetPackages({ ...options, filterReadable: true });
   const origin = nugetOrigin(c);
   const data = [];
   // Legacy entries may extract multi-megabyte ZIP directories from storage.
@@ -53,14 +53,8 @@ routes.get("/autocomplete", async (c) => {
     }
     return c.json({ data });
   }
-  const { totalHits, packages } = await searchNugetPackages(options);
-  const data = [];
-  for (const pkg of packages) {
-    for (const release of pkg.Release) {
-      if (await catalogMetadata(pkg, release, options.semVer2)) { data.push(pkg.name); break; }
-    }
-  }
-  return c.json({ totalHits, data });
+  const { totalHits, packages } = await searchNugetPackages({ ...options, filterReadable: true });
+  return c.json({ totalHits, data: packages.map((pkg) => pkg.name) });
 });
 
 const REGISTRATION_PAGE_SIZE = 64;
