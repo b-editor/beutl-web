@@ -52,7 +52,8 @@ routes.get("/autocomplete", async (c) => {
       const metadata = await catalogMetadata(pkg!, release, options.semVer2);
       if (metadata) data.push(fullNugetVersion(metadata.version));
     }
-    return c.json({ data: data.slice(options.skip, options.skip + options.take) });
+    // NuGet's id form enumerates all matching versions; skip/take apply to q.
+    return c.json({ data });
   }
   const { totalHits, packages } = await searchNugetPackages({ ...options, filterReadable: true });
   return c.json({ totalHits, data: packages.map((pkg) => pkg.name) });

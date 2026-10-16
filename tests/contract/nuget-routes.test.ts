@@ -184,16 +184,16 @@ describe("NuGet registry routes", () => {
     ] });
     expect(await (await request("/v3/autocomplete?id=Library&semVerLevel=2.0.0")).json()).toEqual({ data: ["1.0.0+linux-x64"] });
   });
-  it.each([[0, 2, ["1.0.0", "3.0.0"]], [1, 1, ["3.0.0"]], [2, 5, []], [0, 0, []]] as const)(
-    "paginates version autocomplete after filtering (skip=%s, take=%s)", async (skip, take, expected) => {
+  it.each(["", "&skip=1&take=1", "&skip=1000&take=0"])(
+    "returns all matching autocomplete versions without package-search pagination: %s", async (pagination) => {
+      const expected = Array.from({ length: 125 }, (_, i) => `1.0.${i}`);
       models.package.findFirst.mockResolvedValueOnce({ ...pkg, Release: [
         { ...versionedRelease("4.0.0"), nugetListed: false },
-        { ...versionedRelease("3.0.0"), nugetListed: true },
-        { ...versionedRelease("2.0.0"), nugetListed: true, nugetSemVer2: true },
+        ...expected.toReversed().map((version) => ({ ...versionedRelease(version), nugetListed: true })),
+        { ...versionedRelease("2.0.0+build"), nugetListed: true, nugetSemVer2: true },
         { ...versionedRelease("1.5.0-beta"), nugetListed: true },
-        { ...versionedRelease("1.0.0"), nugetListed: true },
       ] });
-      expect(await (await request(`/v3/autocomplete?id=Library&skip=${skip}&take=${take}`)).json()).toEqual({ data: expected });
+      expect(await (await request(`/v3/autocomplete?id=Library${pagination}`)).json()).toEqual({ data: expected });
     },
   );
   it.each([undefined, "1.0.0", "2.0.0-beta", "invalid", "2.0.0", "3.0.0"])("honors semVerLevel=%s in search and autocomplete", async (level) => {
