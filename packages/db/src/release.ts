@@ -197,6 +197,7 @@ export async function updateRelease({
           nugetVersion: normalizeNugetVersion(current.version),
           nugetSemVer2: requiresNugetSemVer2(current.version, nuget.metadata),
           nugetMetadata: nuget.metadata,
+          nugetMetadataInvalid: false,
           nuspec: nuget.nuspec,
           readme: nuget.readme,
         } : {}),

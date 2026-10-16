@@ -1,8 +1,7 @@
 import { Hono, type Context } from "hono";
 import { compareNugetVersions, isValidNugetVersion, normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
 import { getDb, packageNameFilter } from "@beutl/db";
-import { Prisma } from "@prisma/client";
-import { catalogMetadata, catalogReleaseSelect, searchNugetPackages, sortNugetReleases } from "../catalog";
+import { catalogMetadata, catalogReleaseSelect, classifyNugetReleases, searchNugetPackages, sortNugetReleases } from "../catalog";
 import { nugetOrigin, registrationItem, registrationUrl, searchItem, serviceIndex, type NugetEnv } from "../protocol";
 
 const routes = new Hono<NugetEnv>();
@@ -44,7 +43,7 @@ routes.get("/autocomplete", async (c) => {
     const pkg = await (await getDb()).package.findFirst({
       where: { name: packageNameFilter(normalizeNugetId(id)), published: true },
       select: { name: true, Release: {
-        where: { published: true, nugetListed: true, fileId: { not: null } }, select: catalogReleaseSelect,
+        where: { published: true, nugetListed: true, fileId: { not: null }, nugetMetadataInvalid: false }, select: catalogReleaseSelect,
       } },
     });
     const data = [];
@@ -62,7 +61,7 @@ const REGISTRATION_PAGE_SIZE = 64;
 
 function registrationRoutes(semVer2: boolean) {
   const registration = new Hono<NugetEnv>();
-  const releaseWhere = { published: true, fileId: { not: null }, ...(!semVer2 ? { nugetSemVer2: false } : {}) };
+  const releaseWhere = { published: true, fileId: { not: null }, nugetMetadataInvalid: false, ...(!semVer2 ? { nugetSemVer2: false } : {}) };
 
   async function registrationPackage(id: string, classify = false) {
     const db = await getDb();
@@ -73,23 +72,8 @@ function registrationRoutes(semVer2: boolean) {
       } },
     });
     if (!pkg || !classify) return pkg;
-    const unknown = { ...releaseWhere, packageId: pkg.id, nugetMetadata: { equals: Prisma.AnyNull } };
-    if (await db.release.count({ where: unknown })) {
-      const excluded = new Set<string>();
-      let after: string | undefined;
-      while (true) {
-        const batch = await db.release.findMany({
-          where: { ...unknown, ...(after ? { id: { gt: after } } : {}) },
-          orderBy: { id: "asc" }, take: REGISTRATION_PAGE_SIZE, select: catalogReleaseSelect,
-        });
-        if (!batch.length) break;
-        for (const release of batch) {
-          if (!await catalogMetadata(pkg, release, semVer2)) excluded.add(release.id);
-          after = release.id;
-        }
-      }
-      pkg.Release = pkg.Release.filter((release) => !excluded.has(release.id));
-    }
+    const excluded = await classifyNugetReleases({ ...releaseWhere, packageId: pkg.id }, semVer2);
+    pkg.Release = pkg.Release.filter((release) => !excluded.has(release.id));
     return pkg;
   }
 
@@ -101,16 +85,19 @@ function registrationRoutes(semVer2: boolean) {
   }
 
   async function registrationPage(pkg: { name: string }, versions: { id: string; version: string }[], origin: string) {
-    const releases = await (await getDb()).release.findMany({
-      where: { id: { in: versions.map((r) => r.id) }, ...releaseWhere },
-      select: catalogReleaseSelect,
-    });
+    const db = await getDb();
     const items = [];
-    // A legacy archive can require several storage reads. Extract one at a time
-    // and never hold manifest/readme bodies for every version in memory.
-    for (const release of sortNugetReleases(releases).reverse()) {
-      const item = await registrationItem(pkg, release, origin, semVer2);
-      if (item) items.push(item);
+    // New publications can expand a range already advertised to a client.
+    // Keep serving that range, fetching metadata in bounded batches.
+    for (let offset = 0; offset < versions.length; offset += REGISTRATION_PAGE_SIZE) {
+      const releases = await db.release.findMany({
+        where: { id: { in: versions.slice(offset, offset + REGISTRATION_PAGE_SIZE).map((r) => r.id) }, ...releaseWhere },
+        select: catalogReleaseSelect,
+      });
+      for (const release of sortNugetReleases(releases).reverse()) {
+        const item = await registrationItem(pkg, release, origin, semVer2);
+        if (item) items.push(item);
+      }
     }
     return items.length ? { ...pageDescriptor(pkg.name, items.map((item) => item.catalogEntry), origin), items } : null;
   }
@@ -139,7 +126,7 @@ function registrationRoutes(semVer2: boolean) {
     const upper = normalizeNugetVersion(c.req.param("upper").replace(/\.json$/u, ""));
     const releases = sortNugetReleases(pkg.Release).reverse().filter((r) =>
       compareNugetVersions(r.version, lower) >= 0 && compareNugetVersions(r.version, upper) <= 0);
-    if (!releases.length || releases.length > REGISTRATION_PAGE_SIZE) return c.notFound();
+    if (!releases.length) return c.notFound();
     const page = await registrationPage(pkg, releases, nugetOrigin(c));
     return page ? c.json(page) : c.notFound();
   });

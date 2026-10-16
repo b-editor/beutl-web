@@ -11,6 +11,7 @@ import { isValidNugetDependencyRange } from "./version-range";
 const METADATA_LIMIT = 2 * 1024 * 1024;
 const DIRECTORY_LIMIT = 4 * 1024 * 1024;
 export class InvalidNugetPackageError extends Error {}
+class NugetStorageReadError extends Error {}
 const invalid = (message: string, cause?: unknown): never => { throw new InvalidNugetPackageError(message, { cause }); };
 const text = (value: unknown): string => typeof value === "string" ? value : "";
 const list = <T>(value: T | T[] | undefined): T[] => value === undefined ? [] : Array.isArray(value) ? value : [value];
@@ -81,9 +82,14 @@ export function storedPackageReader(objectKey: string, size: number): Reader {
   return {
     getLength: async () => size,
     read: async (offset, length) => {
-      const object = await getR2Bucket().get?.(objectKey, { range: { offset, length } });
-      if (!object) throw new Error("Package object is missing");
-      return new Uint8Array(object.arrayBuffer ? await object.arrayBuffer() : await new Response(object.body).arrayBuffer());
+      try {
+        const object = await getR2Bucket().get?.(objectKey, { range: { offset, length } });
+        if (!object) throw new Error("Package object is missing");
+        return new Uint8Array(object.arrayBuffer ? await object.arrayBuffer() : await new Response(object.body).arrayBuffer());
+      } catch (cause) {
+        // An unavailable object must be retried, not cached as an invalid ZIP.
+        throw new NugetStorageReadError("Cannot read package storage", { cause });
+      }
     },
   };
 }
@@ -108,7 +114,7 @@ async function entriesOf(reader: Reader) {
     }
     return entries;
   } catch (error) {
-    if (error instanceof InvalidNugetPackageError) throw error;
+    if (error instanceof InvalidNugetPackageError || error instanceof NugetStorageReadError) throw error;
     return invalid("Invalid NuGet ZIP archive", error);
   }
 }
@@ -119,7 +125,10 @@ async function readEntry(entry: ZipEntry): Promise<ArrayBuffer> {
     const bytes = await entry.arrayBuffer();
     if (bytes.byteLength !== entry.size) return invalid("Invalid package entry size");
     return bytes;
-  } catch (error) { return invalid("Cannot read package metadata", error); }
+  } catch (error) {
+    if (error instanceof NugetStorageReadError) throw error;
+    return invalid("Cannot read package metadata", error);
+  }
 }
 
 export async function readNugetPackage(reader: Reader, expected?: { id: string; version: string }): Promise<ReleaseNugetData> {

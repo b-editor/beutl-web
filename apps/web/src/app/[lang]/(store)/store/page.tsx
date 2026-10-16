@@ -27,7 +27,7 @@ const TYPE_FILTER_LABEL_KEYS: Record<PackageTypeFilter | "development", string> 
 
 export default async function Page(
   props: {
-    searchParams: Promise<{ query?: string; type?: string; page?: string }>;
+    searchParams: Promise<{ query?: string | string[]; type?: string | string[]; page?: string | string[] }>;
     params: Promise<{ lang: string }>;
   }
 ) {
@@ -39,9 +39,8 @@ export default async function Page(
 
   const searchParams = await props.searchParams;
 
-  const {
-    query
-  } = searchParams;
+  const query = typeof searchParams.query === "string" ? searchParams.query : "";
+  const page = typeof searchParams.page === "string" ? searchParams.page : undefined;
 
   const type = searchParams.type === "development"
     ? "development"
@@ -97,7 +96,7 @@ export default async function Page(
       </div>
       <div className="container max-w-6xl mx-auto py-6 px-2">
         {type === "development" ? (
-          <DevelopmentPackages lang={lang} query={query} page={searchParams.page} />
+          <DevelopmentPackages lang={lang} query={query} page={page} />
         ) : (
           <div className="flex flex-wrap">
             {packages.map((item) => {

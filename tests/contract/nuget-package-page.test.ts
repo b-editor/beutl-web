@@ -1,11 +1,14 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderToStaticMarkup } from "../../apps/web/node_modules/react-dom/server";
+import { renderToReadableStream, renderToStaticMarkup } from "../../apps/web/node_modules/react-dom/server";
 import Page from "../../apps/web/src/app/[lang]/(main)/packages/[name]/page";
+import StorePage from "../../apps/web/src/app/[lang]/(store)/store/page";
 import { DevelopmentPackages } from "../../apps/web/src/app/[lang]/(store)/store/development-packages";
 import { parseNuspec } from "../../packages/api/src/nuget/archive";
 import { findNugetPackage, findNugetPackageVersions, searchNugetPackages, tryReleaseMetadata } from "@beutl/api/nuget/catalog";
+import { retrievePackages } from "@/lib/store-utils";
 
+vi.mock("@/lib/store-utils", () => ({ retrievePackages: vi.fn(async () => []) }));
 vi.mock("@beutl/api/nuget/catalog", async (original) => {
   const actual = await original<typeof import("@beutl/api/nuget/catalog")>();
   return { ...actual, findNugetPackage: vi.fn(async () => ({ name: "Sample.Library", Release: [release] })),
@@ -22,6 +25,32 @@ beforeEach(() => vi.clearAllMocks());
 afterEach(() => vi.unstubAllEnvs());
 
 describe("SDK package installation links", () => {
+  it.each(["ja", "en"])("normalizes repeated store query parameters before search and pagination (%s)", async (lang) => {
+    for (const query of [["a", "b"], undefined, "Sample"]) {
+      vi.mocked(searchNugetPackages).mockResolvedValueOnce({ packages: [{ id: "pkg", name: "Sample.Library", Release: [release] }], totalHits: 42 } as never);
+      const element = await StorePage({ params: Promise.resolve({ lang }),
+        searchParams: Promise.resolve({ type: "development", query, page: "2" }) });
+      const html = await new Response(await renderToReadableStream(element)).text();
+      const expectedQuery = typeof query === "string" ? query : "";
+      expect(searchNugetPackages).toHaveBeenLastCalledWith(expect.objectContaining({ query: expectedQuery, skip: 20, take: 20 }));
+      expect(html).toContain(`name="query" value="${expectedQuery}"`);
+      expect(html).toContain(`href="/${lang}/store?type=development&amp;query=${expectedQuery}&amp;page=3"`);
+      expect(html).not.toContain("a%2Cb");
+      if (Array.isArray(query) && process.env.BEUTL_NUGET_PREVIEW) {
+        const directory = process.env.BEUTL_NUGET_PREVIEW;
+        mkdirSync(directory, { recursive: true });
+        writeFileSync(`${directory}/store-query-${lang}.html`, `<!doctype html><html lang="${lang}" class="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body class="bg-background text-foreground">${html}</body></html>`);
+      }
+    }
+  });
+  it("ignores repeated type and page parameters at the store boundary", async () => {
+    const params = Promise.resolve({ lang: "en" });
+    await StorePage({ params, searchParams: Promise.resolve({ query: ["a", "b"], type: ["development", "extension"] }) });
+    expect(retrievePackages).toHaveBeenCalledExactlyOnceWith("", "all");
+    const element = await StorePage({ params, searchParams: Promise.resolve({ type: "development", page: ["2", "3"] }) });
+    await new Response(await renderToReadableStream(element)).text();
+    expect(searchNugetPackages).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ query: "", skip: 0 }));
+  });
   it.each(["ja", "en"])("uses the runtime registry origin for %s snippets and downloads", async (lang) => {
     vi.stubEnv("NUGET_PUBLIC_ORIGIN", "https://staging.nuget.example/");
     const html = renderToStaticMarkup(await Page({ params: Promise.resolve({ lang, name: "Sample.Library" }), searchParams: Promise.resolve({}) }));

@@ -103,9 +103,11 @@ suite("NuGet publication invariants on CockroachDB", () => {
     await db.$executeRawUnsafe(`UPDATE "Release" SET "nugetMetadata" = '{"version":"1.0.0","dependencyGroups":[{"dependencies":[{"range":"[1.0.0-beta.1,2.0.0)"}]}]}'::JSONB WHERE "id" = 'draft'`);
     const semverMigration = await readFile(new URL("../../packages/db/prisma/migrations/20261016000000_nuget_semver_level/migration.sql", import.meta.url), "utf8");
     for (const statement of semverMigration.split(";").filter((s) => s.trim())) await db.$executeRawUnsafe(statement);
+    const invalidMigration = await readFile(new URL("../../packages/db/prisma/migrations/20261016010000_nuget_metadata_invalid/migration.sql", import.meta.url), "utf8");
+    await db.$executeRawUnsafe(invalidMigration);
     await db.$executeRawUnsafe(`UPDATE "Package" SET "audience" = 'DEVELOPMENT' WHERE "id" = 'dev'`);
     expect(await db.release.findUniqueOrThrow({ where: { id: "published" } })).toMatchObject({
-      artifactLocked: true, version: "v1.0.0+linux-x64", nugetVersion: "1.0.0", nugetSemVer2: true,
+      artifactLocked: true, version: "v1.0.0+linux-x64", nugetVersion: "1.0.0", nugetSemVer2: true, nugetMetadataInvalid: false,
     });
     expect(await db.release.findUniqueOrThrow({ where: { id: "draft" } })).toMatchObject({ artifactLocked: false, nugetVersion: "1.0.0", nugetSemVer2: true });
     expect(await db.publishedPackageVersion.count()).toBe(1);
@@ -185,6 +187,10 @@ suite("NuGet publication invariants on CockroachDB", () => {
       }
       expect(await db.release.findUniqueOrThrow({ where: { id: `${packageId}-31` } })).toMatchObject({ nugetSemVer2: true });
       expect(get).toHaveBeenCalled();
+      expect(await db.release.count({ where: { packageId, nugetMetadataInvalid: true } })).toBe(broken.size);
+      const reads = get.mock.calls.length;
+      await nugetApp.request("https://nuget.test/v3/registration/registration.pages/index.json");
+      expect(get).toHaveBeenCalledTimes(reads);
     } finally {
       await db.release.deleteMany({ where: { packageId } });
       await db.package.delete({ where: { id: packageId } });
@@ -245,9 +251,11 @@ suite("NuGet publication invariants on CockroachDB", () => {
     const bytes = kind === "unreadable" ? strToU8("not a ZIP") : zipSync({ "Library.nuspec": strToU8(manifest(names[badIndex])
       .replace("</metadata>", '<dependencies><dependency id="Dependency" version="[1.0.0-beta.1,2.0)" /></dependencies></metadata>')) });
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    setR2BucketProvider(() => ({ get: async (_key, options) => ({
-      arrayBuffer: async () => bytes.slice(options!.range!.offset, options!.range!.offset + options!.range!.length).buffer,
-    }) }) as never);
+    const get = vi.fn(async (_key, options) => ({
+      arrayBuffer: async () => bytes.slice(options.range.offset, options.range.offset + options.range.length).buffer,
+    }));
+    setR2BucketProvider(() => ({ get }) as never);
+    const packageQueries = vi.spyOn(db.package, "findMany");
     await db.$executeRaw`INSERT INTO "File" ("id", "name", "size") VALUES (${prefix}, 'legacy.nupkg', ${BigInt(bytes.length)})`;
     try {
       for (const [i, name] of names.entries()) {
@@ -260,9 +268,11 @@ suite("NuGet publication invariants on CockroachDB", () => {
         title: "", description: "", targetVersion: "",
       } });
       const page = async (skip: number) => {
+        const queryCount = packageQueries.mock.calls.length;
         if (resource === "store") {
           const result = await searchNugetPackages({ query: prefix, audience: "DEVELOPMENT", skip, take: 20, filterReadable: true });
           expect(result.totalHits).toBe(21);
+          expect(packageQueries).toHaveBeenCalledTimes(queryCount + 1);
           expect(result.packages.flatMap((pkg) => pkg.Release).every((r) => r.version === "1.0.0")).toBe(true);
           return result.packages.map((pkg) => pkg.name);
         }
@@ -270,6 +280,7 @@ suite("NuGet publication invariants on CockroachDB", () => {
         expect(response.status).toBe(200);
         const result = await response.json();
         expect(result.totalHits).toBe(21);
+        expect(packageQueries).toHaveBeenCalledTimes(queryCount + 1);
         return resource === "search" ? result.data.map((item: { id: string }) => item.id) : result.data;
       };
       const expected = names.filter((_, i) => i !== badIndex);
@@ -279,6 +290,12 @@ suite("NuGet publication invariants on CockroachDB", () => {
       const first = await page(0), last = await page(20);
       expect(first).toHaveLength(20);
       expect([...first, ...last]).toEqual(expected);
+      const reads = get.mock.calls.length;
+      expect(reads).toBeGreaterThan(0);
+      expect(await page(0)).toEqual(expected.slice(0, 20));
+      expect(get).toHaveBeenCalledTimes(reads);
+      expect(await db.release.findUniqueOrThrow({ where: { id: names[badIndex] } }))
+        .toMatchObject({ nugetMetadataInvalid: kind === "unreadable" });
       if (resource !== "store") {
         const empty = await (await nugetApp.request(`https://nuget.test/v3/${resource}?q=${prefix}&take=0`)).json();
         expect(empty).toEqual({ totalHits: 21, data: [] });
@@ -288,6 +305,7 @@ suite("NuGet publication invariants on CockroachDB", () => {
       await db.package.deleteMany({ where: { id: { in: names } } });
       await db.file.delete({ where: { id: prefix } });
       errors.mockRestore();
+      packageQueries.mockRestore();
     }
   });
   it("keeps search terms in sync when the highest SDK version is unlisted and relisted", async () => {

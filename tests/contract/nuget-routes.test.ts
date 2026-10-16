@@ -5,14 +5,14 @@ import { setDbProvider } from "@beutl/db";
 import { setR2BucketProvider } from "@beutl/api/ai/r2-provider";
 import app from "../../packages/api/src/nuget/app";
 import { parseNuspec } from "../../packages/api/src/nuget/archive";
-import { findNugetPackageVersions, releaseMetadata, type NugetRelease } from "../../packages/api/src/nuget/catalog";
+import { findNugetPackageVersions, releaseMetadata, tryReleaseMetadata, type NugetRelease } from "../../packages/api/src/nuget/catalog";
 import { nugetFileUrl, verifyDownloadTicket } from "../../packages/api/src/nuget/tickets";
 
 const secret = `bn_${"a".repeat(64)}`;
 const manifest = '<package><metadata><id>Library</id><version>1.0.0</version><authors>Author</authors><description>Library</description></metadata></package>';
 const release = { id: "release", packageId: "pkg", version: "1.0.0", published: true, artifactLocked: true, nugetListed: false,
   fileId: "file", file: { id: "file", objectKey: "object", size: 4n }, downloads: 0n, createdAt: new Date("2026-01-01"),
-  nugetSemVer2: false, nugetMetadata: parseNuspec(manifest), nuspec: manifest, readme: null };
+  nugetSemVer2: false, nugetMetadataInvalid: false, nugetMetadata: parseNuspec(manifest), nuspec: manifest, readme: null };
 const pkg = { id: "pkg", name: "Library", audience: "DEVELOPMENT", userId: "owner", published: true, Release: [release] };
 let paid = false, buyer: string | null = null, revoked = false, canPush = true;
 const file = () => ({ name: "library.nupkg", size: 4n, objectKey: "object", sha256: "abc", userId: "owner", visibility: "DEDICATED",
@@ -107,7 +107,7 @@ describe("NuGet registry routes", () => {
     await findNugetPackageVersions("LIBRARY", "DEVELOPMENT");
     expect(models.package.findFirst).toHaveBeenCalledWith({
       where: { name: { equals: "library", mode: "insensitive" }, published: true, audience: "DEVELOPMENT" },
-      select: { name: true, Release: { where: { published: true, fileId: { not: null } },
+      select: { name: true, Release: { where: { published: true, fileId: { not: null }, nugetMetadataInvalid: false },
         select: { id: true, version: true, nugetListed: true } } },
     });
   });
@@ -192,8 +192,18 @@ describe("NuGet registry routes", () => {
     expect(selection.where.id.in).toHaveLength(64);
     expect(selection.select).not.toHaveProperty("nuspec");
     expect(selection.select).not.toHaveProperty("readme");
-    models.package.findFirst.mockResolvedValueOnce(catalog);
-    expect((await request(`/v3/${hive}/library/page/1.0.0/1.0.129.json`)).status).toBe(404);
+    // A version published between the index and page requests must not
+    // invalidate a URL the index has already handed to a NuGet client.
+    const inserted = { ...release, id: "inserted", version: "1.0.10.1" };
+    const expanded = [...releases.slice(0, 11), inserted, ...releases.slice(11, 64)];
+    models.package.findFirst.mockResolvedValueOnce({ ...catalog, Release: [...catalog.Release, inserted] });
+    models.release.findMany.mockResolvedValueOnce(expanded.slice(0, 64)).mockResolvedValueOnce(expanded.slice(64));
+    const response = await app.request(index.items[0]["@id"]);
+    expect(response.status).toBe(200);
+    const page = await response.json();
+    expect(page).toMatchObject({ count: 65, lower: "1.0.0", upper: "1.0.63", parent: index["@id"] });
+    expect(page.items.map((item: { catalogEntry: { version: string } }) => item.catalogEntry.version)).toEqual(expanded.map((r) => r.version));
+    expect(models.release.findMany.mock.calls.slice(-2).map(([args]) => args.where.id.in.length)).toEqual([64, 1]);
   });
   it("keeps legacy leaf, dependency and search links in the legacy hive", async () => {
     const metadata = { ...release.nugetMetadata, dependencyGroups: [{ targetFramework: "", dependencies: [{ id: "Dependency", range: "[1.0,2.0)" }] }] };
@@ -333,12 +343,36 @@ describe("NuGet registry routes", () => {
     const parsed = await releaseMetadata(pkg, legacy);
     expect(models.release.updateMany).toHaveBeenCalledWith({
       where: { id: legacy.id, fileId: legacy.fileId, version: legacy.version },
-      data: { nugetMetadata: parsed.metadata, nuspec: manifest, readme: null, nugetSemVer2: true },
+      data: { nugetMetadata: parsed.metadata, nuspec: manifest, readme: null, nugetSemVer2: true, nugetMetadataInvalid: false },
     });
     const reads = get.mock.calls.length;
     expect(reads).toBeGreaterThan(0);
     expect(await releaseMetadata(pkg, legacy)).toEqual(parsed);
     expect(get).toHaveBeenCalledTimes(reads);
+  });
+  it.each(["directory", "manifest", "missing object"])("retries a legacy archive after a transient %s read failure", async (failure) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const bytes = zipSync({ "Library.nuspec": strToU8(manifest) });
+    let unavailable = true;
+    const get = vi.fn(async (_key, options) => {
+      if (unavailable) {
+        if (failure === "missing object") return null;
+        // unzipit's first range is the central directory; subsequent ranges
+        // read the manifest entry's header and contents.
+        if (failure === "directory" || (options.range.offset === 0 && options.range.length === 30)) throw new Error("Temporary storage failure");
+      }
+      return { arrayBuffer: async () => bytes.slice(options.range.offset, options.range.offset + options.range.length).buffer };
+    });
+    setR2BucketProvider(() => ({ get }) as never);
+    const legacy = { ...release, nugetMetadata: null, nuspec: null,
+      file: { ...release.file, size: BigInt(bytes.length) } } as unknown as NugetRelease;
+    expect(await tryReleaseMetadata(pkg, legacy)).toBeNull();
+    expect(models.release.updateMany).not.toHaveBeenCalled();
+    unavailable = false;
+    expect(await tryReleaseMetadata(pkg, legacy)).toMatchObject({ metadata: { id: "Library" } });
+    expect(models.release.updateMany).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      data: expect.objectContaining({ nugetMetadataInvalid: false }),
+    }));
   });
   it("keeps identity validation and conflict errors mapped at the API boundary", async () => {
     expect((await request("/v3/package/library/not-a-version/library.nupkg")).status).toBe(400);

@@ -1055,6 +1055,7 @@ model Release {
   nugetVersion  String?
   nugetSemVer2  Boolean @default(false)
   nugetMetadata Json?
+  nugetMetadataInvalid Boolean @default(false)
   nuspec        String?
   readme        String?
   downloads     BigInt @default(0)
