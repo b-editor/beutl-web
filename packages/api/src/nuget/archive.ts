@@ -8,6 +8,7 @@ import type { ReleaseNugetData } from "@beutl/db";
 import { getR2Bucket } from "../ai/r2-provider";
 import { isValidNugetDependencyRange } from "./version-range";
 import { isValidNugetTargetFramework } from "./framework";
+import { isValidNugetLicenseExpression } from "./license-expression";
 
 const METADATA_LIMIT = 2 * 1024 * 1024;
 const DIRECTORY_LIMIT = 4 * 1024 * 1024;
@@ -80,6 +81,7 @@ export function parseNuspec(nuspec: string): NugetMetadata {
   if (m.license !== undefined) {
     const type = text(m.license?.["@_type"]).trim().toLowerCase();
     if (!license || (type !== "file" && type !== "expression")) return invalid("Invalid package license metadata");
+    if (type === "expression" && !isValidNugetLicenseExpression(license)) return invalid("Invalid package license expression");
     licenseType = type;
   }
   const acceptance = m.requireLicenseAcceptance === undefined ? "false" : text(m.requireLicenseAcceptance);

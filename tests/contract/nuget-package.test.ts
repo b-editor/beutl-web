@@ -74,6 +74,32 @@ describe("NuGet package identities and metadata", () => {
     expect(parsed.metadata.licenseUrl).toBe("https://example.test/license");
     expect(parsed.metadata.licenseType).toBeUndefined();
   });
+  it.each([
+    "MIT OR Apache-2.0", "MIT AND (Apache-2.0 OR BSD-2-Clause)", "(((MIT)))", "MIT+",
+    "GPL-2.0-only WITH Classpath-exception-2.0", "(MIT) WITH (LLVM-exception)",
+    "MIT OR AFL-1.1+ WITH 389-exception AND Apache-2.0", "UNLICENSED", "(UNLICENSED)",
+    "LicenseRef-Private OR MIT", "MyCompany-License", "mit", "(And+) AND or", "MIT  OR   Apache-2.0",
+  ])("accepts the NuGet license expression %s", async (expression) => {
+    const manifest = nuspec.replace("</metadata>", `<license type="expression">${expression}</license></metadata>`);
+    await expect(readNugetPackage(blobReader(archive(manifest))))
+      .resolves.toHaveProperty("metadata.license", expression);
+  });
+  it.each([
+    "MIT OR OR Apache-2.0", "AND MIT", "MIT AND", "MIT Apache-2.0", "MIT OR (Apache-2.0",
+    "MIT OR Apache-2.0)", "()", "MIT ()", "MIT or Apache-2.0", "MIT with LLVM-exception",
+    "MIT++", "MIT +", "(MIT OR Apache-2.0)+", "GPL-2.0", "GPL-2.0+", "UNLICENSED+", "UNLICENSED OR MIT",
+    "MIT WITH Unknown-exception", "MIT WITH Nokia-Qt-exception-1.1", "MIT WITH llvm-exception",
+    "MIT WITH Apache-2.0", "LLVM-exception", "(MIT OR Apache-2.0) WITH LLVM-exception",
+    "MIT WITH LLVM-exception WITH Classpath-exception-2.0", "MIT OR(Apache-2.0)",
+    "MIT\tOR\tApache-2.0", "MIT\nOR Apache-2.0", "DocumentRef-X:LicenseRef-Y", "MIT!",
+  ])("rejects the invalid NuGet license expression %s before publication", async (expression) => {
+    const manifest = nuspec.replace("</metadata>", `<license type="expression">${expression}</license></metadata>`);
+    await expect(readNugetPackage(blobReader(archive(manifest)))).rejects.toThrow("Invalid package license expression");
+  });
+  it("bounds license expression validation before tokenizing a large manifest", () => {
+    const manifest = nuspec.replace("</metadata>", `<license type="expression">${"MIT OR ".repeat(300)}MIT</license></metadata>`);
+    expect(() => parseNuspec(manifest)).toThrow("Invalid package license expression");
+  });
   it.each(['<license type="file" />', '<license type="unknown">MIT</license>', '<license>LICENSE.txt</license>'])(
     "rejects invalid license metadata %s", (license) => {
       expect(() => parseNuspec(nuspec.replace("</metadata>", `${license}</metadata>`))).toThrow("Invalid package license metadata");
