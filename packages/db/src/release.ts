@@ -122,6 +122,7 @@ export async function getReleaseWithFileById({
       version: true,
       published: true,
       artifactLocked: true,
+      nugetMetadata: true,
       package: { select: { audience: true } },
       file: {
         select: {

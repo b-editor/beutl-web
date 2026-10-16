@@ -117,9 +117,9 @@ export async function classifyNugetReleases(where: Prisma.ReleaseWhereInput, sem
   return excluded;
 }
 
-async function userPackagesMatchingOlderMetadata(releaseWhere: Prisma.ReleaseWhereInput, metadataWhere: Prisma.ReleaseWhereInput, query: string) {
+async function packagesMatchingOlderMetadata(releaseWhere: Prisma.ReleaseWhereInput, metadataWhere: Prisma.ReleaseWhereInput, query: string, audience?: PackageAudience) {
   const db = await getDb();
-  const where: Prisma.PackageWhereInput = { published: true, audience: "USER",
+  const where: Prisma.PackageWhereInput = { published: true, audience,
     NOT: { name: { contains: query, mode: "insensitive" } },
     Release: { some: { ...releaseWhere, ...metadataWhere } },
   };
@@ -155,22 +155,30 @@ export async function searchNugetPackages({ query = "", skip = 0, take = 20, pre
     ...(!semVer2 ? { nugetSemVer2: false } : {}),
     ...(!prerelease ? { NOT: { nugetVersion: { contains: "-" } } } : {}) };
   const term = query.trim();
+  const db = await getDb();
+  // Prisma's JSON array_contains is case-sensitive. Compare the individual
+  // cached tags in SQL, preserving their original spelling for display.
+  const tagMatches = term ? await db.$queryRaw<{ id: string }[]>(Prisma.sql`
+    SELECT r."id" FROM "Release" r JOIN "Package" p ON p."id" = r."packageId"
+    WHERE r."published" AND r."nugetListed" AND r."fileId" IS NOT NULL
+      AND NOT r."nugetMetadataInvalid" AND p."published"
+      AND (${semVer2} OR NOT r."nugetSemVer2")
+      AND (${prerelease} OR r."nugetVersion" NOT LIKE '%-%')
+      ${audience ? Prisma.sql`AND p."audience" = ${audience}::"PackageAudience"` : Prisma.empty}
+      AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(r."nugetMetadata"->'tags') AS tag(value)
+        WHERE lower(tag.value) = lower(${term}))
+  `) : [];
   const metadataWhere: Prisma.ReleaseWhereInput = { OR: [
     { nugetMetadata: { path: ["title"], string_contains: term, mode: "insensitive" } },
     { nugetMetadata: { path: ["description"], string_contains: term, mode: "insensitive" } },
-    { nugetMetadata: { path: ["tags"], array_contains: [term] } },
+    { id: { in: tagMatches.map((release) => release.id) } },
   ] };
   const baseWhere: Prisma.PackageWhereInput = { published: true, audience, Release: { some: releaseWhere } };
   const queryWhere: Prisma.PackageWhereInput = term ? { OR: [
     { name: { contains: term, mode: "insensitive" } },
-    { audience: "DEVELOPMENT", OR: [
-      { displayName: { contains: term, mode: "insensitive" } },
-      { description: { contains: term, mode: "insensitive" } }, { tags: { has: term } },
-    ] },
-    { audience: "USER", Release: { some: { AND: [releaseWhere, metadataWhere] } } },
+    { Release: { some: { AND: [releaseWhere, metadataWhere] } } },
   ] } : {};
   const where: Prisma.PackageWhereInput = { ...baseWhere, ...queryWhere };
-  const db = await getDb();
   const include = { Release: { where: releaseWhere, select: catalogReleaseSelect } };
   const offset = Math.max(0, skip), limit = Math.max(0, Math.min(100, take));
   const readable = async (pkg: CatalogPackage) => {
@@ -182,8 +190,8 @@ export async function searchNugetPackages({ query = "", skip = 0, take = 20, pre
     pkg.Release = releases;
     return releases.length > 0;
   };
-  if (term && audience !== "DEVELOPMENT") {
-    const excluded = await userPackagesMatchingOlderMetadata(releaseWhere, metadataWhere, term);
+  if (term) {
+    const excluded = await packagesMatchingOlderMetadata(releaseWhere, metadataWhere, term, audience);
     if (excluded.length) where.id = { notIn: excluded };
   }
   const [totalHits, packages] = await Promise.all([

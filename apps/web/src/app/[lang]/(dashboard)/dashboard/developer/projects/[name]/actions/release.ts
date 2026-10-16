@@ -2,7 +2,7 @@
 
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { applyPackageType, isValidNugetVersion, type ActionResult } from "@beutl/core";
-import { InvalidNugetPackageError } from "@beutl/api/nuget/archive";
+import { InvalidNugetPackageError, readNugetPackage, storedPackageReader } from "@beutl/api/nuget/archive";
 import { refreshNugetPackageMetadata, ReleaseArtifactLockedError, ReleaseIdentityConflictError } from "@beutl/db";
 import { authenticated } from "@/lib/auth-guard";
 import {
@@ -115,6 +115,12 @@ export async function updateRelease(
           if (validated.data.published === "on" && !fileId) {
             throw new ReleaseFileRequiredError();
           }
+          // Migrated drafts were not backfilled. Validate the retained file
+          // from this transaction's snapshot before reserving and locking it.
+          const nuget = artifact?.nuget ?? (validated.data.published === "on" &&
+            !current.published && !current.artifactLocked && !current.nugetMetadata && current.file
+            ? await readNugetPackage(storedPackageReader(current.file.objectKey, Number(current.file.size)),
+              { id: packageName, version: current.version }) : undefined);
 
           const replacedFileId =
             replacementFileId &&
@@ -129,7 +135,7 @@ export async function updateRelease(
             targetVersion: validated.data.targetVersion,
             published: validated.data.published === "on",
             fileId,
-            nuget: artifact?.nuget,
+            nuget,
             prisma: tx,
           });
 

@@ -37,9 +37,11 @@ binding is deployed. Other Web/API routes retain their existing behavior.
 
 ## NuGet registry deployment
 
-Apply `20261013000000_nuget_registry` and `20261016000000_nuget_semver_level`
-before deploying the new application code. The latter backfills the SemVer 2
-search filter for existing versions and cached dependency ranges.
+Apply `20261013000000_nuget_registry`, `20261016000000_nuget_semver_level`, and
+`20261016010000_nuget_metadata_invalid` before deploying the new application
+code. These include the SemVer 2 backfill and the invalid-metadata flag used by
+catalog queries. Complete the [metadata backfill](../README.md#nuget-packages)
+before the manual cutover.
 The migration locks only currently published Web releases and reserves those
 version identities. It refuses package IDs that differ only by case; resolve
 such IDs manually. Retain the `Package_name_lower_key` SQL expression index in

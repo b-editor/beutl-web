@@ -146,7 +146,10 @@ export async function buildDataPackageNupkgFile({
 
   let normalizedVersion: string;
   try { normalizedVersion = normalizeNugetVersion(version); }
-  catch { return { ok: false, message: t("developer:upload.invalidFileName") }; }
+  catch {
+    // Invalid version input uses the same validation response as the archive builder.
+    return { ok: false, message: t("developer:upload.invalidFileName") };
+  }
   const metadata = { id, version: normalizedVersion, title, description, tags, authors: username };
   const stream = () => createNupkgStream(metadata, nupkgFiles);
   // Count a streamed first pass to reserve the exact stored size before upload.

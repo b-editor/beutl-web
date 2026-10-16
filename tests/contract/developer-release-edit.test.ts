@@ -2,6 +2,7 @@ import { zipSync, strToU8 } from "fflate";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setDbProvider } from "@beutl/db";
 import { MATERIAL_TAG } from "@beutl/core";
+import { setR2BucketProvider } from "@beutl/api/ai/r2-provider";
 import { getTranslation } from "@beutl/i18n";
 import { createDedicatedStorageFile } from "@/lib/storage";
 import { blobReader, parseNuspec, readNugetPackage } from "../../packages/api/src/nuget/archive";
@@ -19,8 +20,8 @@ describe("editing a release without replacing its artifact", () => {
   let row: {
     id: string; packageId: string; version: string; published: boolean;
     artifactLocked: boolean; package: { audience: "USER" | "DEVELOPMENT" };
-    file: { id: string; userId: string } | null;
-    fileId: string | undefined; nugetListed: boolean; nugetMetadata: ReturnType<typeof parseNuspec>; nuspec: string;
+    file: { id: string; userId: string; objectKey?: string; size?: bigint } | null;
+    fileId: string | undefined; nugetListed: boolean; nugetMetadata: ReturnType<typeof parseNuspec> | null; nuspec: string;
   };
   let previousReleases: typeof row[];
   let update: ReturnType<typeof vi.fn>;
@@ -76,6 +77,51 @@ describe("editing a release without replacing its artifact", () => {
     expect(result.success).toBe(true);
     expect(row).toMatchObject({ title: "Updated title", published, fileId: "existing-file" });
     expect(models.package.update).not.toHaveBeenCalled();
+  });
+  it.each(["USER", "DEVELOPMENT"] as const)("validates and indexes the retained %s artifact before its first publication", async (audience) => {
+    const bytes = zipSync({ "Package.nuspec": strToU8(manifest) });
+    const get = vi.fn(async (_key, options) => ({
+      arrayBuffer: async () => bytes.slice(options.range.offset, options.range.offset + options.range.length).buffer,
+    }));
+    setR2BucketProvider(() => ({ get }) as never);
+    row.package.audience = audience; row.version = "v2.0.0";
+    row.nugetMetadata = null; row.nuspec = "";
+    row.file = { ...row.file!, objectKey: "retained", size: BigInt(bytes.length) };
+    expect(await updateRelease(input(true))).toMatchObject({ success: true });
+    expect(row).toMatchObject({ published: true, artifactLocked: true, nugetVersion: "2.0.0",
+      fileId: "existing-file", nugetMetadata: parseNuspec(manifest), nuspec: manifest, nugetMetadataInvalid: false });
+    const reads = get.mock.calls.length;
+    expect(reads).toBeGreaterThan(0);
+    expect(await updateRelease(input(false))).toMatchObject({ success: true });
+    expect(await updateRelease(input(true))).toMatchObject({ success: true });
+    expect(get).toHaveBeenCalledTimes(reads);
+  });
+  it.each([
+    ["invalid archive", strToU8("not a ZIP")],
+    ["wrong identity", zipSync({ "Package.nuspec": strToU8(manifest.replace("<id>Package</id>", "<id>Other</id>")) })],
+    ["wrong version", zipSync({ "Package.nuspec": strToU8(manifest.replace("2.0.0", "1.0.0")) })],
+  ])("leaves a retained draft editable when it has an %s", async (_, bytes) => {
+    const get = vi.fn(async (_key, options) => ({
+      arrayBuffer: async () => bytes.slice(options.range.offset, options.range.offset + options.range.length).buffer,
+    }));
+    setR2BucketProvider(() => ({ get }) as never);
+    row.nugetMetadata = null; row.nuspec = "";
+    row.file = { ...row.file!, objectKey: "retained", size: BigInt(bytes.length) };
+    expect(await updateRelease(input(true))).toMatchObject({ success: false });
+    expect(update).not.toHaveBeenCalled();
+    expect(row).toMatchObject({ published: false, artifactLocked: false, fileId: "existing-file", nugetMetadata: null });
+  });
+  it("validates the retained file attached by the time the publication transaction begins", async () => {
+    const bytes = zipSync({ "Package.nuspec": strToU8(manifest) });
+    const get = vi.fn(async (_key, options) => ({
+      arrayBuffer: async () => bytes.slice(options.range.offset, options.range.offset + options.range.length).buffer,
+    }));
+    setR2BucketProvider(() => ({ get }) as never);
+    row.nugetMetadata = null; row.nuspec = "";
+    beforeTransaction = () => { row.file = { id: "concurrent-file", userId: "owner", objectKey: "current-key", size: BigInt(bytes.length) }; };
+    expect(await updateRelease(input(true))).toMatchObject({ success: true });
+    expect(get.mock.calls.every(([key]) => key === "current-key")).toBe(true);
+    expect(row).toMatchObject({ fileId: "concurrent-file", nugetMetadata: parseNuspec(manifest) });
   });
   it.each([true, false])("reindexes SDK metadata transactionally when publication becomes %s", async (published) => {
     row.package.audience = "DEVELOPMENT";

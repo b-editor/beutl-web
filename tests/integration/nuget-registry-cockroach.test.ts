@@ -8,6 +8,7 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { strToU8, zipSync } from "fflate";
+import { normalizeNugetVersion, requiresNugetSemVer2 } from "@beutl/core";
 import { setR2BucketProvider } from "@beutl/api/ai/r2-provider";
 import { createDevPackage, existsPackageName, PackageIdentityReservedError, createRelease, updateRelease, ReleaseArtifactLockedError, ReleaseIdentityConflictError, setReleasePublishedByAdmin, setDbProvider, packageNameFilter, refreshNugetPackageMetadata, deleteReleaseWithStorageCleanup, updateDevPackageDisplay, updateDevPackageDescription, updateDevPackageTags } from "@beutl/db";
 import { classifyNugetReleases, searchNugetPackages } from "../../packages/api/src/nuget/catalog";
@@ -457,6 +458,68 @@ suite("NuGet publication invariants on CockroachDB", () => {
       await db.release.deleteMany({ where: { packageId: { in: names } } });
       await db.package.deleteMany({ where: { id: { in: names } } });
       await db.file.delete({ where: { id: "nuspec-search" } });
+    }
+  });
+  it.each([
+    ["2.0.0-beta.1", false, true, false],
+    ["2.0.0+build", false, false, false],
+    ["2.0.0", false, false, true],
+  ])("searches SDK metadata eligible for the client when latest is %s", async (latestVersion, prerelease, semVer2, semVer2Dependency) => {
+    const names = ["Eligible.SDK.A", "Eligible.SDK.B"];
+    try {
+      for (const name of names) {
+        await db.$executeRaw`INSERT INTO "Package" ("id", "name", "audience", "displayName", "description")
+          VALUES (${name}, ${name}, 'DEVELOPMENT', 'NewestOnly', 'NewestOnly')`;
+        for (const [version, title] of [["1.0.0", "StableOnly"], [latestVersion, "NewestOnly"]]) {
+          const nuspec = `<package><metadata><id>${name}</id><version>${version}</version><authors>Owner</authors>
+            <title>${title}</title><description>Library</description>${version !== "1.0.0" && semVer2Dependency
+              ? '<dependencies><dependency id="Dependency" version="[1.0.0-beta.1,2.0)" /></dependencies>' : ""}</metadata></package>`;
+          const metadata = parseNuspec(nuspec);
+          await db.release.create({ data: { packageId: name, version, nugetVersion: normalizeNugetVersion(version),
+            nugetSemVer2: requiresNugetSemVer2(version, metadata), published: true, fileId: "original",
+            title: "", description: "", targetVersion: "", nugetMetadata: metadata } });
+        }
+      }
+      const options = { audience: "DEVELOPMENT" as const, prerelease, semVer2, filterReadable: true };
+      const page = await searchNugetPackages({ ...options, query: "StableOnly", skip: 1, take: 1 });
+      expect(page.totalHits).toBe(2); expect(page.packages.map((pkg) => pkg.name)).toEqual([names[1]]);
+      expect(await searchNugetPackages({ ...options, query: "NewestOnly" })).toMatchObject({ totalHits: 0, packages: [] });
+      const suffix = `prerelease=${prerelease}${semVer2 ? "&semVerLevel=2.0.0" : ""}`;
+      const search = await (await nugetApp.request(`https://nuget.test/v3/search?q=StableOnly&skip=1&take=1&${suffix}`)).json();
+      expect(search).toMatchObject({ totalHits: 2, data: [{ id: names[1], version: "1.0.0", title: "StableOnly" }] });
+      expect(await (await nugetApp.request(`https://nuget.test/v3/autocomplete?q=StableOnly&skip=1&take=1&${suffix}`)).json())
+        .toEqual({ totalHits: 2, data: [names[1]] });
+      expect((await searchNugetPackages({ ...options, prerelease: true, semVer2: true, query: "NewestOnly" })).totalHits).toBe(2);
+      expect((await searchNugetPackages({ ...options, prerelease: true, semVer2: true, query: "StableOnly" })).totalHits).toBe(0);
+    } finally {
+      await db.release.deleteMany({ where: { packageId: { in: names } } });
+      await db.package.deleteMany({ where: { id: { in: names } } });
+    }
+  });
+  it.each(["USER", "DEVELOPMENT"] as const)("matches %s tags case-insensitively without changing display or counting old matches", async (audience) => {
+    const names = ["A", "B", "C"].map((suffix) => `Tag.${audience}.${suffix}`);
+    try {
+      for (const name of names) {
+        await db.$executeRaw`INSERT INTO "Package" ("id", "name", "audience") VALUES (${name}, ${name}, ${audience}::"PackageAudience")`;
+        for (const version of ["1.0.0", "2.0.0"]) {
+          const tag = name === names[2] && version === "2.0.0" ? "Unrelated" : "Logging";
+          const nuspec = `<package><metadata><id>${name}</id><version>${version}</version><authors>Owner</authors>
+            <description>Library</description><tags>${tag}</tags></metadata></package>`;
+          await db.release.create({ data: { packageId: name, version, nugetVersion: version, published: true, fileId: "original",
+            title: "", description: "", targetVersion: "", nugetMetadata: parseNuspec(nuspec) } });
+        }
+      }
+      for (const query of ["logging", "LOGGING", "LoGgInG"]) {
+        const result = await searchNugetPackages({ audience, query, skip: 1, take: 1, filterReadable: true });
+        expect(result.totalHits).toBe(2); expect(result.packages.map((pkg) => pkg.name)).toEqual([names[1]]);
+        const search = await (await nugetApp.request(`https://nuget.test/v3/search?q=${query}&skip=1&take=1`)).json();
+        expect(search).toMatchObject({ totalHits: 2, data: [{ id: names[1], tags: ["Logging"] }] });
+        const autocomplete = await (await nugetApp.request(`https://nuget.test/v3/autocomplete?q=${query}&skip=1&take=1`)).json();
+        expect(autocomplete).toEqual({ totalHits: 2, data: [names[1]] });
+      }
+    } finally {
+      await db.release.deleteMany({ where: { packageId: { in: names } } });
+      await db.package.deleteMany({ where: { id: { in: names } } });
     }
   });
   it("keeps search terms in sync when the highest SDK version is unlisted and relisted", async () => {

@@ -20,6 +20,8 @@ export function isValidNugetDependencyRange(value: string): boolean {
 
   const parts = range.slice(1, -1).split(",");
   const minInclusive = range.startsWith("["), maxInclusive = range.endsWith("]");
+  // Match NuGet.Versioning's raw empty-bound check: it rejects "(,)" but
+  // accepts "(, )". Trimming before this check would admit client-invalid ranges.
   if (parts.length > 2 || parts.every((part) => part === "") || (parts.length === 1 && !(minInclusive && maxInclusive))) return false;
   const minText = parts[0], maxText = parts[1] ?? minText;
   const min = minText.trim() ? rangeBound(minText) : null;

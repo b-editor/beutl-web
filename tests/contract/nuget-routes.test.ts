@@ -19,6 +19,7 @@ const file = () => ({ name: "library.nupkg", size: 4n, objectKey: "object", sha2
   Package: [], Profile: [], PackageScreenshot: [], aiJobResult: null,
   Release: [{ published: true, package: { ...pkg, packagePricing: paid ? [{ id: "price", price: 100 }] : [] } }] });
 const models = {
+  $queryRaw: vi.fn(async () => []),
   package: { findFirst: vi.fn(async () => structuredClone(pkg)), findUniqueOrThrow: vi.fn(async () => pkg), findMany: vi.fn(async () => [] as (typeof pkg)[]), count: vi.fn(async () => 0), update: vi.fn() },
   release: { count: vi.fn(async () => 0), findFirst: vi.fn(async () => release), findMany: vi.fn(async () => [release]), updateMany: vi.fn(async () => ({ count: 1 })), update: vi.fn(async () => release) },
   file: { findFirst: vi.fn(async () => file()) },
