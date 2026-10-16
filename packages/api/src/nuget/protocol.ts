@@ -1,5 +1,5 @@
 import type { Context } from "hono";
-import { NUGET_ORIGIN, normalizeNugetId, normalizeNugetVersion, nugetPackageUrl } from "@beutl/core";
+import { NUGET_ORIGIN, normalizeNugetId, normalizeNugetVersion, nugetPackageUrl, type NugetMetadata } from "@beutl/core";
 import type { createStorageOperations } from "../storage/files";
 import { catalogMetadata, sortNugetReleases, type NugetPackage, type CatalogRelease } from "./catalog";
 
@@ -38,8 +38,14 @@ export function registrationUrl(id: string, origin: string, version?: string, se
   return `${origin}/v3/${semVer2 ? "registration" : "registration-semver1"}/${normalizeNugetId(id)}/${leaf}.json`;
 }
 
+export function fullNugetVersion(version: string): string {
+  // NuGet's ToFullString normalizes core numbers but preserves the manifest's
+  // prerelease spelling and build metadata. URLs still use identity versions.
+  return normalizeNugetVersion(version).split("-")[0] + (version.match(/[-+].*$/u)?.[0] ?? "");
+}
+
 export async function searchItem(pkg: Pick<NugetPackage, "name"> & { Release: CatalogRelease[] }, origin: string, semVer2 = true) {
-  const releases: CatalogRelease[] = [];
+  const releases: (CatalogRelease & { nugetMetadata: NugetMetadata })[] = [];
   let metadata = null;
   // Every advertised version must be readable by this client, including older
   // uncached releases whose dependencies have not been classified yet.
@@ -47,7 +53,7 @@ export async function searchItem(pkg: Pick<NugetPackage, "name"> & { Release: Ca
     const candidate = await catalogMetadata(pkg, release, semVer2);
     if (!candidate) continue;
     metadata ??= candidate;
-    releases.push(release);
+    releases.push({ ...release, nugetMetadata: candidate });
   }
   if (!metadata) return null;
   const latest = releases[0];
@@ -57,7 +63,7 @@ export async function searchItem(pkg: Pick<NugetPackage, "name"> & { Release: Ca
   return {
     "@id": registrationUrl(name, origin, undefined, semVer2),
     id: pkg.name,
-    version,
+    version: fullNugetVersion(metadata.version),
     title: metadata.title,
     description: metadata.description,
     summary: metadata.summary,
@@ -69,7 +75,7 @@ export async function searchItem(pkg: Pick<NugetPackage, "name"> & { Release: Ca
     totalDownloads: releases.reduce((sum, release) => sum + Number(release.downloads), 0),
     verified: false,
     versions: releases.reverse().map((release) => ({
-      version: normalizeNugetVersion(release.version),
+      version: fullNugetVersion(release.nugetMetadata.version),
       downloads: Number(release.downloads),
       "@id": registrationUrl(name, origin, release.version, semVer2),
     })),
@@ -89,7 +95,7 @@ export async function registrationItem(pkg: Pick<NugetPackage, "name">, release:
     catalogEntry: {
       "@id": `${url}#catalog`,
       id: pkg.name,
-      version,
+      version: fullNugetVersion(metadata.version),
       listed: release.nugetListed,
       published: release.createdAt.toISOString(),
       packageContent,

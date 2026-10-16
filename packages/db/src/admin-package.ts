@@ -166,14 +166,20 @@ export async function setReleasePublishedByAdmin({
   published: boolean;
   prisma?: PrismaTransaction;
 }): Promise<
-  | { packageId: string; version: string; changed: boolean; missingFile: boolean }
+  | { packageId: string; version: string; changed: boolean; missingFile: boolean; requiresUpload?: boolean }
   | null
 > {
   const run = async (db: PrismaTransaction) => {
     const release = await db.release.findUnique({ where: { id: releaseId },
-      select: { id: true, packageId: true, version: true, published: true, fileId: true, package: { select: { audience: true } } } });
+      select: { id: true, packageId: true, version: true, published: true, artifactLocked: true,
+        nugetMetadata: true, fileId: true, package: { select: { audience: true } } } });
     if (!release) return null;
     const missingFile = published && release.fileId === null;
+    // Migrated drafts were not validated by the backfill. Moderation cannot
+    // reserve or lock their artifacts until an upload has indexed the nuspec.
+    if (published && !missingFile && !release.published && !release.artifactLocked && !release.nugetMetadata) {
+      return { packageId: release.packageId, version: release.version, changed: false, missingFile: false, requiresUpload: true };
+    }
     const changed = !missingFile && release.published !== published;
     if (!missingFile && published) await reservePublishedReleaseIdentity(db, release);
     if (changed) {

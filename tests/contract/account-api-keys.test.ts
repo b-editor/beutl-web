@@ -84,7 +84,9 @@ describe("Account security API keys", () => {
         { kind: "repository", id: tokenId, name: "Laptop", scope: "write", hint: "abcd", createdAt: createdAt.toISOString(), lastUsedAt: createdAt.toISOString(), repositoryId, repositoryName: "Project" },
       ],
     } });
-    expect(db.nugetToken.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { userId: "owner", revokedAt: null } }));
+    expect(db.nugetToken.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId: "owner", revokedAt: null, expiresAt: { gt: expect.any(Date) } },
+    }));
     expect(db.gitRepository.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { ownerId: "owner", deletedAt: null },
       select: expect.objectContaining({ accessTokens: expect.objectContaining({ where: { ownerId: "owner", revokedAt: null } }) }),

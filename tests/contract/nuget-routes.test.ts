@@ -13,6 +13,8 @@ const manifest = '<package><metadata><id>Library</id><version>1.0.0</version><au
 const release = { id: "release", packageId: "pkg", version: "1.0.0", published: true, artifactLocked: true, nugetListed: false,
   fileId: "file", file: { id: "file", objectKey: "object", size: 4n }, downloads: 0n, createdAt: new Date("2026-01-01"),
   nugetSemVer2: false, nugetMetadataInvalid: false, nugetMetadata: parseNuspec(manifest), nuspec: manifest, readme: null };
+const versionedRelease = (version: string) => ({ ...release, version,
+  nugetMetadata: { ...release.nugetMetadata, version: version.replace(/^v/u, "") } });
 const pkg = { id: "pkg", name: "Library", audience: "DEVELOPMENT", userId: "owner", published: true, Release: [release] };
 let paid = false, buyer: string | null = null, revoked = false, canPush = true;
 const file = () => ({ name: "library.nupkg", size: 4n, objectKey: "object", sha256: "abc", userId: "owner", visibility: "DEDICATED",
@@ -62,6 +64,52 @@ describe("NuGet registry routes", () => {
     expect(await (await request("/v3/package/library/1.0.0/library.1.0.0.nupkg")).text()).toBe("test");
     expect(models.nugetToken.findUnique).not.toHaveBeenCalled();
   });
+  it.each(["registration", "registration-semver1"])("serves the standalone %s leaf schema from an advertised URL", async (hive) => {
+    const indexUrl = `https://nuget.beditor.net/v3/${hive}/library/index.json`;
+    const index = await (await app.request(indexUrl)).json();
+    const embedded = index.items[0].items[0];
+    expect(embedded.catalogEntry).toMatchObject({ id: "Library", version: "1.0.0" });
+    const leaf = await (await app.request(embedded["@id"])).json();
+    expect(leaf).toEqual({ "@id": embedded["@id"], packageContent: embedded.packageContent,
+      listed: false, published: release.createdAt.toISOString(), registration: indexUrl });
+  });
+  it.each([
+    ["v1.0.0+web-build", "1.0.0+linux-x64", "1.0.0+linux-x64", "1.0.0"],
+    ["1.2.0-beta.2", "01.2.0.0-Beta.2+Build.X64", "1.2.0-Beta.2+Build.X64", "1.2.0-beta.2"],
+    ["1.2.3.4", "1.2.3.4+meta", "1.2.3.4+meta", "1.2.3.4"],
+  ])("preserves the manifest version in catalog data for stored %s while keeping canonical URLs", async (stored, manifestVersion, full, identity) => {
+    const nuspec = manifest.replace("1.0.0", manifestVersion).replace("</metadata>", "<icon>icon.png</icon></metadata>");
+    const current = { ...release, version: stored, nugetListed: true, nugetSemVer2: true,
+      nugetMetadata: parseNuspec(nuspec), nuspec };
+    const catalog = { ...pkg, Release: [current] };
+    models.package.findMany.mockResolvedValueOnce([catalog]);
+    models.package.count.mockResolvedValueOnce(1);
+    const search = await (await request("/v3/search?prerelease=true&semVerLevel=2.0.0")).json();
+    const base = "https://nuget.beditor.net/v3";
+    expect(search.data[0]).toMatchObject({ version: full, iconUrl: `${base}/package/library/${identity}/icon`,
+      versions: [{ version: full, "@id": `${base}/registration/library/${identity}.json` }] });
+
+    models.package.findFirst.mockResolvedValueOnce(catalog);
+    models.release.findMany.mockResolvedValueOnce([current]);
+    const index = await (await request("/v3/registration/library/index.json")).json();
+    expect(index.items[0]).toMatchObject({ lower: identity, upper: identity, items: [{
+      "@id": search.data[0].versions[0]["@id"],
+      packageContent: `${base}/package/library/${identity}/library.${identity}.nupkg`,
+      catalogEntry: { version: full },
+    }] });
+    models.package.findFirst.mockResolvedValueOnce(catalog);
+    models.release.findFirst.mockResolvedValueOnce(current);
+    const leaf = await (await app.request(search.data[0].versions[0]["@id"])).json();
+    expect(leaf.packageContent).toBe(index.items[0].items[0].packageContent);
+    expect(leaf).not.toHaveProperty("catalogEntry");
+    models.package.findFirst.mockResolvedValueOnce(catalog);
+    expect(await (await request("/v3/package/library/index.json")).json()).toEqual({ versions: [identity] });
+    models.package.findFirst.mockResolvedValueOnce(catalog);
+    expect(await (await request("/v3/autocomplete?id=Library&prerelease=true&semVerLevel=2.0.0")).json()).toEqual({ data: [full] });
+    models.package.findFirst.mockResolvedValueOnce(catalog);
+    expect(await (await request("/v3/autocomplete?id=Library&prerelease=true")).json()).toEqual({ data: [] });
+    expect(bucket.get).not.toHaveBeenCalled();
+  });
   it("loads only version identities for the flat index and the requested artifact for downloads", async () => {
     await request("/v3/package/library/index.json");
     expect(models.package.findFirst.mock.calls[0][0].select.Release.select).toEqual({ id: true, version: true });
@@ -76,6 +124,7 @@ describe("NuGet registry routes", () => {
       ...pkg,
       Release: versions.map((version, index) => ({
         ...release, id: `release-${index}`, version, downloads: BigInt(index + 1), nugetListed: true,
+        nugetMetadata: { ...release.nugetMetadata, version },
       })),
     };
     models.package.findMany.mockResolvedValueOnce([catalog]);
@@ -85,11 +134,11 @@ describe("NuGet registry routes", () => {
     expect(result.totalHits).toBe(1);
     expect(result.data[0]).toMatchObject({
       "@id": `${origin}/v3/registration/library/index.json`,
-      version: "1.11.0-beta.2", totalDownloads: 6,
+      version: "1.11.0-Beta.2+build", totalDownloads: 6,
       versions: [
         { version: "1.2.0", "@id": `${origin}/v3/registration/library/1.2.0.json` },
         { version: "1.10.0", "@id": `${origin}/v3/registration/library/1.10.0.json` },
-        { version: "1.11.0-beta.2", "@id": `${origin}/v3/registration/library/1.11.0-beta.2.json` },
+        { version: "1.11.0-Beta.2+build", "@id": `${origin}/v3/registration/library/1.11.0-beta.2.json` },
       ],
     });
     expect(models.package.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 4, take: 8 }));
@@ -99,6 +148,7 @@ describe("NuGet registry routes", () => {
     const registration = await (await app.request(`${origin}/v3/registration/LIBRARY/index.json`, {}, env)).json();
     expect(registration.items[0]).toMatchObject({ lower: "1.2.0", upper: "1.11.0-beta.2", count: 3 });
     expect(registration.items[0].items[2].packageContent).toBe(`${origin}/v3/package/library/1.11.0-beta.2/library.1.11.0-beta.2.nupkg`);
+    expect(registration.items[0].items[2].catalogEntry.version).toBe("1.11.0-Beta.2+build");
 
     const index = await (await app.request(`${origin}/v3/index.json`, {}, env)).json();
     expect(index.resources.every((resource: { "@id": string }) => resource["@id"].startsWith(`${origin}/`))).toBe(true);
@@ -128,20 +178,20 @@ describe("NuGet registry routes", () => {
   });
   it("includes stable build metadata in version autocomplete", async () => {
     models.package.findFirst.mockResolvedValueOnce({ ...pkg, Release: [
-      { ...release, version: "v1.0.0+linux-x64", nugetListed: true },
-      { ...release, version: "2.0.0-beta+linux-x64", nugetListed: true },
-      { ...release, version: "3.0.0+linux-x64", nugetListed: false },
+      { ...versionedRelease("v1.0.0+linux-x64"), nugetListed: true },
+      { ...versionedRelease("2.0.0-beta+linux-x64"), nugetListed: true },
+      { ...versionedRelease("3.0.0+linux-x64"), nugetListed: false },
     ] });
-    expect(await (await request("/v3/autocomplete?id=Library&semVerLevel=2.0.0")).json()).toEqual({ data: ["1.0.0"] });
+    expect(await (await request("/v3/autocomplete?id=Library&semVerLevel=2.0.0")).json()).toEqual({ data: ["1.0.0+linux-x64"] });
   });
   it.each([[0, 2, ["1.0.0", "3.0.0"]], [1, 1, ["3.0.0"]], [2, 5, []], [0, 0, []]] as const)(
     "paginates version autocomplete after filtering (skip=%s, take=%s)", async (skip, take, expected) => {
       models.package.findFirst.mockResolvedValueOnce({ ...pkg, Release: [
-        { ...release, version: "4.0.0", nugetListed: false },
-        { ...release, version: "3.0.0", nugetListed: true },
-        { ...release, version: "2.0.0", nugetListed: true, nugetSemVer2: true },
-        { ...release, version: "1.5.0-beta", nugetListed: true },
-        { ...release, version: "1.0.0", nugetListed: true },
+        { ...versionedRelease("4.0.0"), nugetListed: false },
+        { ...versionedRelease("3.0.0"), nugetListed: true },
+        { ...versionedRelease("2.0.0"), nugetListed: true, nugetSemVer2: true },
+        { ...versionedRelease("1.5.0-beta"), nugetListed: true },
+        { ...versionedRelease("1.0.0"), nugetListed: true },
       ] });
       expect(await (await request(`/v3/autocomplete?id=Library&skip=${skip}&take=${take}`)).json()).toEqual({ data: expected });
     },
@@ -156,18 +206,19 @@ describe("NuGet registry routes", () => {
     expect(models.package.findMany.mock.calls[0][0].where).toEqual(where);
     expect(models.package.count.mock.calls[1][0].where.Release.some.nugetSemVer2).toBe(semVer2 ? undefined : false);
     models.package.findFirst.mockResolvedValueOnce({ ...pkg, Release: [
-      { ...release, version: "1.0.0", nugetListed: true },
-      { ...release, version: "2.0.0+build", nugetListed: true, nugetSemVer2: true },
-      { ...release, version: "3.0.0-beta.1", nugetListed: true, nugetSemVer2: true },
+      { ...versionedRelease("1.0.0"), nugetListed: true },
+      { ...versionedRelease("2.0.0+build"), nugetListed: true, nugetSemVer2: true },
+      { ...versionedRelease("3.0.0-beta.1"), nugetListed: true, nugetSemVer2: true },
       // A stable package with a SemVer 2 dependency range is also incompatible.
-      { ...release, version: "4.0.0", nugetListed: true, nugetSemVer2: true },
+      { ...versionedRelease("4.0.0"), nugetListed: true, nugetSemVer2: true },
     ] });
     expect(await (await request(`/v3/autocomplete?id=Library&prerelease=true${suffix}`)).json()).toEqual({
-      data: semVer2 ? ["1.0.0", "2.0.0", "3.0.0-beta.1", "4.0.0"] : ["1.0.0"],
+      data: semVer2 ? ["1.0.0", "2.0.0+build", "3.0.0-beta.1", "4.0.0"] : ["1.0.0"],
     });
   });
   it.each(["registration", "registration-semver1"])("links bounded %s pages without loading every manifest or reading storage", async (hive) => {
-    const releases = Array.from({ length: 130 }, (_, i) => ({ ...release, id: `r${i}`, version: `1.0.${i}` }));
+    const releases = Array.from({ length: 130 }, (_, i) => ({ ...release, id: `r${i}`, version: `1.0.${i}`,
+      nugetMetadata: { ...release.nugetMetadata, version: `1.0.${i}` } }));
     const catalog = { ...pkg, Release: releases.toReversed() };
     models.package.findFirst.mockResolvedValueOnce(catalog);
     const index = await (await request(`/v3/${hive}/library/index.json`)).json();
@@ -195,7 +246,7 @@ describe("NuGet registry routes", () => {
     expect(selection.select).not.toHaveProperty("readme");
     // A version published between the index and page requests must not
     // invalidate a URL the index has already handed to a NuGet client.
-    const inserted = { ...release, id: "inserted", version: "1.0.10.1" };
+    const inserted = { ...release, id: "inserted", version: "1.0.10.1", nugetMetadata: { ...release.nugetMetadata, version: "1.0.10.1" } };
     const expanded = [...releases.slice(0, 11), inserted, ...releases.slice(11, 64)];
     models.package.findFirst.mockResolvedValueOnce({ ...catalog, Release: [...catalog.Release, inserted] });
     models.release.findMany.mockResolvedValueOnce(expanded.slice(0, 64)).mockResolvedValueOnce(expanded.slice(64));
@@ -212,7 +263,10 @@ describe("NuGet registry routes", () => {
     const item = await (await request("/v3/registration-semver1/library/1.0.0.json")).json();
     expect(item["@id"]).toBe("https://nuget.beditor.net/v3/registration-semver1/library/1.0.0.json");
     expect(item.registration).toBe("https://nuget.beditor.net/v3/registration-semver1/library/index.json");
-    expect(item.catalogEntry.dependencyGroups[0].dependencies[0].registration)
+    expect(item).not.toHaveProperty("catalogEntry");
+    models.release.findMany.mockResolvedValueOnce([{ ...release, nugetMetadata: metadata }]);
+    const index = await (await request("/v3/registration-semver1/library/index.json")).json();
+    expect(index.items[0].items[0].catalogEntry.dependencyGroups[0].dependencies[0].registration)
       .toBe("https://nuget.beditor.net/v3/registration-semver1/dependency/index.json");
     expect(models.release.findFirst.mock.calls[0][0].where.nugetSemVer2).toBe(false);
     models.package.findMany.mockResolvedValueOnce([pkg]);

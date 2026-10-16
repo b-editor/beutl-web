@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { compareNugetVersions, isValidNugetVersion, normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
 import { getDb, packageNameFilter } from "@beutl/db";
 import { catalogMetadata, catalogReleaseSelect, classifyNugetReleases, searchNugetPackages, sortNugetReleases } from "../catalog";
-import { nugetOrigin, registrationItem, registrationUrl, searchItem, serviceIndex, type NugetEnv } from "../protocol";
+import { fullNugetVersion, nugetOrigin, registrationItem, registrationUrl, searchItem, serviceIndex, type NugetEnv } from "../protocol";
 
 const routes = new Hono<NugetEnv>();
 
@@ -49,7 +49,8 @@ routes.get("/autocomplete", async (c) => {
     const data = [];
     for (const release of sortNugetReleases(pkg?.Release ?? []).reverse()) {
       if (!release.nugetListed || (!options.prerelease && normalizeNugetVersion(release.version).includes("-"))) continue;
-      if (await catalogMetadata(pkg!, release, options.semVer2)) data.push(normalizeNugetVersion(release.version));
+      const metadata = await catalogMetadata(pkg!, release, options.semVer2);
+      if (metadata) data.push(fullNugetVersion(metadata.version));
     }
     return c.json({ data: data.slice(options.skip, options.skip + options.take) });
   }
@@ -144,7 +145,8 @@ function registrationRoutes(semVer2: boolean) {
     const item = await registrationItem(pkg, release, origin, semVer2);
     if (!item) return c.notFound();
     return c.json({
-      ...item,
+      "@id": item["@id"],
+      packageContent: item.packageContent,
       listed: release.nugetListed,
       published: release.createdAt.toISOString(),
       registration: registrationUrl(pkg.name, origin, undefined, semVer2),

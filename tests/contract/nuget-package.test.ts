@@ -8,6 +8,26 @@ const nuspec = `<package><metadata><id>Sample.Library</id><version>01.2.0.0-Beta
 function archive(manifest: string | Uint8Array = nuspec) { return new Blob([zipSync({ "Sample.Library.nuspec": typeof manifest === "string" ? strToU8(manifest) : manifest, "README.md": strToU8("# Library"), "lib/net10.0/sample.dll": new Uint8Array(1024) })]); }
 
 describe("NuGet package identities and metadata", () => {
+  it.each([undefined, "1.2", "1.2.3", "1.2.3.4", "01.02", " +1 . 02 ", "0.-0", "1.2147483647"])(
+    "accepts System.Version package type version %s", (version) => {
+      const type = `<packageType name="Custom.Package_Type-1"${version === undefined ? "" : ` version="${version}"`} />`;
+      expect(parseNuspec(nuspec.replace("</metadata>", `<packageTypes>${type}</packageTypes></metadata>`)).packageTypes)
+        .toEqual([{ name: "Custom.Package_Type-1", version: version?.trim() ?? "" }]);
+    },
+  );
+  it.each(["", " ", "1", "1.2.3.4.5", "not-a-version", "1.2-beta", "1.2+build", "1.-1", "1.2147483648", "1..2"])(
+    "rejects package type version %s before accepting an archive", async (version) => {
+      const manifest = nuspec.replace("</metadata>", `<packageTypes><packageType name="DotnetTool" version="${version}" /></packageTypes></metadata>`);
+      await expect(readNugetPackage(blobReader(archive(manifest)))).rejects.toThrow("Invalid package type version");
+    },
+  );
+  it.each([undefined, "", " ", ".type", "type..name", "type/name", "type name", "x".repeat(101)])(
+    "rejects invalid package type name %s", (name) => {
+      const type = `<packageType${name === undefined ? "" : ` name="${name}"`} />`;
+      expect(() => parseNuspec(nuspec.replace("</metadata>", `<packageTypes>${type}</packageTypes></metadata>`)))
+        .toThrow("Invalid package type name");
+    },
+  );
   it.each([
     "../../payload.dll", "lib/../../payload.dll", "lib/../payload.dll", "./payload.dll",
     "..\\payload.dll", "/payload.dll", "\\payload.dll", "//host/payload.dll", "C:/payload.dll", "C:payload.dll",

@@ -13,6 +13,7 @@ import { setR2BucketProvider } from "@beutl/api/ai/r2-provider";
 import { createDevPackage, existsPackageName, PackageIdentityReservedError, createRelease, updateRelease, ReleaseArtifactLockedError, ReleaseIdentityConflictError, setReleasePublishedByAdmin, setDbProvider, packageNameFilter, refreshNugetPackageMetadata, deleteReleaseWithStorageCleanup, updateDevPackageDisplay, updateDevPackageDescription, updateDevPackageTags } from "@beutl/db";
 import { classifyNugetReleases, searchNugetPackages } from "../../packages/api/src/nuget/catalog";
 import { parseNuspec } from "../../packages/api/src/nuget/archive";
+import { listNugetTokens } from "../../packages/api/src/nuget/tokens";
 import nugetApp from "../../packages/api/src/nuget/app";
 
 const connectionString = process.env.TEST_DATABASE_URL;
@@ -132,7 +133,7 @@ suite("NuGet publication invariants on CockroachDB", () => {
         await updateRelease({ id: r.id, title: "SDK", description: "SDK", targetVersion: "", published: true, fileId: "original",
           nuget: { metadata: parseNuspec(nuspec), nuspec, readme: null } });
       }
-      for (const [hive, expected] of [["registration", ["1.0.0", "2.0.0", "3.0.0-beta.1", "4.0.0"]], ["registration-semver1", ["1.0.0"]]] as const) {
+      for (const [hive, expected] of [["registration", ["1.0.0", "2.0.0+build", "3.0.0-beta.1", "4.0.0"]], ["registration-semver1", ["1.0.0"]]] as const) {
         const base = `https://nuget.test/v3/${hive}/registration.package`;
         const index = await (await nugetApp.request(`${base}/index.json`)).json();
         expect(index.items[0].items.map((item: { catalogEntry: { version: string } }) => item.catalogEntry.version)).toEqual(expected);
@@ -604,10 +605,40 @@ suite("NuGet publication invariants on CockroachDB", () => {
   it("locks admin publications and preserves editorial updates", async () => {
     const r = await draft("dev", "2.0.0");
     await edit(r.id, false, "original");
+    expect(await setReleasePublishedByAdmin({ releaseId: r.id, published: true }))
+      .toMatchObject({ changed: false, requiresUpload: true });
+    expect(await db.release.findUniqueOrThrow({ where: { id: r.id } }))
+      .toMatchObject({ artifactLocked: false, published: false, nugetMetadata: null });
+    expect(await db.publishedPackageVersion.findUnique({ where: { name_version: { name: "dev.package", version: "2.0.0" } } })).toBeNull();
+    // A validated replacement remains editable and can then be published.
+    const nuspec = '<package><metadata><id>Dev.Package</id><version>2.0.0</version><authors>Owner</authors><description>Library</description></metadata></package>';
+    await updateRelease({ id: r.id, published: false, fileId: "replacement", title: "Title", description: "Description", targetVersion: "1.0.0",
+      nuget: { metadata: parseNuspec(nuspec), nuspec, readme: null } });
     expect(await setReleasePublishedByAdmin({ releaseId: r.id, published: true })).toMatchObject({ changed: true });
     await setReleasePublishedByAdmin({ releaseId: r.id, published: false });
-    await expect(edit(r.id, false, "replacement")).rejects.toBeInstanceOf(ReleaseArtifactLockedError);
+    await expect(edit(r.id, false, "original")).rejects.toBeInstanceOf(ReleaseArtifactLockedError);
     await expect(edit(r.id, false)).resolves.toMatchObject({ title: "Title", artifactLocked: true });
+  });
+  it("lists only the owner's unexpired, non-revoked NuGet keys", async () => {
+    const owner = "token-owner", other = "other-token-owner";
+    await db.$executeRaw`INSERT INTO "User" ("id") VALUES (${owner}), (${other})`;
+    const now = new Date(), future = new Date(now.getTime() + 86400000);
+    const rows = [
+      { id: "active-token", userId: owner, expiresAt: future, revokedAt: null },
+      { id: "expired-token", userId: owner, expiresAt: new Date(now.getTime() - 86400000), revokedAt: null },
+      { id: "boundary-token", userId: owner, expiresAt: now, revokedAt: null },
+      { id: "revoked-token", userId: owner, expiresAt: future, revokedAt: now },
+      { id: "other-token", userId: other, expiresAt: future, revokedAt: null },
+    ];
+    try {
+      await db.nugetToken.createMany({ data: rows.map((row) => ({ ...row, name: row.id, tokenHash: row.id, hint: "secret" })) });
+      const result = await listNugetTokens(owner);
+      expect(result.map((token) => token.id)).toEqual(["active-token"]);
+      expect(result[0]).not.toHaveProperty("tokenHash");
+    } finally {
+      await db.nugetToken.deleteMany({ where: { userId: { in: [owner, other] } } });
+      await db.$executeRaw`DELETE FROM "User" WHERE "id" IN (${owner}, ${other})`;
+    }
   });
   it("reserves normalized identities after deleting a published release", async () => {
     await db.release.delete({ where: { id: "published" } });

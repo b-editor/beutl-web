@@ -87,6 +87,16 @@ describe("administrator package visibility (db)", () => {
     expect(prisma.release.update).not.toHaveBeenCalled();
   });
 
+  it.each(["USER", "DEVELOPMENT"])("requires a validated upload before moderating a legacy %s draft", async (audience) => {
+    const prisma = fakePrisma("release", { count: 0, row: {
+      packageId: "p1", version: "1.0.0", published: false, artifactLocked: false,
+      fileId: "retained", nugetMetadata: null, package: { audience },
+    } });
+    await expect(setReleasePublishedByAdmin({ releaseId: "r1", published: true, prisma: prisma as never }))
+      .resolves.toEqual({ packageId: "p1", version: "1.0.0", changed: false, missingFile: false, requiresUpload: true });
+    expect(prisma.release.update).not.toHaveBeenCalled();
+  });
+
   it("returns null for a package or release that does not exist", async () => {
     const pkg = fakePrisma("package", { count: 0, row: null });
     await expect(
@@ -150,6 +160,16 @@ describe("administrator package visibility (actions)", () => {
     await expect(
       setReleasePublished({ releaseId: "r1", published: false, reason: REASON }),
     ).resolves.toEqual({ success: false, message: "Release not found" });
+  });
+
+  it("reports a required upload without auditing a publication or refreshing pages", async () => {
+    mocks.setReleasePublishedByAdmin.mockResolvedValue({
+      packageId: "p1", version: "1.0.0", changed: false, missingFile: false, requiresUpload: true,
+    });
+    await expect(setReleasePublished({ releaseId: "r1", published: true, reason: REASON }))
+      .resolves.toEqual({ success: false, message: "Upload a valid NuGet package before publishing this release" });
+    expect(mocks.addAuditLog).not.toHaveBeenCalled();
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
   });
 });
 

@@ -9,7 +9,7 @@ export class NugetTokenLimitError extends Error {
 }
 
 export async function listNugetTokens(userId: string) {
-  return (await getDb()).nugetToken.findMany({ where: { userId, revokedAt: null }, select: summarySelect, orderBy: { createdAt: "desc" } });
+  return (await getDb()).nugetToken.findMany({ where: { userId, revokedAt: null, expiresAt: { gt: new Date() } }, select: summarySelect, orderBy: { createdAt: "desc" } });
 }
 
 export async function createNugetToken(userId: string, name: string, canPush: boolean, days: number) {

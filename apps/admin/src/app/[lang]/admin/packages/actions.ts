@@ -90,6 +90,9 @@ export async function setReleasePublished(input: unknown): Promise<ActionResult>
     if (result.missingFile) {
       return { success: false, message: "A release without a file cannot be published" };
     }
+    if (result.requiresUpload) {
+      return { success: false, message: "Upload a valid NuGet package before publishing this release" };
+    }
 
     revalidatePackagePages();
     return { success: true };

@@ -16,6 +16,14 @@ const invalid = (message: string, cause?: unknown): never => { throw new Invalid
 const text = (value: unknown): string => typeof value === "string" ? value : "";
 const list = <T>(value: T | T[] | undefined): T[] => value === undefined ? [] : Array.isArray(value) ? value : [value];
 
+function packageTypeVersion(value: string): boolean {
+  // Package type versions use System.Version, not SemVer: two to four
+  // non-negative Int32 components, allowing integer whitespace/signs.
+  const parts = value.split(".");
+  return parts.length >= 2 && parts.length <= 4 && parts.every((part) =>
+    /^[+-]?\d+$/u.test(part.trim()) && Number(part) >= 0 && Number(part) <= 2147483647);
+}
+
 function validateMetadata(metadata: NugetMetadata): NugetMetadata {
   const limits = { title: 256, authors: 1024, description: 4000, summary: 4000,
     projectUrl: 2048, licenseUrl: 2048, license: 2048, releaseNotes: 35000,
@@ -68,7 +76,12 @@ export function parseNuspec(nuspec: string): NugetMetadata {
     releaseNotes: text(m.releaseNotes), requireLicenseAcceptance: text(m.requireLicenseAcceptance).toLowerCase() === "true",
     icon: text(m.icon), iconUrl: text(m.iconUrl), readme: text(m.readme), dependencyGroups: groups,
     packageTypes: list(m.packageTypes?.packageType as { "@_name"?: string; "@_version"?: string } | undefined)
-      .map((p) => ({ name: text(p["@_name"]), version: text(p["@_version"]) })),
+      .map((p) => {
+        const name = text(p["@_name"]).trim(), version = text(p["@_version"]);
+        try { normalizeNugetId(name); } catch (error) { return invalid("Invalid package type name", error); }
+        if (p["@_version"] !== undefined && !packageTypeVersion(version)) return invalid("Invalid package type version");
+        return { name, version };
+      }),
     repository: { type: text(m.repository?.["@_type"]), url: text(m.repository?.["@_url"]),
       branch: text(m.repository?.["@_branch"]), commit: text(m.repository?.["@_commit"]) },
   });
