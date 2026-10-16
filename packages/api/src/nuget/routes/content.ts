@@ -2,22 +2,26 @@ import { Hono } from "hono";
 import { normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
 import { getDb, packageNameFilter } from "@beutl/db";
 import { readNugetIcon, storedPackageReader } from "../archive";
-import { findNugetPackage, findNugetVersion, releaseMetadata, sortNugetReleases } from "../catalog";
+import { classifyNugetReleases, findNugetPackage, findNugetVersion, releaseMetadata, sortNugetReleases } from "../catalog";
 import { downloadPackage } from "../download";
 import type { NugetEnv } from "../protocol";
 
 const routes = new Hono<NugetEnv>();
 
 routes.on(["GET", "HEAD"], "/package/:id/index.json", async (c) => {
+  const releaseWhere = { published: true, fileId: { not: null }, nugetMetadataInvalid: false };
   const pkg = await (await getDb()).package.findFirst({
     where: { name: packageNameFilter(normalizeNugetId(c.req.param("id"))), published: true },
-    select: { Release: {
-      where: { published: true, fileId: { not: null } }, select: { version: true },
+    select: { id: true, Release: {
+      where: releaseWhere, select: { id: true, version: true },
     } },
   });
   if (!pkg?.Release.length) return c.notFound();
+  const excluded = await classifyNugetReleases({ ...releaseWhere, packageId: pkg.id }, true);
+  const releases = pkg.Release.filter((release) => !excluded.has(release.id));
+  if (!releases.length) return c.notFound();
   return c.json({
-    versions: sortNugetReleases(pkg.Release).reverse().map((release) => normalizeNugetVersion(release.version)),
+    versions: sortNugetReleases(releases).reverse().map((release) => normalizeNugetVersion(release.version)),
   });
 });
 

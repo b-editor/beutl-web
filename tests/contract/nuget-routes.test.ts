@@ -63,7 +63,7 @@ describe("NuGet registry routes", () => {
   });
   it("loads only version identities for the flat index and the requested artifact for downloads", async () => {
     await request("/v3/package/library/index.json");
-    expect(models.package.findFirst.mock.calls[0][0].select.Release.select).toEqual({ version: true });
+    expect(models.package.findFirst.mock.calls[0][0].select.Release.select).toEqual({ id: true, version: true });
     await request("/v3/package/library/01.0.0.0/library.1.0.0.nupkg");
     expect(models.package.findFirst.mock.calls[1][0].include.Release.where.nugetVersion).toBe("1.0.0");
   });

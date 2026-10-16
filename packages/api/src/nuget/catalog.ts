@@ -117,20 +117,55 @@ export async function classifyNugetReleases(where: Prisma.ReleaseWhereInput, sem
   return excluded;
 }
 
+async function userPackagesMatchingOlderMetadata(releaseWhere: Prisma.ReleaseWhereInput, metadataWhere: Prisma.ReleaseWhereInput, query: string) {
+  const db = await getDb();
+  const where: Prisma.PackageWhereInput = { published: true, audience: "USER",
+    NOT: { name: { contains: query, mode: "insensitive" } },
+    Release: { some: { ...releaseWhere, ...metadataWhere } },
+  };
+  const excluded: string[] = [];
+  if (!await db.release.count({ where: { ...releaseWhere, package: where } })) return excluded;
+  let after: string | undefined;
+  while (true) {
+    // Search JSON in SQL first, then check the latest eligible identity. Older
+    // nuspec matches must not make a package match metadata it no longer shows.
+    const batch = await db.package.findMany({
+      where: { ...where, ...(after ? { id: { gt: after } } : {}) }, orderBy: { id: "asc" }, take: 64,
+      select: { id: true, Release: { where: releaseWhere, select: { id: true, version: true } } },
+    });
+    if (!batch.length) break;
+    const latest = batch.map((pkg) => ({ packageId: pkg.id, release: sortNugetReleases(pkg.Release)[0] }));
+    const matches = new Set((await db.release.findMany({
+      where: { ...metadataWhere, id: { in: latest.flatMap(({ release }) => release ? [release.id] : []) } }, select: { id: true },
+    })).map((release) => release.id));
+    for (const { packageId, release } of latest) if (!release || !matches.has(release.id)) excluded.push(packageId);
+    after = batch[batch.length - 1].id;
+  }
+  return excluded;
+}
+
 export async function searchNugetPackages({ query = "", skip = 0, take = 20, prerelease = true, semVer2 = true, audience, filterReadable = false }: {
   query?: string; skip?: number; take?: number; prerelease?: boolean; semVer2?: boolean; audience?: PackageAudience; filterReadable?: boolean;
 }) {
   const releaseWhere: Prisma.ReleaseWhereInput = { published: true, nugetListed: true, fileId: { not: null }, nugetMetadataInvalid: false,
     ...(!semVer2 ? { nugetSemVer2: false } : {}),
     ...(!prerelease ? { NOT: { nugetVersion: { contains: "-" } } } : {}) };
-  const where: Prisma.PackageWhereInput = { published: true, audience, Release: { some: releaseWhere },
-    ...(query.trim() ? { OR: [
-      { name: { contains: query.trim(), mode: "insensitive" } },
-      { displayName: { contains: query.trim(), mode: "insensitive" } },
-      { description: { contains: query.trim(), mode: "insensitive" } },
-      { tags: { has: query.trim() } },
-    ] } : {}),
-  };
+  const term = query.trim();
+  const metadataWhere: Prisma.ReleaseWhereInput = { OR: [
+    { nugetMetadata: { path: ["title"], string_contains: term, mode: "insensitive" } },
+    { nugetMetadata: { path: ["description"], string_contains: term, mode: "insensitive" } },
+    { nugetMetadata: { path: ["tags"], array_contains: [term] } },
+  ] };
+  const baseWhere: Prisma.PackageWhereInput = { published: true, audience, Release: { some: releaseWhere } };
+  const queryWhere: Prisma.PackageWhereInput = term ? { OR: [
+    { name: { contains: term, mode: "insensitive" } },
+    { audience: "DEVELOPMENT", OR: [
+      { displayName: { contains: term, mode: "insensitive" } },
+      { description: { contains: term, mode: "insensitive" } }, { tags: { has: term } },
+    ] },
+    { audience: "USER", Release: { some: { AND: [releaseWhere, metadataWhere] } } },
+  ] } : {};
+  const where: Prisma.PackageWhereInput = { ...baseWhere, ...queryWhere };
   const db = await getDb();
   const include = { Release: { where: releaseWhere, select: catalogReleaseSelect } };
   const offset = Math.max(0, skip), limit = Math.max(0, Math.min(100, take));
@@ -143,9 +178,17 @@ export async function searchNugetPackages({ query = "", skip = 0, take = 20, pre
     pkg.Release = releases;
     return releases.length > 0;
   };
-  if (filterReadable) {
-    const excluded = await classifyNugetReleases({ ...releaseWhere, package: where }, semVer2);
+  if (filterReadable || (term && audience !== "DEVELOPMENT")) {
+    // A legacy USER nuspec may contain the search term even when the editable
+    // store fields do not. Classify it before applying the metadata predicate.
+    const excluded = await classifyNugetReleases({ ...releaseWhere,
+      package: { ...baseWhere, ...(term ? { OR: [{ audience: "USER" }, queryWhere] } : {}) },
+    }, semVer2);
     if (excluded.size) releaseWhere.id = { notIn: [...excluded] };
+  }
+  if (term && audience !== "DEVELOPMENT") {
+    const excluded = await userPackagesMatchingOlderMetadata(releaseWhere, metadataWhere, term);
+    if (excluded.length) where.id = { notIn: excluded };
   }
   const [totalHits, packages] = await Promise.all([
     db.package.count({ where }),

@@ -86,3 +86,40 @@ try {
 } finally {
   await storageRuntime.dispose();
 }
+
+// Validate manifest decoding in workerd too: its UTF-16 decoder can accept
+// lone surrogates even with fatal: true, unlike Node's implementation.
+const { zipSync } = createRequire(new URL('../../../package.json', import.meta.url))('fflate');
+const archiveBundle = await build({ stdin: { resolveDir: fileURLToPath(new URL('../../../packages/api/', import.meta.url)), contents: `
+  import { blobReader, readNugetPackage, InvalidNugetPackageError } from './src/nuget/archive';
+  export default { async fetch(request) {
+    try { return Response.json(await readNugetPackage(blobReader(await request.blob()))); }
+    catch (error) { if (error instanceof InvalidNugetPackageError) return new Response(error.message, { status: 400 }); throw error; }
+  } };
+` }, bundle: true, write: false, platform: 'node', format: 'esm', external: ['node:*'] });
+const archiveRuntime = new Miniflare(convertV4MiniflareOptions({ modules: true, script: archiveBundle.outputFiles[0].text,
+  compatibilityDate: '2025-04-04', compatibilityFlags: ['nodejs_compat'] }));
+const manifest = '<package><metadata><id>Sample.Library</id><version>1.0.0</version><authors>Owner</authors><description>日本語🚀</description></metadata></package>';
+try {
+  for (const encoding of ['utf-8', 'utf-16le', 'utf-16be']) {
+    const xml = `<?xml version="1.0" encoding="${encoding === 'utf-8' ? encoding : 'utf-16'}"?>${manifest}`;
+    const bytes = encoding === 'utf-8' ? Buffer.from(xml) : Buffer.from('\ufeff' + xml, 'utf16le');
+    if (encoding === 'utf-16be') bytes.swap16();
+    const response = await archiveRuntime.dispatchFetch('https://nuget.test', { method: 'POST', body: zipSync({ 'Library.nuspec': bytes }) });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.metadata.description, '日本語🚀');
+    assert.ok(result.nuspec.includes('encoding="utf-8"'));
+    console.log(`workerd accepted ${encoding}`);
+  }
+  for (const [name, bytes] of [
+    ['utf-8', Buffer.concat([Buffer.from(manifest.split('日本語🚀')[0]), Buffer.from([0xc3, 0x28]), Buffer.from(manifest.split('日本語🚀')[1])])],
+    ['utf-16le', Buffer.from('\ufeff' + manifest.replace('日本語🚀', '\ud800'), 'utf16le')],
+    ['utf-16be', Buffer.from('\ufeff' + manifest.replace('日本語🚀', '\udc00'), 'utf16le').swap16()],
+    ['truncated utf-16', Buffer.from('\ufeff' + manifest, 'utf16le').subarray(0, -1)],
+  ]) {
+    const response = await archiveRuntime.dispatchFetch('https://nuget.test', { method: 'POST', body: zipSync({ 'Library.nuspec': bytes }) });
+    assert.equal(response.status, 400, await response.text());
+    console.log(`workerd rejected malformed ${name}`);
+  }
+} finally { await archiveRuntime.dispose(); }

@@ -131,11 +131,33 @@ async function readEntry(entry: ZipEntry): Promise<ArrayBuffer> {
   }
 }
 
+function decodeNuspec(bytes: ArrayBuffer): string {
+  const data = new Uint8Array(bytes);
+  // XML's byte-order signature takes precedence over its encoding declaration.
+  // Support Unicode manifests without silently substituting malformed bytes.
+  const utf16le = data[0] === 0xff && data[1] === 0xfe || data[0] === 0x3c && data[1] === 0 && data[2] === 0x3f && data[3] === 0;
+  const utf16be = data[0] === 0xfe && data[1] === 0xff || data[0] === 0 && data[1] === 0x3c && data[2] === 0 && data[3] === 0x3f;
+  const encoding = utf16le ? "utf-16le" : utf16be ? "utf-16be" : "utf-8";
+  if ((utf16le || utf16be) && data.length % 2) return invalid("Invalid package manifest encoding");
+  let xml: string;
+  try { xml = new TextDecoder(encoding, { fatal: true }).decode(data); }
+  catch (error) { return invalid("Invalid package manifest encoding", error); }
+  // workerd can preserve lone UTF-16 surrogates even in fatal mode. With the
+  // Unicode flag this matches lone code units, not valid supplementary pairs.
+  if (/[\uD800-\uDFFF]/u.test(xml)) return invalid("Invalid package manifest encoding");
+  const declared = /^<\?xml\s[^?]*\bencoding\s*=\s*(["'])([^"']+)\1/iu.exec(xml)?.[2].toLowerCase();
+  if (declared && declared !== encoding && !(declared === "utf-16" && (utf16le || utf16be))) {
+    return invalid("Unsupported or mismatched package manifest encoding");
+  }
+  // The API serves this cached string as UTF-8, even for UTF-16 archives.
+  return xml.replace(/^(<\?xml\s[^?]*\bencoding\s*=\s*)(["'])[^"']+\2/iu, '$1"utf-8"');
+}
+
 export async function readNugetPackage(reader: Reader, expected?: { id: string; version: string }): Promise<ReleaseNugetData> {
   const entries = await entriesOf(reader);
   const manifests = entries.filter((e) => !e.name.includes("/") && !e.name.includes("\\") && e.name.toLowerCase().endsWith(".nuspec"));
   if (manifests.length !== 1) return invalid("The package must contain one root .nuspec manifest");
-  const nuspec = new TextDecoder().decode(await readEntry(manifests[0]));
+  const nuspec = decodeNuspec(await readEntry(manifests[0]));
   const metadata = parseNuspec(nuspec);
   if (expected && (normalizeNugetId(expected.id) !== normalizeNugetId(metadata.id) ||
     normalizeNugetVersion(expected.version) !== normalizeNugetVersion(metadata.version))) return invalid("Package ID and version must match the release");

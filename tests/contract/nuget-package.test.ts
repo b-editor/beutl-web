@@ -5,9 +5,37 @@ import { blobReader, parseNuspec, readNugetPackage } from "../../packages/api/sr
 import { readPushBody, NUGET_PUSH_LIMIT } from "../../packages/api/src/nuget/push";
 
 const nuspec = `<package><metadata><id>Sample.Library</id><version>01.2.0.0-Beta.2+build</version><authors>123</authors><description>A library</description><readme>README.md</readme><dependencies><group targetFramework="net10.0"><dependency id="Another.Lib" version="[1.0,2.0)" /></group></dependencies></metadata></package>`;
-function archive(manifest = nuspec) { return new Blob([zipSync({ "Sample.Library.nuspec": strToU8(manifest), "README.md": strToU8("# Library"), "lib/net10.0/sample.dll": new Uint8Array(1024) })]); }
+function archive(manifest: string | Uint8Array = nuspec) { return new Blob([zipSync({ "Sample.Library.nuspec": typeof manifest === "string" ? strToU8(manifest) : manifest, "README.md": strToU8("# Library"), "lib/net10.0/sample.dll": new Uint8Array(1024) })]); }
 
 describe("NuGet package identities and metadata", () => {
+  it.each(["utf-8", "utf-16le", "utf-16be"])("decodes valid %s manifests and serves a UTF-8 declaration", async (encoding) => {
+    const xml = `<?xml version="1.0" encoding="${encoding === "utf-8" ? encoding : "utf-16"}"?>${nuspec.replace("A library", "日本語のライブラリ")}`;
+    const bytes = encoding === "utf-8" ? Buffer.from(xml) : Buffer.from(xml, "utf16le");
+    if (encoding === "utf-16be") bytes.swap16();
+    const bom = encoding === "utf-8" ? [0xef, 0xbb, 0xbf] : encoding === "utf-16le" ? [0xff, 0xfe] : [0xfe, 0xff];
+    for (const content of [bytes, Buffer.concat([Buffer.from(bom), bytes])]) {
+      const parsed = await readNugetPackage(blobReader(archive(content)));
+      expect(parsed.metadata.description).toBe("日本語のライブラリ");
+      expect(parsed.nuspec).toContain('encoding="utf-8"');
+    }
+  });
+  it.each([false, true])("rejects malformed UTF-8 bytes (declared: %s)", async (declared) => {
+    const xml = (declared ? '<?xml version="1.0" encoding="utf-8"?>' : "") + nuspec;
+    const [before, after] = xml.split("A library");
+    const bytes = Buffer.concat([Buffer.from(before), Buffer.from([0xc3, 0x28]), Buffer.from(after)]);
+    await expect(readNugetPackage(blobReader(archive(bytes)))).rejects.toThrow("Invalid package manifest encoding");
+  });
+  it.each(["utf-16le", "utf-16be"])("rejects malformed %s code units", async (encoding) => {
+    const xml = '<?xml version="1.0" encoding="utf-16"?>' + nuspec.replace("A library", "\ud800");
+    const bytes = Buffer.from("\ufeff" + xml, "utf16le");
+    if (encoding === "utf-16be") bytes.swap16();
+    await expect(readNugetPackage(blobReader(archive(bytes)))).rejects.toThrow("Invalid package manifest encoding");
+    await expect(readNugetPackage(blobReader(archive(bytes.subarray(0, bytes.length - 1))))).rejects.toThrow("Invalid package manifest encoding");
+  });
+  it.each(["utf-16", "shift_jis", "unknown"])("rejects a mismatched or unsupported %s declaration", async (encoding) => {
+    await expect(readNugetPackage(blobReader(archive(`<?xml version="1.0" encoding="${encoding}"?>${nuspec}`))))
+      .rejects.toThrow("Unsupported or mismatched package manifest encoding");
+  });
   it.each(["1.0.0+linux-x64", "1.0.0-beta.1", "v1.0.0-beta.1+build"])("identifies SemVer 2 features in %s", (version) => {
     expect(requiresNugetSemVer2(version)).toBe(true);
   });

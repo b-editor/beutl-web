@@ -104,7 +104,9 @@ suite("NuGet publication invariants on CockroachDB", () => {
     const semverMigration = await readFile(new URL("../../packages/db/prisma/migrations/20261016000000_nuget_semver_level/migration.sql", import.meta.url), "utf8");
     for (const statement of semverMigration.split(";").filter((s) => s.trim())) await db.$executeRawUnsafe(statement);
     const invalidMigration = await readFile(new URL("../../packages/db/prisma/migrations/20261016010000_nuget_metadata_invalid/migration.sql", import.meta.url), "utf8");
-    await db.$executeRawUnsafe(invalidMigration);
+    for (const statement of invalidMigration.split(";").filter((s) => s.trim())) await db.$executeRawUnsafe(statement);
+    const table = await db.$queryRawUnsafe<{ create_statement: string }[]>('SHOW CREATE TABLE "Release"');
+    expect(table[0].create_statement).toContain("schema_locked = true");
     await db.$executeRawUnsafe(`UPDATE "Package" SET "audience" = 'DEVELOPMENT' WHERE "id" = 'dev'`);
     expect(await db.release.findUniqueOrThrow({ where: { id: "published" } })).toMatchObject({
       artifactLocked: true, version: "v1.0.0+linux-x64", nugetVersion: "1.0.0", nugetSemVer2: true, nugetMetadataInvalid: false,
@@ -141,7 +143,7 @@ suite("NuGet publication invariants on CockroachDB", () => {
       await db.package.delete({ where: { id: "registration" } });
     }
   });
-  it("classifies legacy registration leaves before partitioning pages", async () => {
+  it("classifies legacy flat-container versions and registration leaves before returning them", async () => {
     const name = "Registration.Pages", packageId = "registration-pages";
     const broken = new Set([0, 64, 69]);
     const manifest = (version: string) => `<package><metadata><id>${name}</id><version>${version}</version><authors>Owner</authors><description>SDK</description></metadata></package>`;
@@ -159,10 +161,17 @@ suite("NuGet publication invariants on CockroachDB", () => {
     try {
       await db.release.createMany({ data: Array.from({ length: 70 }, (_, i) => ({
         id: `${packageId}-${String(i).padStart(2, "0")}`, packageId, version: `1.0.${i}`, nugetVersion: `1.0.${i}`,
-        published: true, title: "", description: "", targetVersion: "",
+        published: true, nugetListed: i !== 1, title: "", description: "", targetVersion: "",
         fileId: broken.has(i) ? `${packageId}-broken` : i === 31 ? `${packageId}-semver2` : "original",
         nugetMetadata: broken.has(i) || i === 31 ? Prisma.DbNull : parseNuspec(manifest(`1.0.${i}`)),
       })) });
+      const flatIndex = "https://nuget.test/v3/package/registration.pages/index.json";
+      const expectedFlat = Array.from({ length: 70 }, (_, i) => i).filter((i) => !broken.has(i)).map((i) => `1.0.${i}`);
+      expect(await (await nugetApp.request(flatIndex)).json()).toEqual({ versions: expectedFlat });
+      const flatReads = get.mock.calls.length;
+      expect(flatReads).toBeGreaterThan(0);
+      expect(await (await nugetApp.request(flatIndex)).json()).toEqual({ versions: expectedFlat });
+      expect(get).toHaveBeenCalledTimes(flatReads);
       for (const hive of ["registration-semver1", "registration"]) {
         const expected = Array.from({ length: 70 }, (_, i) => i)
           .filter((i) => !broken.has(i) && (hive === "registration" || i !== 31)).map((i) => `1.0.${i}`);
@@ -306,6 +315,72 @@ suite("NuGet publication invariants on CockroachDB", () => {
       await db.file.delete({ where: { id: prefix } });
       errors.mockRestore();
       packageQueries.mockRestore();
+    }
+  });
+  it("searches the latest USER nuspec without using or overwriting editable store metadata", async () => {
+    const users = ["NuspecSearch.A", "NuspecSearch.C", "NuspecSearch.E"], sdk = "NuspecSearch.B";
+    const names = [...users, sdk];
+    const manifest = (name: string, version: string, word: string) => `<package><metadata><id>${name}</id><version>${version}</version>
+      <authors>Owner</authors><title>${word}Title</title><description>${word}Description</description><tags>${word}Tag</tags></metadata></package>`;
+    const legacy = zipSync({ "Library.nuspec": strToU8(manifest(users[0], "2.0.0", "FreshNuspec")) });
+    const get = vi.fn(async (_key, options) => ({
+      arrayBuffer: async () => legacy.slice(options.range.offset, options.range.offset + options.range.length).buffer,
+    }));
+    setR2BucketProvider(() => ({ get }) as never);
+    await db.$executeRaw`INSERT INTO "File" ("id", "name", "size") VALUES ('nuspec-search', 'legacy.nupkg', ${BigInt(legacy.length)})`;
+    try {
+      for (const name of names) {
+        const audience = name === sdk ? "DEVELOPMENT" : "USER";
+        await db.$executeRaw`INSERT INTO "Package" ("id", "name", "audience", "displayName", "description", "tags")
+          VALUES (${name}, ${name}, ${audience}::"PackageAudience", ${name === sdk ? "FreshNuspecTitle" : "StoreOnlyTitle"},
+            ${name === sdk ? "FreshNuspecDescription" : "StoreOnlyDescription"}, ARRAY[${name === sdk ? "FreshNuspecTag" : "StoreOnlyTag"}])`;
+        for (const version of ["1.0.0", "2.0.0"]) {
+          const word = (version === "2.0.0") !== (name === users[2]) ? "FreshNuspec" : "OldNuspec";
+          await db.release.create({ data: { id: `${name}-${version}`, packageId: name, version, nugetVersion: version,
+            published: true, fileId: "nuspec-search", title: "", description: "", targetVersion: "",
+            nugetMetadata: name === users[0] && version === "2.0.0" ? Prisma.DbNull : parseNuspec(manifest(name, version, word)),
+          } });
+        }
+      }
+      await updateDevPackageDisplay({ packageId: users[0], displayName: "EditedStoreTitle", shortDescription: "Store summary" });
+      await updateDevPackageDescription({ packageId: users[0], description: "EditedStoreDescription" });
+      await updateDevPackageTags({ packageId: users[0], tags: ["EditedStoreTag"] });
+      const search = async (query: string, skip = 0, take = 20, prerelease = false) => {
+        const response = await nugetApp.request(`https://nuget.test/v3/search?${new URLSearchParams({ q: query, skip: String(skip), take: String(take), prerelease: String(prerelease), semVerLevel: "2.0.0" })}`);
+        expect(response.status).toBe(200);
+        return response.json();
+      };
+      for (const query of ["FreshNuspecTitle", "freshnuspecdescription", "FreshNuspecTag"]) {
+        const result = await search(query);
+        expect(result.totalHits).toBe(3);
+        expect(result.data.map((item: { id: string }) => item.id)).toEqual([users[0], sdk, users[1]]);
+        expect(result.data.every((item: { title: string }) => item.title === "FreshNuspecTitle")).toBe(true);
+      }
+      expect(get).toHaveBeenCalled();
+      expect(await search("FreshNuspecTitle", 1, 1)).toMatchObject({ totalHits: 3, data: [{ id: sdk }] });
+      expect(await search("FreshNuspecTitle", 0, 0)).toEqual({ totalHits: 3, data: [] });
+      expect(await search("StoreOnly")).toEqual({ totalHits: 0, data: [] });
+      expect(await search("EditedStore")).toEqual({ totalHits: 0, data: [] });
+      expect(await search(users[2])).toMatchObject({ totalHits: 1, data: [{ id: users[2], title: "OldNuspecTitle" }] });
+      const autocomplete = await (await nugetApp.request("https://nuget.test/v3/autocomplete?q=FreshNuspecTitle&skip=2&take=1&semVerLevel=2.0.0")).json();
+      expect(autocomplete).toEqual({ totalHits: 3, data: [users[1]] });
+      await db.release.update({ where: { id: `${users[0]}-2.0.0` }, data: { nugetListed: false } });
+      expect((await search("FreshNuspecTitle")).totalHits).toBe(2);
+      await db.release.update({ where: { id: `${users[0]}-2.0.0` }, data: { nugetListed: true } });
+      expect((await search("FreshNuspecTitle")).totalHits).toBe(3);
+      const version = "3.0.0-beta.1";
+      await db.release.create({ data: { packageId: users[0], version, nugetVersion: version, nugetSemVer2: true,
+        published: true, fileId: "nuspec-search", title: "", description: "", targetVersion: "",
+        nugetMetadata: parseNuspec(manifest(users[0], version, "PreviewNuspec")),
+      } });
+      expect((await search("FreshNuspecTitle")).totalHits).toBe(3);
+      expect((await search("FreshNuspecTitle", 0, 20, true)).totalHits).toBe(2);
+      expect(await db.package.findUniqueOrThrow({ where: { id: users[0] }, select: { displayName: true, description: true, tags: true } }))
+        .toEqual({ displayName: "EditedStoreTitle", description: "EditedStoreDescription", tags: ["EditedStoreTag"] });
+    } finally {
+      await db.release.deleteMany({ where: { packageId: { in: names } } });
+      await db.package.deleteMany({ where: { id: { in: names } } });
+      await db.file.delete({ where: { id: "nuspec-search" } });
     }
   });
   it("keeps search terms in sync when the highest SDK version is unlisted and relisted", async () => {

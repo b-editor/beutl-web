@@ -42,6 +42,16 @@ async function push(version = "2.0.0") {
 }
 
 describe("NuGet push searchable metadata", () => {
+  it("rejects invalid manifest bytes before reserving an identity or storing the package", async () => {
+    const bytes = Buffer.concat([Buffer.from('<?xml version="1.0" encoding="utf-8"?><package><metadata><id>Library</id><version>2.0.0</version><authors>Author</authors><description>'),
+      Buffer.from([0xc3, 0x28]), Buffer.from('</description></metadata></package>')]);
+    const request = new Request("https://nuget.example/api/v2/package", {
+      method: "PUT", body: new Blob([zipSync({ "Library.nuspec": bytes })]),
+    });
+    await expect(pushNugetPackage(request, "owner")).rejects.toThrow("Invalid package manifest encoding");
+    expect(tx.package.findFirst).not.toHaveBeenCalled();
+    expect(publication.store).not.toHaveBeenCalled();
+  });
   it.each(["USER", "DEVELOPMENT"])("rejects a hidden %s project before storing bytes", async (audience) => {
     tx.package.findFirst.mockResolvedValue({ ...existing, audience, published: false });
     await expect(push()).rejects.toThrow("Publish the project before pushing");
