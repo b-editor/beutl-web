@@ -22,7 +22,7 @@
   "newProject": {
     "title": "Create a new project",
     "packageId": "Package ID",
-    "packageIdDescription": "Only alphanumeric characters, periods, and underscores",
+    "packageIdDescription": "Use letters, numbers, periods, underscores, and hyphens",
     "createFromPackageFile": "Create from package file"
   },
   "forms": {
@@ -42,7 +42,7 @@
     "descriptionMax": "Description must be 1000 characters or fewer",
     "displayNameMax": "Display name must be 50 characters or fewer",
     "idInvalid": "Invalid ID",
-    "packageIdCharacters": "Package ID can only contain alphanumeric characters, periods, and underscores",
+    "packageIdCharacters": "Use letters, numbers, underscores, dots and hyphens in the package ID.",
     "packageIdMax": "Package ID must be 50 characters or fewer",
     "packageIdMin": "Package ID must be at least 3 characters",
     "packageIdTaken": "This package ID is already in use",
@@ -129,7 +129,9 @@
     "title": "Title",
     "version": "Version",
     "packageFileHelp": "Select one or more files. For an extension, select your .nupkg file. For materials or templates, select the media (images, audio, video, fonts) and JSON files — the kind follows the files, so a mix of media and JSON becomes a package carrying both. A template that references a bundled material must name a file that is also among the selected files.",
-    "selectFiles": "Select files"
+    "selectFiles": "Select files",
+    "artifactLocked": "Files cannot be replaced after publication, even after unpublishing. Create a new version to change the package.",
+    "versionReserved": "This version already exists or was previously published. Choose a new version."
   },
   "upload": {
     "title": "Publish materials or templates",
@@ -156,5 +158,35 @@
     "invalidFileName": "One of the selected file names cannot be used in a package. Rename files that contain characters like ':' and try again.",
     "ambiguousFileName": "Two selected material files share the name \"{{name}}\" apart from letter case. Templates match materials by file name regardless of case, so rename one of them and try again.",
     "descriptionRequired": "Enter a description for this release before uploading files. It becomes required package metadata."
+  },
+  "nuget": {
+    "title": "SDK",
+    "description": "Libraries and SDKs referenced with PackageReference.",
+    "audience": "Package audience",
+    "userPackages": "User packages",
+    "userDescription": "Extensions, materials and templates installed in Beutl.",
+    "nupkgRequired": "Upload one .nupkg file for an SDK package.",
+    "search": "Search packages",
+    "searchPlaceholder": "Package name, description or tag",
+    "empty": "No packages found.",
+    "packages": "Packages",
+    "versions": "Versions",
+    "downloads": "Downloads",
+    "previous": "Previous",
+    "next": "Next",
+    "install": "Install",
+    "dependencies": "Dependencies",
+    "noDependencies": "No dependencies.",
+    "readme": "Readme",
+    "authors": "Authors",
+    "published": "Published",
+    "project": "Project website",
+    "license": "License",
+    "download": "Download package",
+    "back": "All SDK packages",
+    "unlisted": "Unlisted",
+    "feed": "NuGet package source",
+    "repository": "Source repository",
+    "details": "Package details"
   }
 }

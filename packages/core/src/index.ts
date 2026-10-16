@@ -215,3 +215,4 @@ export {
 export * from "./storage-management";
 export * from "./git-repositories";
 export * from "./byte-range";
+export * from "./nuget";

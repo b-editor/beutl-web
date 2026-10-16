@@ -1,15 +1,20 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import {
+  buildNuspec,
   createNupkgStream,
   blobStream,
+  fullNugetVersion,
   MATERIAL_TAG,
+  normalizeNugetVersion,
   rewriteTemplateReferences,
   sanitizePayloadPath,
   TEMPLATE_TAG,
 } from "@beutl/core";
 import type { NupkgStreamFile } from "@beutl/core";
 import type { StorageUploadFile } from "@beutl/api/storage/files";
+import { parseNuspec } from "@beutl/api/nuget/archive";
+import type { ReleaseNugetData } from "@beutl/db";
 import type { Translator } from "@beutl/i18n";
 
 const MATERIAL_EXTENSIONS = [
@@ -46,7 +51,7 @@ export async function buildDataPackageNupkgFile({
   description: string;
   username: string;
   t: Translator;
-}): Promise<{ ok: true; file: StorageUploadFile; tags: string[] } | { ok: false; message: string }> {
+}): Promise<{ ok: true; file: StorageUploadFile; tags: string[]; nuget: ReleaseNugetData } | { ok: false; message: string }> {
   const materialFiles: File[] = [];
   const templateFiles: File[] = [];
   for (const file of files) {
@@ -140,7 +145,13 @@ export async function buildDataPackageNupkgFile({
     return { ok: false, message: t("developer:upload.descriptionRequired") };
   }
 
-  const metadata = { id, version, title, description, tags, authors: username };
+  let manifestVersion: string;
+  try { manifestVersion = fullNugetVersion(version); }
+  catch {
+    // Invalid version input uses the same validation response as the archive builder.
+    return { ok: false, message: t("developer:upload.invalidFileName") };
+  }
+  const metadata = { id, version: manifestVersion, title, description, tags, authors: username };
   const stream = () => createNupkgStream(metadata, nupkgFiles);
   // Count a streamed first pass to reserve the exact stored size before upload.
   // Subsequent passes reuse immutable inputs and deterministic ZIP metadata.
@@ -161,6 +172,6 @@ export async function buildDataPackageNupkgFile({
     }
   } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
   return { ok: true, file: {
-    name: `${id}.${version}.nupkg`, type: "application/octet-stream", size, stream, sha256: hash.digest("hex"),
-  }, tags };
+    name: `${id}.${normalizeNugetVersion(manifestVersion)}.nupkg`, type: "application/octet-stream", size, stream, sha256: hash.digest("hex"),
+  }, tags, nuget: { nuspec: buildNuspec({ ...metadata, files: [] }), metadata: parseNuspec(buildNuspec({ ...metadata, files: [] })), readme: null } };
 }

@@ -1,13 +1,12 @@
 "use server";
 
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
-import type { ActionResult, PackageType } from "@beutl/core";
-import { applyPackageType, getPackageType } from "@beutl/core";
+import { applyPackageType, isValidNugetVersion, type ActionResult } from "@beutl/core";
+import { InvalidNugetPackageError, readNugetPackage, storedPackageReader } from "@beutl/api/nuget/archive";
+import { refreshNugetPackageMetadata, ReleaseArtifactLockedError, ReleaseIdentityConflictError } from "@beutl/db";
 import { authenticated } from "@/lib/auth-guard";
-import { buildDataPackageNupkgFile } from "@/lib/data-package";
 import {
   getPackageNameFromPackageId,
-  getProfileByUserId,
   retrieveDevPackageByName,
   startTransaction,
   deleteUnreferencedFileWithStorageCleanup,
@@ -25,7 +24,7 @@ import {
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
 import { revalidatePath } from "next/cache";
-import SemVer from "semver";
+import { prepareReleaseArtifact } from "./release-artifact";
 import {
   createDedicatedFile,
   releaseSchema,
@@ -62,174 +61,159 @@ export async function updateRelease(
     }
 
     return await sameUser(release.packageId, session.user.id, t, async () => {
-      // Only the kind is decided here; it is merged into the package's visible tags
-      // inside the write transaction, so a tag edit landing meanwhile is not discarded.
-      let packageType: PackageType | undefined;
-
-      const packageName = await getPackageNameFromPackageId({
-        packageId: release.packageId,
-      });
-      if (!packageName) {
-        return { success: false, message: t("developer:errors.idNotFound") };
+      const uploaded = formData.getAll("file").filter((f): f is File => typeof f !== "string" && f.size > 0);
+      if (uploaded.length && (release.artifactLocked || release.published)) {
+        return { success: false, message: t("developer:release.artifactLocked") };
       }
+      if (release.package.audience === "USER" && !validated.data.targetVersion) {
+        return { success: false, message: t("developer:validation.versionInvalid") };
+      }
+      try {
+        const packageName = await getPackageNameFromPackageId({
+          packageId: release.packageId,
+        });
+        if (!packageName) {
+          return { success: false, message: t("developer:errors.idNotFound") };
+        }
 
-      // Audit the visibility transition separately; publication rechecks ownership
-      // in the File transaction before changing the release.
-      const { published: oldPublished } = await getReleasePublishedByIdOrThrow({
-        id: validated.data.id,
-      });
-
-      const publishRelease = async (
-        tx: PrismaTransaction,
-        replacementFileId?: string,
-      ): Promise<ReleaseRecord> => {
-        const current = await getReleaseWithFileById({
+        // Audit the visibility transition separately; publication rechecks ownership
+        // in the File transaction before changing the release.
+        const { published: oldPublished } = await getReleasePublishedByIdOrThrow({
           id: validated.data.id,
-          prisma: tx,
-        });
-        const devPackage = await retrieveDevPackageByName({
-          name: packageName,
-          userId: session.user.id,
-          prisma: tx,
-        });
-        if (!current || current.packageId !== release.packageId || !devPackage) {
-          throw new Error("Release ownership changed before publication");
-        }
-        const fileId = replacementFileId ?? current.file?.id;
-        if (validated.data.published === "on" && !fileId) {
-          throw new ReleaseFileRequiredError();
-        }
-
-        const replacedFileId =
-          replacementFileId &&
-          current.file?.id !== replacementFileId &&
-          current.file?.userId === session.user.id
-            ? current.file.id
-            : undefined;
-        const updated = await updateReleaseRecord({
-          id: validated.data.id,
-          title: validated.data.title,
-          description: validated.data.description,
-          targetVersion: validated.data.targetVersion,
-          published: validated.data.published === "on",
-          fileId,
-          prisma: tx,
         });
 
-        if (packageType) {
-          await updateDevPackageTags({
-            packageId: release.packageId,
-            tags: applyPackageType(devPackage.tags, packageType),
-            prisma: tx,
-          });
-        }
-        if (replacedFileId) {
-          await deleteUnreferencedFileWithStorageCleanup({
-            fileId: replacedFileId,
-            userId: session.user.id,
-            prisma: tx,
-          });
-        }
-        return updated;
-      };
-
-      const uploaded = formData.getAll("file") as File[];
-      let data: ReleaseRecord;
-      const singleNupkg =
-        uploaded.length === 1 && uploaded[0].name.toLowerCase().endsWith(".nupkg");
-
-      if (singleNupkg) {
-        // A lone .nupkg is an extension release; drop any data markers a previous
-        // upload may have left so the store stops classifying it as a data package.
-        packageType = "extension";
-
-        let published: ReleaseRecord | undefined;
-        const result = await createDedicatedFile(
-          session.user.id,
-          uploaded[0],
-          t,
-          async (tx, record) => {
-            published = await publishRelease(tx, record.id);
-          },
-        );
-        if (!result.success) {
-          return {
-            success: result.success,
-            message: result.message,
-          };
-        }
-
-        if (!published) {
-          throw new Error("Release artifact publication did not return a result");
-        }
-        data = published;
-      } else if (uploaded.length > 0) {
-        const profile = await getProfileByUserId(session.user.id);
-        const username = profile?.userName || session.user.name || session.user.id;
-
-        const built = await buildDataPackageNupkgFile({
+        const prepared = uploaded.length > 0 ? await prepareReleaseArtifact({
           files: uploaded,
+          audience: release.package.audience,
           id: packageName,
           version: release.version,
           title: validated.data.title,
           description: validated.data.description,
-          username,
+          user: session.user,
           t,
-        });
-        if (!built.ok) {
-          return { success: false, message: built.message };
-        }
+        }) : undefined;
+        if (prepared && !prepared.ok) return { success: false, message: prepared.message };
+        const artifact = prepared?.artifact;
 
-        packageType = getPackageType(built.tags);
+        const publishRelease = async (
+          tx: PrismaTransaction,
+          replacementFileId?: string,
+        ): Promise<ReleaseRecord> => {
+          const current = await getReleaseWithFileById({
+            id: validated.data.id,
+            prisma: tx,
+          });
+          const devPackage = await retrieveDevPackageByName({
+            name: packageName,
+            userId: session.user.id,
+            prisma: tx,
+          });
+          if (!current || current.packageId !== release.packageId || !devPackage) {
+            throw new Error("Release ownership changed before publication");
+          }
+          const fileId = replacementFileId ?? current.file?.id;
+          if (validated.data.published === "on" && !fileId) {
+            throw new ReleaseFileRequiredError();
+          }
+          // Migrated drafts were not backfilled. Validate the retained file
+          // from this transaction's snapshot before reserving and locking it.
+          const nuget = artifact?.nuget ?? (validated.data.published === "on" &&
+            !current.published && !current.artifactLocked && !current.nugetMetadata && current.file
+            ? await readNugetPackage(storedPackageReader(current.file.objectKey, Number(current.file.size)),
+              { id: packageName, version: current.version }) : undefined);
 
-        let published: ReleaseRecord | undefined;
-        const result = await createDedicatedFile(
-          session.user.id,
-          built.file,
-          t,
-          async (tx, record) => {
-            published = await publishRelease(tx, record.id);
-          },
-        );
-        if (!result.success) {
-          return { success: false, message: result.message };
-        }
+          const replacedFileId =
+            replacementFileId &&
+            current.file?.id !== replacementFileId &&
+            current.file?.userId === session.user.id
+              ? current.file.id
+              : undefined;
+          const updated = await updateReleaseRecord({
+            id: validated.data.id,
+            title: validated.data.title,
+            description: validated.data.description,
+            targetVersion: validated.data.targetVersion,
+            published: validated.data.published === "on",
+            fileId,
+            nuget,
+            prisma: tx,
+          });
 
-        if (!published) {
-          throw new Error("Release artifact publication did not return a result");
-        }
-        data = published;
-      } else {
-        try {
+          await refreshNugetPackageMetadata(tx, { id: release.packageId, audience: current.package.audience });
+
+          // Merge the upload's kind into the current tags so concurrent edits survive.
+          if (artifact?.packageType) {
+            await updateDevPackageTags({
+              packageId: release.packageId,
+              tags: applyPackageType(devPackage.tags, artifact.packageType),
+              prisma: tx,
+            });
+          }
+          if (replacedFileId) {
+            await deleteUnreferencedFileWithStorageCleanup({
+              fileId: replacedFileId,
+              userId: session.user.id,
+              prisma: tx,
+            });
+          }
+          return updated;
+        };
+
+        let data: ReleaseRecord;
+        if (artifact) {
+          let published: ReleaseRecord | undefined;
+          const result = await createDedicatedFile(
+            session.user.id,
+            artifact.file,
+            t,
+            async (tx, record) => {
+              published = await publishRelease(tx, record.id);
+            },
+          );
+          if (!result.success) {
+            return {
+              success: result.success,
+              message: result.message,
+            };
+          }
+
+          if (!published) {
+            throw new Error("Release artifact publication did not return a result");
+          }
+          data = published;
+        } else {
           data = await startTransaction((tx) => publishRelease(tx));
-        } catch (error) {
-          if (!(error instanceof ReleaseFileRequiredError)) throw error;
-          return { success: false, message: t("developer:errors.fileNotFound") };
         }
-      }
 
-      await addAuditLog({
-        userId: session.user.id,
-        action: auditLogActions.developer.updateRelease,
-        details: `releaseId: ${data.id}`,
-      });
-      if (oldPublished !== data.published) {
         await addAuditLog({
           userId: session.user.id,
-          action: data.published
-            ? auditLogActions.developer.publishRelease
-            : auditLogActions.developer.unpublishRelease,
+          action: auditLogActions.developer.updateRelease,
           details: `releaseId: ${data.id}`,
         });
+        if (oldPublished !== data.published) {
+          await addAuditLog({
+            userId: session.user.id,
+            action: data.published
+              ? auditLogActions.developer.publishRelease
+              : auditLogActions.developer.unpublishRelease,
+            details: `releaseId: ${data.id}`,
+          });
+        }
+
+        const name = await getPackageNameFromPackageId({ packageId: release.packageId });
+        revalidatePath(`/${lang}/dashboard/developer/projects/${name}`);
+
+        return {
+          success: true,
+          data,
+        };
+      } catch (error) {
+        if (error instanceof ReleaseFileRequiredError) return { success: false, message: t("developer:errors.fileNotFound") };
+        if (error instanceof ReleaseArtifactLockedError) return { success: false, message: t("developer:release.artifactLocked") };
+        if (error instanceof ReleaseIdentityConflictError) return { success: false, message: t("developer:release.versionReserved") };
+        if (error instanceof InvalidNugetPackageError) return { success: false, message: error.message };
+        throw error;
       }
-
-      const name = await getPackageNameFromPackageId({ packageId: release.packageId });
-      revalidatePath(`/${lang}/dashboard/developer/projects/${name}`);
-
-      return {
-        success: true,
-        data,
-      };
     });
   });
 }
@@ -245,32 +229,39 @@ export async function createRelease({
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
     return await sameUser(packageId, session.user.id, t, async () => {
-      if (SemVer.valid(version) === null) {
+      if (!isValidNugetVersion(version)) {
         return {
           success: false,
           message: t("developer:validation.versionInvalid"),
         };
       }
 
-      const release = await createReleaseRecord({
-        packageId,
-        version,
-        title: t("developer:release.defaultTitle"),
-        description: "",
-        targetVersion: "1.0.0-preview.10",
-        published: false,
-      });
-      await addAuditLog({
-        userId: session.user.id,
-        action: auditLogActions.developer.createRelease,
-        details: `packageId: ${packageId}, releaseId: ${release.id}, version: ${version}`,
-      });
-      const name = await getPackageNameFromPackageId({ packageId });
-      revalidatePath(`/${lang}/dashboard/developer/projects/${name}`);
-      return {
-        success: true,
-        data: release,
-      };
+      try {
+        const release = await createReleaseRecord({
+          packageId,
+          version,
+          title: t("developer:release.defaultTitle"),
+          description: "",
+          targetVersion: "1.0.0-preview.10",
+          published: false,
+        });
+        await addAuditLog({
+          userId: session.user.id,
+          action: auditLogActions.developer.createRelease,
+          details: `packageId: ${packageId}, releaseId: ${release.id}, version: ${version}`,
+        });
+        const name = await getPackageNameFromPackageId({ packageId });
+        revalidatePath(`/${lang}/dashboard/developer/projects/${name}`);
+        return {
+          success: true,
+          data: release,
+        };
+      } catch (error) {
+        if (error instanceof ReleaseIdentityConflictError || (typeof error === "object" && error !== null && "code" in error && error.code === "P2002")) {
+          return { success: false, message: t("developer:release.versionReserved") };
+        }
+        throw error;
+      }
     });
   });
 }

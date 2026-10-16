@@ -121,13 +121,13 @@ describe("retrievePackages type filtering", () => {
   it("does not constrain tags when no type is given", async () => {
     await retrievePackages(undefined, undefined);
 
-    expect(whereOf(0)).toEqual({ published: true });
+    expect(whereOf(0)).toEqual({ published: true, audience: "USER" });
   });
 
   it("does not constrain tags for the all filter", async () => {
     await retrievePackages(undefined, undefined, "all");
 
-    expect(whereOf(0)).toEqual({ published: true });
+    expect(whereOf(0)).toEqual({ published: true, audience: "USER" });
   });
 
   it("requires the reserved tag for a data package filter", async () => {
@@ -135,6 +135,7 @@ describe("retrievePackages type filtering", () => {
 
     expect(whereOf(0)).toEqual({
       published: true,
+      audience: "USER",
       tags: { has: TEMPLATE_TAG },
     });
   });
@@ -144,6 +145,7 @@ describe("retrievePackages type filtering", () => {
 
     expect(whereOf(0)).toEqual({
       published: true,
+      audience: "USER",
       NOT: { tags: { hasSome: [MATERIAL_TAG, TEMPLATE_TAG] } },
     });
   });

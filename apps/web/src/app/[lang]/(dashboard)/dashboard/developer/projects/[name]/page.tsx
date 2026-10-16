@@ -45,16 +45,16 @@ export default async function Page(props: {
       <div className="max-w-5xl mx-auto py-10 lg:py-6 px-4 lg:px-6 bg-card lg:rounded-lg border text-card-foreground lg:my-4">
         <PackageInfoForm pkg={pkg} lang={lang} />
 
-        <ScreenshotForm pkg={pkg} lang={lang} />
+        {pkg.audience === "USER" && <ScreenshotForm pkg={pkg} lang={lang} />}
 
         <div className="flex max-lg:flex-col mt-6">
           <div className="lg:basis-2/3 lg:pr-6">
-            <PackageDescriptionForm pkg={pkg} lang={lang} />
+            {pkg.audience === "USER" && <PackageDescriptionForm pkg={pkg} lang={lang} />}
             <ReleaseForm pkg={pkg} lang={lang} beutlVersions={beutlVersions} />
           </div>
           <div className="lg:basis-1/3">
             <PackageDetailsForm pkg={pkg} lang={lang} />
-            {isAdminUser && <PackagePricingForm pkg={pkg} lang={lang} />}
+            {isAdminUser && pkg.audience === "USER" && <PackagePricingForm pkg={pkg} lang={lang} />}
           </div>
         </div>
       </div>

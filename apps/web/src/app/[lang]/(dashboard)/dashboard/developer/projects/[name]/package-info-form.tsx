@@ -154,21 +154,21 @@ export function PackageInfoForm({
               )}
             </Button>
 
-            <div className="flex-1">
-              <h2 className={cn("font-bold text-2xl", edit && "hidden")}>
+            <div className="flex-1 min-w-0">
+              <h2 className={cn("font-bold text-2xl break-words", edit && "hidden")}>
                 {pkg.displayName || pkg.name}
               </h2>
-              <Input
+              {pkg.audience === "USER" && <Input
                 className={cn(!edit && "hidden")}
                 value={displayName}
                 type="text"
                 placeholder={t("developer:forms.displayNamePlaceholder")}
                 onChange={(e) => setDisplayName(e.target.value)}
-              />
+              />}
               {state?.errors?.displayName && (
                 <ErrorDisplay errors={state.errors.displayName} />
               )}
-              <p className="text-muted-foreground text-sm font-medium">
+              <p className="text-muted-foreground text-sm font-medium break-all">
                 {pkg.name}
               </p>
             </div>
@@ -176,9 +176,9 @@ export function PackageInfoForm({
 
           {!edit && (
             <div className="flex gap-2">
-              <Button variant="ghost" size="icon" onClick={() => setEdit(true)}>
+              {pkg.audience === "USER" && <Button variant="ghost" size="icon" aria-label={t("developer:common.edit")} onClick={() => setEdit(true)}>
                 <Edit className="w-4 h-4" />
-              </Button>
+              </Button>}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="icon" disabled={pendingActions}>
@@ -211,11 +211,11 @@ export function PackageInfoForm({
       <p className={cn("mt-4 text-foreground/70", edit && "hidden")}>
         {pkg.shortDescription}
       </p>
-      <Input
+      {pkg.audience === "USER" && <Input
         className={cn("mt-4", !edit && "hidden")}
         value={shortDescription}
         onChange={(e) => setShortDescription(e.target.value)}
-      />
+      />}
       {state?.errors?.shortDescription && (
         <ErrorDisplay errors={state.errors.shortDescription} />
       )}

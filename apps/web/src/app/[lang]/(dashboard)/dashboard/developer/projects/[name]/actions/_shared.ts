@@ -37,7 +37,7 @@ const releaseSchema = (t: Translator) =>
     targetVersion: z
       .string()
       .refine(
-        (v) => SemVer.valid(v) || isValidNuGetVersionRange(v),
+        (v) => v === "" || SemVer.valid(v) || isValidNuGetVersionRange(v),
         t("developer:validation.versionInvalid"),
       ),
     published: z

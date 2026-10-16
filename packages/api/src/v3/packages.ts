@@ -1,14 +1,18 @@
+import { nugetFileUrl } from "../nuget/tickets";
 import { Hono } from "hono";
 import { getUserId } from "../api/auth";
 import { apiErrorResponse } from "../api/error";
 import { guessCurrency } from "../currency";
 import { getPackage, mapPackage } from "../api/packages-db";
-import { getContentUrl } from "../content-url";
 import { findPackageBasicByName } from "@beutl/db";
 import { findReleaseByPackageAndVersion, findReleasesForPackage } from "@beutl/db";
-import { SemVer } from "semver";
+import { compareNugetVersions } from "@beutl/core";
 
 const app = new Hono()
+  .use("*", async (c, next) => {
+    c.header("Cache-Control", "private, no-store");
+    await next();
+  })
   .get("/:name", async (c) => {
     const name = c.req.param("name");
     const userId = await getUserId(c);
@@ -57,7 +61,7 @@ const app = new Hono()
       published,
     });
     releases.sort((a, b) => {
-      return new SemVer(b.version).compare(a.version);
+      return compareNugetVersions(b.version, a.version);
     });
 
     return c.json(await Promise.all(
@@ -68,7 +72,7 @@ const app = new Hono()
         description: r.description,
         targetVersion: r.targetVersion,
         fileId: r.fileId,
-        fileUrl: await getContentUrl(r.fileId, c.req.raw),
+        fileUrl: r.fileId ? await nugetFileUrl(r.fileId, userId) : null,
       })),
     ));
   })
@@ -107,7 +111,7 @@ const app = new Hono()
       description: release.description,
       targetVersion: release.targetVersion,
       fileId: release.fileId,
-      fileUrl: await getContentUrl(release.fileId, c.req.raw),
+      fileUrl: release.fileId ? await nugetFileUrl(release.fileId, userId) : null,
     });
   });
 

@@ -1,7 +1,7 @@
 # Deployment configuration
 
 This document records configuration and operational requirements shared by the
-three Cloudflare Workers. The public Web app and desktop APIs deploy together
+four Cloudflare Workers. The public Web app and desktop APIs deploy together
 as `beutl-web`; `packages/api` has no independent deployment. Worker routes and deploy commands are listed in the
 root [README](../README.md#deployment).
 
@@ -10,6 +10,7 @@ root [README](../README.md#deployment).
 Cloudflare bindings are declared alongside each deployable application:
 
 - Web and public API: [`apps/web/wrangler.jsonc`](../apps/web/wrangler.jsonc)
+- NuGet API: [`apps/nuget-server/wrangler.jsonc`](../apps/nuget-server/wrangler.jsonc)
 - Private image edit: [`apps/image-worker/wrangler.jsonc`](../apps/image-worker/wrangler.jsonc)
 - Admin: [`apps/admin/wrangler.jsonc`](../apps/admin/wrangler.jsonc)
 
@@ -22,7 +23,7 @@ commit secret values.
 `JWT_SECRET`, `JWT_ISSUER`, and `JWT_AUDIENCE` belong to the Web Worker, which
 both issues and validates desktop JWTs. Public versioned APIs, Git Durable
 Objects and all scheduled reconcilers use the Web deployment and bindings.
-Do not add a separate API Worker or route public APIs away from Web.
+Desktop APIs remain on Web. NuGet protocol endpoints have their own Worker.
 
 The private image-edit Worker has a separate JWT signing key. Set the same
 new random value as `AI_IMAGE_WORKER_JWT_SECRET` on `beutl-web` and
@@ -33,6 +34,94 @@ public route or workers.dev URL. Its database Hyperdrive, R2 binding, storage
 configuration, and `OPENROUTER_API_KEY` / `VERCEL_AI_GATEWAY_API_KEY` secrets
 must address the same production resources as Web before the Web service
 binding is deployed. Other Web/API routes retain their existing behavior.
+
+## NuGet registry deployment
+
+Apply `20261013000000_nuget_registry`, `20261016000000_nuget_semver_level`, and
+`20261016010000_nuget_metadata_invalid` before deploying the new application
+code. These include the SemVer 2 backfill and the invalid-metadata flag used by
+catalog queries. Complete the [metadata backfill](../README.md#nuget-packages)
+before the manual cutover.
+The migration locks only currently published Web releases and reserves those
+version identities. It refuses package IDs that differ only by case; resolve
+such IDs manually. Retain the `Package_name_lower_key` SQL expression index in
+later schema changes. No old NuGet data or credentials are imported.
+
+The preflight also rejects historical IDs outside the NuGet ID syntax, including
+leading dots and repeated separators. Find them on the old schema with:
+
+```sql
+SELECT "id", "name" FROM "Package"
+WHERE length("name") > 100 OR "name" !~ '^[A-Za-z0-9_]+([._-][A-Za-z0-9_]+)*$';
+```
+
+Choose an unused valid ID for each affected project. If its artifacts already
+declare that valid nuspec ID, update `Package.name` to match it, retaining the
+row's `id` and ownership. Otherwise publish corrected artifacts under a valid
+project ID through the old dashboard, then remove the obsolete project before
+retrying. Renaming the database row alone cannot fix an invalid nuspec ID.
+
+Historical versions must also fit NuGet's 128-character limit and numeric
+component range (0–2147483647). The preflight rejects unsupported versions before
+changing the schema. Find affected releases on the old schema with:
+
+```sql
+SELECT "id", "packageId", "version" FROM "Release"
+WHERE CASE
+  WHEN length("version") > 128 OR "version" !~ '^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' THEN true
+  ELSE split_part(regexp_replace("version", '^v', ''), '.', 1)::DECIMAL > 2147483647
+    OR split_part("version", '.', 2)::DECIMAL > 2147483647
+    OR split_part(split_part(split_part("version", '.', 3), '-', 1), '+', 1)::DECIMAL > 2147483647
+END;
+```
+
+Publish a corrected artifact with a supported version through the old dashboard,
+then remove the unsupported release and retry. If the artifact already declares
+a supported version, correct the release row to match it after checking for
+collisions. Changing the database version cannot repair an unsupported nuspec.
+
+Before changing the schema, it also rejects duplicate release identities,
+including drafts, `v` prefixes, build metadata and prerelease casing. Inspect
+collisions on the old schema with:
+
+```sql
+SELECT "packageId", lower(regexp_replace(split_part("version", '+', 1), '^v', '')) AS identity,
+       array_agg("id") AS release_ids, array_agg("version") AS versions
+FROM "Release"
+GROUP BY "packageId", identity
+HAVING count(*) > 1;
+```
+
+For each collision, choose the release and artifact to retain. Use the old
+dashboard to remove redundant releases; if artifacts differ, publish the other
+artifact under a distinct version before removing its conflicting release.
+Unpublishing alone does not remove the collision. The migration does not delete
+or choose artifacts automatically. If Prisma recorded the preflight as failed,
+resolve the data first, mark `20261013000000_nuget_registry` as rolled back with
+`prisma migrate resolve --rolled-back`, and retry the migration. The migration
+backfills canonical `nugetVersion` values while retaining original display versions.
+Once any version has been published, its package ID stays permanently reserved
+even if the project or account is deleted.
+
+Configure `beutl-nuget-server` with the same Hyperdrive and object storage as Web.
+Set an identical, new random `NUGET_DOWNLOAD_SECRET` on Web and NuGet. This signs
+120-second, file-bound browser download tickets. Also copy the Web desktop
+`JWT_SECRET`, `JWT_ISSUER` and `JWT_AUDIENCE` to NuGet for existing desktop clients;
+do not copy the image Worker's separate JWT credentials.
+
+Deploy NuGet before Web, and switch `nuget.beditor.net` to the new Worker during
+the manually managed cutover. The CI deploy order includes NuGet before Web.
+The NuGet Wrangler configuration intentionally omits routes. At cutover, remove
+any conflicting DNS record or previous Worker domain attachment, then attach
+`nuget.beditor.net` to `beutl-nuget-server` in Cloudflare's Domains & Routes settings.
+Automatic deployments leave this manually managed domain attachment unchanged.
+The NuGet Worker serves no HTML. SDK packages appear in the Web store's **SDK**
+filter with `type=development`; their details live at `/[lang]/packages/[name]`.
+`NUGET_PUBLIC_ORIGIN` defaults to `https://nuget.beditor.net`; for local testing,
+set it to the local NuGet Worker URL in both applications. Configure
+`CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_BEUTL_DATABASE_HYPERDRIVE` for
+local database access. Production deployment and data movement are separate
+operational steps, not part of a dry-run build.
 
 ## First hosted Git deployment
 
@@ -76,7 +165,7 @@ Git/LFS uses the same `BEUTL_S3_*` configuration and private bucket as
 File/AI storage. Its lifecycle rules must preserve referenced Git/LFS versions.
 
 User files and AI outputs live in one object store used by the Web Worker's
-UI, public APIs and scheduled reconcilers. The admin and private image Workers
+UI, public APIs and scheduled reconcilers. The admin, NuGet and private image Workers
 use the same bucket. The admin Worker takes the same configuration so that
 `/admin/storage` can show where each file's object lives and move it.
 
@@ -89,7 +178,7 @@ use the same bucket. The admin Worker takes the same configuration so that
 
 ### S3 compatible storage
 
-Set `BEUTL_STORAGE_PROVIDER=s3` on all three Workers (Web/API, admin,
+Set `BEUTL_STORAGE_PROVIDER=s3` on all four Workers (Web/API, admin, NuGet,
 and private image edit) together with:
 
 - `BEUTL_S3_ENDPOINT`: the service URL, for example `https://s3.example.com`,

@@ -20,7 +20,7 @@ import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import SemVer from "semver";
+import { compareNugetVersions } from "@beutl/core";
 import {
   createDedicatedFile,
   displayNameAndShortDescriptionSchema,
@@ -105,7 +105,7 @@ export async function retrievePackage(name: string) {
     return null;
   }
   pkg.Release.sort((a, b) => {
-    return new SemVer.SemVer(b.version).compare(a.version);
+    return compareNugetVersions(b.version, a.version);
   });
   const screenshots = await Promise.all(
     pkg.PackageScreenshot.map(async (item) => {

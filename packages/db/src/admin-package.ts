@@ -1,3 +1,6 @@
+import { reservePublishedReleaseIdentity } from "./release";
+import { refreshNugetPackageMetadata } from "./nuget-package";
+import { startRetryableTransaction } from "./transaction";
 import { getDb } from "./provider";
 import { profileDisplayName } from "@beutl/core";
 import type { PrismaTransaction } from "./transaction";
@@ -163,29 +166,27 @@ export async function setReleasePublishedByAdmin({
   published: boolean;
   prisma?: PrismaTransaction;
 }): Promise<
-  | { packageId: string; version: string; changed: boolean; missingFile: boolean }
+  | { packageId: string; version: string; changed: boolean; missingFile: boolean; requiresUpload?: boolean }
   | null
 > {
-  const db = prisma ?? await getDb();
-  // ファイルの無いリリースを公開すると、ライブラリが取得できない版を最新として配る。
-  // 公開はファイルが付いている行に限り、取り下げは常に許す。
-  const updated = await db.release.updateMany({
-    where: {
-      id: releaseId,
-      published: !published,
-      ...(published ? { fileId: { not: null } } : {}),
-    },
-    data: { published },
-  });
-  const release = await db.release.findUnique({
-    where: { id: releaseId },
-    select: { packageId: true, version: true, published: true, fileId: true },
-  });
-  if (!release) return null;
-  return {
-    packageId: release.packageId,
-    version: release.version,
-    changed: updated.count === 1,
-    missingFile: published && !release.published && release.fileId === null,
+  const run = async (db: PrismaTransaction) => {
+    const release = await db.release.findUnique({ where: { id: releaseId },
+      select: { id: true, packageId: true, version: true, published: true, artifactLocked: true,
+        nugetMetadata: true, fileId: true, package: { select: { audience: true } } } });
+    if (!release) return null;
+    const missingFile = published && release.fileId === null;
+    // Migrated drafts were not validated by the backfill. Moderation cannot
+    // reserve or lock their artifacts until an upload has indexed the nuspec.
+    if (published && !missingFile && !release.published && !release.artifactLocked && !release.nugetMetadata) {
+      return { packageId: release.packageId, version: release.version, changed: false, missingFile: false, requiresUpload: true };
+    }
+    const changed = !missingFile && release.published !== published;
+    if (!missingFile && published) await reservePublishedReleaseIdentity(db, release);
+    if (changed) {
+      await db.release.update({ where: { id: releaseId }, data: { published, ...(published ? { artifactLocked: true } : {}) } });
+      await refreshNugetPackageMetadata(db, { id: release.packageId, audience: release.package.audience });
+    }
+    return { packageId: release.packageId, version: release.version, changed, missingFile };
   };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
 }

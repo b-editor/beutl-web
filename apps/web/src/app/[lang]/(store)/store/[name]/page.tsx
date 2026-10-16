@@ -2,7 +2,7 @@ import { ClientPage } from "./components";
 import { cache } from "react";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { SemVer } from "semver";
+import { compareNugetVersions } from "@beutl/core";
 import { auth } from "@/lib/better-auth";
 import { guessCurrency } from "@/lib/currency";
 import { selectPricing } from "@beutl/core";
@@ -64,7 +64,7 @@ export default async function Page(props: Props) {
     notFound();
   }
   pkg.Release.sort((a, b) => {
-    return new SemVer(b.version).compare(a.version);
+    return compareNugetVersions(b.version, a.version);
   });
   const currencyP = guessCurrency();
   const prices = await retrievePrices(pkg.id);

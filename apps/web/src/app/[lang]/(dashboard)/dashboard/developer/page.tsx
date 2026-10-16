@@ -17,19 +17,14 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-2xl font-bold">{t("developer:portal.title")}</h1>
-        <div className="flex gap-2">
-          <Button asChild>
-            <Link
-              href={`/${lang}/dashboard/developer/new/project`}
-              prefetch={false}
-            >
-              {t("developer:portal.createNewExtension")}
-            </Link>
-          </Button>
-          <Button variant="outline" disabled>
-            {t("developer:portal.documentation")}
-          </Button>
-        </div>
+        <Button asChild>
+          <Link
+            href={`/${lang}/dashboard/developer/new/project`}
+            prefetch={false}
+          >
+            {t("developer:portal.createNewExtension")}
+          </Link>
+        </Button>
       </div>
 
       <div className="flex flex-col">
@@ -67,7 +62,8 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
                         <div className="w-10 h-10 rounded-md bg-secondary" />
                       )}
                     </div>
-                    <div className="mt-4 flex gap-2">
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <Badge variant="outline">{t(item.audience === "DEVELOPMENT" ? "developer:nuget.title" : "developer:nuget.userPackages")}</Badge>
                       {item.latestVersion && (
                         <Badge variant="secondary">{item.latestVersion}</Badge>
                       )}

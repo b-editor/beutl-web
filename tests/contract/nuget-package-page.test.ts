@@ -1,0 +1,114 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderToReadableStream, renderToStaticMarkup } from "../../apps/web/node_modules/react-dom/server";
+import Page from "../../apps/web/src/app/[lang]/(main)/packages/[name]/page";
+import StorePage from "../../apps/web/src/app/[lang]/(store)/store/page";
+import { DevelopmentPackages } from "../../apps/web/src/app/[lang]/(store)/store/development-packages";
+import { parseNuspec } from "../../packages/api/src/nuget/archive";
+import { findNugetPackage, findNugetPackageVersions, searchNugetPackages, tryReleaseMetadata } from "@beutl/api/nuget/catalog";
+import { retrievePackages } from "@/lib/store-utils";
+
+vi.mock("@/lib/store-utils", () => ({ retrievePackages: vi.fn(async () => []) }));
+vi.mock("@beutl/api/nuget/catalog", async (original) => {
+  const actual = await original<typeof import("@beutl/api/nuget/catalog")>();
+  return { ...actual, findNugetPackage: vi.fn(async () => ({ name: "Sample.Library", Release: [release] })),
+    findNugetPackageVersions: vi.fn(async () => ({ name: "Sample.Library", Release: [release] })),
+    searchNugetPackages: vi.fn(async () => ({ packages: [{ id: "pkg", name: "Sample.Library", Release: [release] }], totalHits: 1 })),
+    catalogMetadata: vi.fn(async () => parseNuspec(manifest)),
+    tryReleaseMetadata: vi.fn(async () => ({ metadata: parseNuspec(manifest), readme: null })) };
+});
+const manifest = `<package><metadata><id>Sample.Library</id><version>1.0.0</version><title>Sample SDK</title>
+  <authors>Example</authors><description>A sample SDK package.</description><tags>sdk</tags></metadata></package>`;
+const release = { id: "release", version: "1.0.0", nugetListed: true, createdAt: new Date("2026-10-01"), downloads: 10n };
+
+beforeEach(() => vi.clearAllMocks());
+afterEach(() => vi.unstubAllEnvs());
+
+describe("SDK package installation links", () => {
+  it.each(["ja", "en"])("normalizes repeated store query parameters before search and pagination (%s)", async (lang) => {
+    for (const query of [["a", "b"], undefined, "Sample"]) {
+      vi.mocked(searchNugetPackages).mockResolvedValueOnce({ packages: [{ id: "pkg", name: "Sample.Library", Release: [release] }], totalHits: 42 } as never);
+      const element = await StorePage({ params: Promise.resolve({ lang }),
+        searchParams: Promise.resolve({ type: "development", query, page: "2" }) });
+      const html = await new Response(await renderToReadableStream(element)).text();
+      const expectedQuery = typeof query === "string" ? query : "";
+      expect(searchNugetPackages).toHaveBeenLastCalledWith(expect.objectContaining({ query: expectedQuery, skip: 20, take: 20 }));
+      expect(html).toContain(`name="query" value="${expectedQuery}"`);
+      expect(html).toContain(`href="/${lang}/store?type=development&amp;query=${expectedQuery}&amp;page=3"`);
+      expect(html).not.toContain("a%2Cb");
+      if (Array.isArray(query) && process.env.BEUTL_NUGET_PREVIEW) {
+        const directory = process.env.BEUTL_NUGET_PREVIEW;
+        mkdirSync(directory, { recursive: true });
+        writeFileSync(`${directory}/store-query-${lang}.html`, `<!doctype html><html lang="${lang}" class="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body class="bg-background text-foreground">${html}</body></html>`);
+      }
+    }
+  });
+  it("ignores repeated type and page parameters at the store boundary", async () => {
+    const params = Promise.resolve({ lang: "en" });
+    await StorePage({ params, searchParams: Promise.resolve({ query: ["a", "b"], type: ["development", "extension"] }) });
+    expect(retrievePackages).toHaveBeenCalledExactlyOnceWith("", "all");
+    const element = await StorePage({ params, searchParams: Promise.resolve({ type: "development", page: ["2", "3"] }) });
+    await new Response(await renderToReadableStream(element)).text();
+    expect(searchNugetPackages).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ query: "", skip: 0 }));
+  });
+  it.each(["ja", "en"])("uses the runtime registry origin for %s snippets and downloads", async (lang) => {
+    vi.stubEnv("NUGET_PUBLIC_ORIGIN", "https://staging.nuget.example/");
+    const html = renderToStaticMarkup(await Page({ params: Promise.resolve({ lang, name: "Sample.Library" }), searchParams: Promise.resolve({}) }));
+    expect(html.match(/https:\/\/staging.nuget.example\/v3\/index.json/gu)).toHaveLength(1);
+    expect(html).toContain("dotnet nuget add source https://staging.nuget.example/v3/index.json --name Beutl");
+    expect(html).toContain("dotnet add package Sample.Library --version 1.0.0");
+    expect(html).toContain("Install-Package Sample.Library -Version 1.0.0");
+    expect(html).not.toMatch(/--source|-Source/u);
+    expect(html).toContain('href="https://staging.nuget.example/v3/package/sample.library/1.0.0/sample.library.1.0.0.nupkg"');
+    expect(html).not.toContain("nuget.beditor.net");
+    const store = renderToStaticMarkup(await DevelopmentPackages({ lang }));
+    expect(searchNugetPackages).toHaveBeenCalledWith(expect.objectContaining({ audience: "DEVELOPMENT", filterReadable: true }));
+    expect(store).toContain("https://staging.nuget.example/v3/index.json");
+    expect(store).not.toContain("nuget.beditor.net");
+    const directory = process.env.BEUTL_NUGET_PREVIEW;
+    if (directory) {
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(`${directory}/package-${lang}.html`, `<!doctype html><html lang="${lang}" class="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head><body class="bg-background text-foreground">${html}</body></html>`);
+      writeFileSync(`${directory}/store-${lang}.html`, `<!doctype html><html lang="${lang}" class="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body class="bg-background text-foreground"><main class="max-w-6xl mx-auto px-4 py-10">${store}</main></body></html>`);
+    }
+  });
+  it("defaults to the public registry when no origin is configured", async () => {
+    vi.stubEnv("NUGET_PUBLIC_ORIGIN", "");
+    const html = renderToStaticMarkup(await Page({ params: Promise.resolve({ lang: "en", name: "Sample.Library" }), searchParams: Promise.resolve({}) }));
+    expect(html).toContain("https://nuget.beditor.net/v3/index.json");
+    expect(html).toContain('href="https://nuget.beditor.net/v3/package/sample.library/1.0.0/sample.library.1.0.0.nupkg"');
+  });
+  it("loads metadata only for the selected version among many summaries", async () => {
+    vi.mocked(findNugetPackageVersions).mockResolvedValueOnce({ name: "Sample.Library", Release:
+      Array.from({ length: 130 }, (_, i) => ({ id: `r${i}`, version: `1.0.${i}`, nugetListed: i !== 42 })) });
+    await Page({ params: Promise.resolve({ lang: "en", name: "Sample.Library" }), searchParams: Promise.resolve({ version: "1.0.42" }) });
+    expect(findNugetPackage).toHaveBeenCalledExactlyOnceWith("Sample.Library", "DEVELOPMENT", "1.0.42");
+    expect(tryReleaseMetadata).toHaveBeenCalledOnce();
+  });
+  it("hides unlisted versions from public history while preserving exact-version access", async () => {
+    const withdrawn = { ...release, id: "withdrawn", version: "2.0.0", nugetListed: false };
+    vi.mocked(findNugetPackageVersions).mockResolvedValue({ name: "Sample.Library", Release: [release, withdrawn] });
+    try {
+      const params = Promise.resolve({ lang: "en", name: "Sample.Library" });
+      const html = renderToStaticMarkup(await Page({ params, searchParams: Promise.resolve({}) }));
+      expect(html).not.toContain("2.0.0");
+      expect(html).toContain("?version=1.0.0");
+      vi.mocked(findNugetPackage).mockResolvedValueOnce({ name: "Sample.Library", Release: [withdrawn] });
+      const exact = renderToStaticMarkup(await Page({ params, searchParams: Promise.resolve({ version: "2.0.0" }) }));
+      expect(exact).toContain("sample.library.2.0.0.nupkg");
+      expect(exact).not.toContain("?version=2.0.0");
+      vi.mocked(findNugetPackageVersions).mockResolvedValueOnce({ name: "Sample.Library", Release: [withdrawn] });
+      await expect(Page({ params, searchParams: Promise.resolve({}) })).rejects.toThrow();
+    } finally {
+      vi.mocked(findNugetPackageVersions).mockResolvedValue({ name: "Sample.Library", Release: [release] });
+    }
+  });
+  it("falls back to a readable listed release when the newest archive is invalid", async () => {
+    vi.mocked(findNugetPackageVersions).mockResolvedValueOnce({ name: "Sample.Library", Release:
+      [release, { ...release, id: "unreadable", version: "2.0.0" }] });
+    vi.mocked(tryReleaseMetadata).mockResolvedValueOnce(null);
+    const html = renderToStaticMarkup(await Page({ params: Promise.resolve({ lang: "en", name: "Sample.Library" }), searchParams: Promise.resolve({}) }));
+    expect(vi.mocked(findNugetPackage).mock.calls.map((call) => call[2])).toEqual(["2.0.0", "1.0.0"]);
+    expect(html).toContain("--version 1.0.0");
+  });
+});

@@ -187,6 +187,37 @@ importers:
         specifier: ^4.149.0
         version: 4.149.0(@types/node@24.19.2)
 
+  apps/nuget-server:
+    dependencies:
+      '@beutl/api':
+        specifier: workspace:*
+        version: link:../../packages/api
+      '@beutl/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@beutl/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@prisma/adapter-pg':
+        specifier: ^7.10.0
+        version: 7.10.0
+      '@prisma/client':
+        specifier: ^7.10.0
+        version: 7.10.0(prisma@7.10.0(@types/node@24.19.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@6.0.3))(typescript@6.0.3)
+      hono:
+        specifier: ^4.13.13
+        version: 4.13.13
+    devDependencies:
+      '@types/node':
+        specifier: ^24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      wrangler:
+        specifier: ^4.149.0
+        version: 4.149.0(@types/node@24.19.2)
+
   apps/web:
     dependencies:
       '@better-auth/passkey':
@@ -367,9 +398,18 @@ importers:
       semver:
         specifier: ^7.8.5
         version: 7.8.5
+      spdx-exceptions:
+        specifier: 2.5.0
+        version: 2.5.0
+      spdx-license-ids:
+        specifier: 3.0.24
+        version: 3.0.24
       stripe:
         specifier: ^23.0.0
         version: 23.0.0(@types/node@24.19.2)
+      unzipit:
+        specifier: 1.4.3
+        version: 1.4.3
       zod:
         specifier: 4.6.5
         version: 4.6.5
@@ -4770,6 +4810,12 @@ packages:
   space-separated-tokens@2.0.2:
     resolution: {integrity: sha512-PEGlAwrG8yXGXRjW32fGbg66JAlOAwbObuqVoJpv/mRgoWDQfgH1wDPvtzWyUSNAXBGSk8h755YDbbcEy3SH2Q==}
 
+  spdx-exceptions@2.5.0:
+    resolution: {integrity: sha512-PiU42r+xO4UbUS1buo3LPJkjlO7430Xn5SVAhdpzzsPHsjbYVflnnFdATgabnLude+Cqu25p6N+g2lw/PFsa4w==}
+
+  spdx-license-ids@3.0.24:
+    resolution: {integrity: sha512-cLS9TtWkIQFyLkJ3/5aFQAOHOSKTlOs/7WDut/XPSdjom1fJhUdkepeJAKXa9Y05+FabHd0sti+Et559vDtkpQ==}
+
   split2@4.2.0:
     resolution: {integrity: sha512-UcjcJOWknrNkF6PLX83qcHM6KHgVKNkV62Y8a5uYDVv9ydGQVwAHMKqHdJje1VTWpljG0WYpCDhrCdAOYH4TWg==}
     engines: {node: '>= 10.x'}
@@ -4984,6 +5030,10 @@ packages:
     resolution: {integrity: sha512-pjy2bYhSsufwWlKwPc+l3cN7+wuJlK6uz0YdJEOlQDbl6jo/YlPi4mb8agUkVC8BF7V8NuzeyPNqRksA3hztKQ==}
     engines: {node: '>= 0.8'}
 
+  unzipit@1.4.3:
+    resolution: {integrity: sha512-gsq2PdJIWWGhx5kcdWStvNWit9FVdTewm4SEG7gFskWs+XCVaULt9+BwuoBtJiRE8eo3L1IPAOrbByNLtLtIlg==}
+    engines: {node: '>=12'}
+
   urlpattern-polyfill@10.1.0:
     resolution: {integrity: sha512-IGjKp/o0NL3Bso1PymYURCJxMPNAf/ILOpendP9f5B6e1rTJgdgiOvgfoT8VxCAdY+Wisb9uhGaJJf3yZ2V9nw==}
 
@@ -5011,6 +5061,9 @@ packages:
     resolution: {integrity: sha512-Pp6GSwGP/NrPIrxVFAIkOQeyw8lFenOHijQWkUTrDvrF4ALqylP2C/KCkeS9dpUM3KvYRQhna5vt7IL95+ZQ9w==}
     peerDependencies:
       react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+
+  uzip-module@1.0.3:
+    resolution: {integrity: sha512-AMqwWZaknLM77G+VPYNZLEruMGWGzyigPK3/Whg99B3S6vGHuqsyl5ZrOv1UUF3paGK1U6PM0cnayioaryg/fA==}
 
   valibot@1.4.2:
     resolution: {integrity: sha512-gjdCvJ6d3RyHAneqxMYMW9QMCwYMb3jpOO0IyHZV1bnRHFBHrX3VkIILt5XYR0WhwHiH7Mty8ovuPZ/O3gamrg==}
@@ -10131,6 +10184,10 @@ snapshots:
 
   space-separated-tokens@2.0.2: {}
 
+  spdx-exceptions@2.5.0: {}
+
+  spdx-license-ids@3.0.24: {}
+
   split2@4.2.0: {}
 
   sql-escaper@1.5.1: {}
@@ -10335,6 +10392,10 @@ snapshots:
 
   unpipe@1.0.0: {}
 
+  unzipit@1.4.3:
+    dependencies:
+      uzip-module: 1.0.3
+
   urlpattern-polyfill@10.1.0: {}
 
   use-callback-ref@1.3.3(@types/react@19.3.0)(react@19.3.0):
@@ -10355,6 +10416,8 @@ snapshots:
   use-sync-external-store@1.6.0(react@19.3.0):
     dependencies:
       react: 19.3.0
+
+  uzip-module@1.0.3: {}
 
   valibot@1.4.2(typescript@6.0.3):
     optionalDependencies:

@@ -1,3 +1,4 @@
+import { nugetFileUrl } from "../nuget/tickets";
 import { Hono } from "hono";
 import { getUserId } from "../api/auth";
 import { apiErrorResponse } from "../api/error";
@@ -5,7 +6,7 @@ import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { packageOwned, packagePaied } from "../store-utils";
 import { guessCurrency } from "../currency";
-import { SemVer } from "semver";
+import { compareNugetVersions } from "@beutl/core";
 import { getContentUrl } from "../content-url";
 import { selectPricing } from "@beutl/core";
 import {
@@ -36,7 +37,7 @@ async function createResponse(pkgId: string, userId: string | null, request?: Re
   }
   const profile = pkg.user.Profile;
   pkg.Release.sort((a, b) => {
-    return new SemVer(b.version).compare(a.version);
+    return compareNugetVersions(b.version, a.version);
   });
   const latestReleaseId = pkg.Release?.[0]?.id;
   const latestRelease = latestReleaseId
@@ -84,13 +85,17 @@ async function createResponse(pkgId: string, userId: string | null, request?: Re
         description: latestRelease.description,
         targetVersion: latestRelease.targetVersion,
         fileId: latestRelease.fileId,
-        fileUrl: await getContentUrl(latestRelease.fileId, request),
+        fileUrl: latestRelease.fileId ? await nugetFileUrl(latestRelease.fileId, userId) : null,
       }
       : null,
   };
 }
 
 const app = new Hono()
+  .use("*", async (c, next) => {
+    c.header("Cache-Control", "private, no-store");
+    await next();
+  })
   .post("/", zValidator("json", acquireSchema), async (c) => {
     const req = c.req.valid("json");
     const userId = await getUserId(c);

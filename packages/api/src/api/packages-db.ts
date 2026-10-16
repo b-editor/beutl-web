@@ -15,7 +15,7 @@ export async function getPackage({
 }) {
   const db = await getDb();
   const result = await db.package.findFirst({
-    where: query,
+    where: { AND: [query, { audience: "USER" }] },
     select: {
       id: true,
       published: true,
@@ -97,7 +97,7 @@ export async function getPackages({
 }) {
   const db = await getDb();
   return db.package.findMany({
-    where: query,
+    where: { AND: [query, { audience: "USER" }] },
     select: {
       id: true,
       published: true,

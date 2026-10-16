@@ -1,4 +1,5 @@
 import { getDb } from "./provider";
+import { normalizeNugetId } from "@beutl/core";
 import { profileUserNameFilter } from "./profile";
 import type { PaymentInterval } from "@prisma/client";
 import type { PrismaTransaction } from "./transaction";
@@ -8,6 +9,21 @@ import {
   deleteUnreferencedFilesWithStorageCleanup,
   deleteUnreferencedFileWithStorageCleanup,
 } from "./file";
+
+/** Prisma's insensitive equality uses ILIKE; package IDs must match underscores literally. */
+export function packageNameFilter(name: string) {
+  return { equals: name.replace(/[\\%_]/gu, "\\$&"), mode: "insensitive" as const };
+}
+
+export class PackageIdentityReservedError extends Error {
+  constructor() { super("This package ID was previously published and is permanently reserved."); }
+}
+
+export async function assertPackageIdNotReserved(db: PrismaTransaction, name: string) {
+  if (await db.publishedPackageVersion.findFirst({ where: { name: normalizeNugetId(name) }, select: { name: true } })) {
+    throw new PackageIdentityReservedError();
+  }
+}
 
 export async function findPackageBasicByName({
   name,
@@ -19,6 +35,7 @@ export async function findPackageBasicByName({
   const db = prisma ?? await getDb();
   return db.package.findFirst({
     where: {
+      audience: "USER",
       name: name,
     },
     select: {
@@ -59,6 +76,7 @@ export async function findPackageForLibraryResponse({
   const db = prisma ?? await getDb();
   return await db.package.findFirst({
     where: {
+      audience: "USER",
       id: pkgId,
     },
     select: {
@@ -154,6 +172,7 @@ export async function retrieveDevPackagesByUserId({
     },
     select: {
       id: true,
+      audience: true,
       name: true,
       displayName: true,
       published: true,
@@ -181,6 +200,7 @@ export async function findPublishedPackageForLibrary({
   const db = prisma || await getDb();
   return await db.package.findFirst({
     where: {
+      audience: "USER",
       id,
       published: true,
     },
@@ -250,6 +270,7 @@ export async function retrievePublishedPackagesByUserName({
   const db = prisma || await getDb();
   return await db.package.findMany({
     where: {
+      audience: "USER",
       user: {
         Profile: {
           userName: profileUserNameFilter(userName),
@@ -317,6 +338,7 @@ export async function retrieveLatestPublishedPackages({
   const db = prisma ?? await getDb();
   return await db.package.findMany({
     where: {
+      audience: "USER",
       published: true,
     },
     orderBy: {
@@ -355,14 +377,12 @@ export async function retrieveDevPackageByName({
   const db = prisma || await getDb();
   return await db.package.findFirst({
     where: {
-      name: {
-        equals: name,
-        mode: "insensitive",
-      },
+      name: packageNameFilter(name),
       userId: userId,
     },
     select: {
       id: true,
+      audience: true,
       name: true,
       displayName: true,
       description: true,
@@ -416,6 +436,7 @@ export async function retrieveDevPackageByName({
           targetVersion: true,
           id: true,
           published: true,
+          artifactLocked: true,
           file: {
             select: {
               name: true,
@@ -435,36 +456,40 @@ export async function existsPackageName({
   prisma?: PrismaTransaction;
 }) {
   const db = prisma || await getDb();
-  return await db.package.count({
+  const count = await db.package.count({
     where: {
-      name: {
-        equals: name,
-        mode: "insensitive",
-      },
+      name: packageNameFilter(name),
     },
   });
+  return count || await db.publishedPackageVersion.count({ where: { name: normalizeNugetId(name) } });
 }
 
 export async function createDevPackage({
   name,
+  audience = "USER",
   userId,
   prisma,
 }: {
   name: string;
+  audience?: "USER" | "DEVELOPMENT";
   userId: string;
   prisma?: PrismaTransaction;
 }) {
-  const db = prisma || await getDb();
-  return await db.package.create({
-    data: {
-      name: name,
-      userId: userId,
-      description: "",
-      shortDescription: "",
-      webSite: "",
-      published: false,
-    },
-  });
+  const run = async (db: PrismaTransaction) => {
+    await assertPackageIdNotReserved(db, name);
+    return db.package.create({
+      data: {
+        name,
+        audience,
+        userId,
+        description: "",
+        shortDescription: "",
+        webSite: "",
+        published: false,
+      },
+    });
+  };
+  return prisma ? run(prisma) : startRetryableTransaction(run);
 }
 
 export async function getUserIdFromPackageId({
@@ -519,6 +544,7 @@ export async function updateDevPackageDisplay({
   return await db.package.update({
     where: {
       id: packageId,
+      audience: "USER",
     },
     data: {
       displayName: displayName,
@@ -543,6 +569,7 @@ export async function updateDevPackageDescription({
   return await db.package.update({
     where: {
       id: packageId,
+      audience: "USER",
     },
     data: {
       description: description,
@@ -735,6 +762,7 @@ export async function updateDevPackageTags({
   return await db.package.update({
     where: {
       id: packageId,
+      audience: "USER",
     },
     data: {
       tags: tags,

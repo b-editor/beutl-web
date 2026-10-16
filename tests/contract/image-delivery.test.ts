@@ -75,6 +75,7 @@ async function head(headers?: HeadersInit, query = "") {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.stubEnv("NUGET_DOWNLOAD_SECRET", "test-download-secret");
   pending = [];
   stored = new Map();
   vi.stubGlobal("caches", { open: mocks.open });
@@ -104,6 +105,7 @@ afterEach(async () => {
   await Promise.all(pending);
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
@@ -558,7 +560,7 @@ describe("image delivery", () => {
     expect(mocks.input).toHaveBeenCalledTimes(1);
   });
 
-  it("requires the current purchase before reusing a transformed paid image", async () => {
+  it("redirects paid release payloads to NuGet after purchase checks, without image transformation", async () => {
     mocks.findFileForContentAccess.mockResolvedValue({
       ...file(), visibility: "DEDICATED", Release: [{ published: true, package: {
         id: "package-1", userId: "owner", published: true, packagePricing: [{ id: "price-1", price: 100 }],
@@ -566,25 +568,15 @@ describe("image delivery", () => {
     });
     mocks.getSession.mockResolvedValue({ user: { id: "purchaser" } });
     mocks.existsUserPaymentHistory.mockResolvedValue(true);
-    const first = await request(undefined, "?image=preview-1024");
-    expect(first.status).toBe(200);
-    expect(new Uint8Array(await first.arrayBuffer())).toEqual(WEBP_BYTES);
-    expect(first.headers.get("Cache-Control")).toBe("no-store");
-    await Promise.all(pending);
-    const second = await request({ "If-None-Match": first.headers.get("ETag")! }, "?image=preview-1024");
-    expect(second.status).toBe(200);
-    expect(new Uint8Array(await second.arrayBuffer())).toEqual(WEBP_BYTES);
-    expect(second.headers.get("Cache-Control")).toBe("no-store");
-    expect(mocks.input).toHaveBeenCalledTimes(1);
-
+    const response = await request(undefined, "?image=preview-1024");
+    expect(response.status).toBe(307);
+    expect(response.headers.get("Location")).toMatch(/^https:\/\/nuget\.beditor\.net\/v3\/files\/file-1\?ticket=/u);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
     mocks.existsUserPaymentHistory.mockResolvedValue(false);
-    const denied = await request({ "If-None-Match": first.headers.get("ETag")! }, "?image=preview-1024");
-    expect(denied.status).toBe(403);
-    expect(denied.headers.get("Cache-Control")).toBe("no-store");
-    expect(mocks.existsUserPaymentHistory).toHaveBeenCalledTimes(3);
-    expect(mocks.match).toHaveBeenCalledTimes(3);
-    expect(mocks.get).toHaveBeenCalledTimes(1);
-    expect(mocks.input).toHaveBeenCalledTimes(1);
+    expect((await request(undefined, "?image=preview-1024")).status).toBe(403);
+    expect(mocks.existsUserPaymentHistory).toHaveBeenCalledTimes(2);
+    expect(mocks.get).not.toHaveBeenCalled();
+    expect(mocks.input).not.toHaveBeenCalled();
   });
 
   it("authenticates a desktop token before serving a private thumbnail", async () => {
@@ -753,7 +745,7 @@ describe("image delivery", () => {
     expect(mocks.tryGetUserIdFromHeaders).toHaveBeenCalledTimes(1);
   });
 
-  it("checks a paid release purchase again before reusing its image bytes", async () => {
+  it("checks a paid release purchase again before issuing another download ticket", async () => {
     const paid = {
       ...file(), visibility: "DEDICATED",
       Release: [{ published: true, package: {
@@ -763,14 +755,14 @@ describe("image delivery", () => {
     mocks.findFileForContentAccess.mockResolvedValue(paid);
     mocks.getSession.mockResolvedValue({ user: { id: "purchaser" } });
     mocks.existsUserPaymentHistory.mockResolvedValue(true);
-    expect((await request()).status).toBe(200);
+    expect((await request()).status).toBe(307);
     await Promise.all(pending);
     mocks.existsUserPaymentHistory.mockResolvedValue(false);
     const refused = await request({ "If-None-Match": contentEntityTag(file()) });
     expect(refused.status).toBe(403);
     expect(refused.headers.get("Cache-Control")).toBe("no-store");
     expect(mocks.existsUserPaymentHistory).toHaveBeenCalledTimes(2);
-    expect(mocks.match).toHaveBeenCalledTimes(1);
+    expect(mocks.match).not.toHaveBeenCalled();
   });
 
   it.each([`"sha256-${SHA256}"`, `"other", W/"sha256-${SHA256}"`, "*"])(

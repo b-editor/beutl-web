@@ -22,7 +22,7 @@
   "newProject": {
     "title": "新しいプロジェクトを作成",
     "packageId": "パッケージID",
-    "packageIdDescription": "半角英数字とピリオド、アンダースコアのみ",
+    "packageIdDescription": "半角英数字、ピリオド、アンダースコア、ハイフンを使用できます",
     "createFromPackageFile": "パッケージファイルから作成"
   },
   "forms": {
@@ -42,7 +42,7 @@
     "descriptionMax": "説明は1000文字以下である必要があります",
     "displayNameMax": "表示名は50文字以下である必要があります",
     "idInvalid": "IDが不正です",
-    "packageIdCharacters": "パッケージIDは半角英数字とピリオド、アンダースコアのみ使用できます",
+    "packageIdCharacters": "パッケージ ID には英数字、アンダースコア、ピリオド、ハイフンを使用できます。",
     "packageIdMax": "パッケージIDは50文字以下である必要があります",
     "packageIdMin": "パッケージIDは3文字以上である必要があります",
     "packageIdTaken": "このパッケージIDは既に使用されています",
@@ -129,7 +129,9 @@
     "title": "タイトル",
     "version": "バージョン",
     "packageFileHelp": "ファイルを 1 つ以上選択してください。拡張機能の場合は .nupkg ファイルを選択します。素材・テンプレートの場合はメディアファイル（画像・音声・動画・フォント）と JSON ファイルを選択します。種類はファイルから判別されるため、メディアと JSON の両方を含めると両方のパッケージになります。テンプレートが同梱素材を参照する場合、参照するファイル名は選択したファイルの中に同じ名前で含まれている必要があります。",
-    "selectFiles": "ファイルを選択"
+    "selectFiles": "ファイルを選択",
+    "artifactLocked": "一度公開したリリースのファイルは差し替えできません。変更する場合は新しいバージョンを作成してください。",
+    "versionReserved": "このバージョンは既に存在するか、過去に公開されています。別のバージョンを指定してください。"
   },
   "upload": {
     "title": "素材・テンプレートを公開",
@@ -156,5 +158,35 @@
     "invalidFileName": "選択したファイル名の中にパッケージで使用できないものがあります。':' などの文字を含むファイル名を変更してから再試行してください。",
     "ambiguousFileName": "選択した素材ファイルに、大文字小文字だけが異なる同名のファイル「{{name}}」が含まれています。テンプレートは大文字小文字を区別せずにファイル名で素材を参照するため、いずれかの名前を変更してから再試行してください。",
     "descriptionRequired": "ファイルをアップロードする前に、このリリースの説明を入力してください。パッケージの必須メタデータになります。"
+  },
+  "nuget": {
+    "title": "SDK",
+    "description": "PackageReference で参照するライブラリや SDK です。",
+    "audience": "パッケージの用途",
+    "userPackages": "ユーザー用パッケージ",
+    "userDescription": "Beutl にインストールする拡張機能・素材・テンプレートです。",
+    "nupkgRequired": "SDK には .nupkg ファイルを1つアップロードしてください。",
+    "search": "検索",
+    "searchPlaceholder": "パッケージ名・説明・タグで検索",
+    "empty": "パッケージが見つかりませんでした。",
+    "packages": "パッケージ",
+    "versions": "バージョン",
+    "downloads": "ダウンロード",
+    "previous": "前へ",
+    "next": "次へ",
+    "install": "インストール",
+    "dependencies": "依存関係",
+    "noDependencies": "依存関係はありません。",
+    "readme": "Readme",
+    "authors": "作成者",
+    "published": "公開日",
+    "project": "プロジェクトのサイト",
+    "license": "ライセンス",
+    "download": "パッケージをダウンロード",
+    "back": "SDK 一覧",
+    "unlisted": "非掲載",
+    "feed": "NuGet パッケージソース",
+    "repository": "ソースコード",
+    "details": "パッケージ情報"
   }
 }

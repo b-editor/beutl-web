@@ -2,10 +2,11 @@ import "server-only";
 
 import { contentPath } from "@/lib/content-url";
 import type { retrieveDevPackagesByUserId } from "@beutl/db";
-import { SemVer } from "semver";
+import { compareNugetVersions, type PackageAudience } from "@beutl/core";
 
 export type Package = {
   id: string;
+  audience: PackageAudience;
   name: string;
   displayName?: string;
   iconFileUrl?: string;
@@ -24,10 +25,11 @@ export function toPackages(rows: DevPackageRow[]): Package[] {
     // retrieveDevPackagesByUserId は Release に orderBy を持たないため、ここで
     // 降順に並べて先頭を最新版として扱う。
     const releases = [...pkg.Release].sort((a, b) =>
-      new SemVer(b.version).compare(a.version),
+      compareNugetVersions(b.version, a.version),
     );
     return {
       id: pkg.id,
+      audience: pkg.audience,
       name: pkg.name,
       displayName: pkg.displayName || undefined,
       iconFileUrl: (pkg.iconFile && contentPath(pkg.iconFile.id)) || undefined,
