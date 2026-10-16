@@ -13,7 +13,6 @@ export const api = new Hono()
 export { v1 } from "./v1";
 export { v2 } from "./v2";
 export { v3 } from "./v3";
-export { parseReplayableAiJobInput, sanitizeAiJobInputParams } from "./v3/ai/jobs";
 export {
   apiOnErrorHandler,
   apiErrorResponse,

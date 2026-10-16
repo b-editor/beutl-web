@@ -41,9 +41,7 @@ import { aiFailureResult } from "../../apps/web/src/lib/ai-screen";
 import {
   AI_JOB_FAILURE_MESSAGES,
   AiProviderError,
-  createReservedAiJob,
   readAiJsonResult,
-  saveAiImage,
   toAiRequestIdentity,
 } from "@beutl/api";
 import {
@@ -69,6 +67,8 @@ const createAndAttachVideoJob = vi.hoisted(() =>
   vi.fn(async () => undefined),
 );
 const synchronizeAiVideoJob = vi.hoisted(() => vi.fn());
+const createReservedAiJob = vi.hoisted(() => vi.fn());
+const saveAiImage = vi.hoisted(() => vi.fn());
 
 // The actions resolve a provider from the catalog rather than importing one,
 // so the registry accessors are pointed at the same mocks the assertions below
@@ -90,8 +90,8 @@ vi.mock("@beutl/api", async (importOriginal) => {
     imageProviderFor: () => ({ generate: generateImage, edit: editImage }),
     translationProviderFor: () => ({ translate: translateSegments }),
     transcriptionProviderFor: () => ({ transcribe: transcribeAudio }),
-    saveAiImage: vi.fn(),
-    createReservedAiJob: vi.fn(),
+    saveAiImage,
+    createReservedAiJob,
     listAiJobsByUserId: vi.fn(),
     readAiJsonResult: vi.fn(),
     loadAiImageModelCapabilities,
@@ -100,6 +100,32 @@ vi.mock("@beutl/api", async (importOriginal) => {
     synchronizeAiVideoJob,
   };
 });
+
+// The retry runs in @beutl/api's own modules, so they get the same mocks.
+vi.mock("../../packages/api/src/ai/credits", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/api/src/ai/credits")>()),
+  createReservedAiJob,
+}));
+vi.mock("../../packages/api/src/ai/storage", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/api/src/ai/storage")>()),
+  saveAiImage,
+}));
+vi.mock("../../packages/api/src/ai/providers/registry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/api/src/ai/providers/registry")>()),
+  imageProviderFor: () => ({ generate: generateImage, edit: editImage }),
+}));
+vi.mock("../../packages/api/src/ai/image-model-capabilities", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/api/src/ai/image-model-capabilities")>()),
+  loadAiImageModelCapabilities,
+}));
+vi.mock("../../packages/api/src/ai/video-model-capabilities", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/api/src/ai/video-model-capabilities")>()),
+  loadAiVideoModelCapabilities,
+}));
+vi.mock("../../packages/api/src/ai/video-jobs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/api/src/ai/video-jobs")>()),
+  createAndAttachVideoJob,
+}));
 
 vi.mock("@beutl/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@beutl/db")>();

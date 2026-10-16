@@ -394,7 +394,7 @@ const VIDEO_CALLBACK_PATHS: Record<string, string> = {
 // server that has none. The same condition decides whether a callback URL is
 // offered and whether pictures can be served to a provider that needs them by
 // URL: a provider cannot reach a local server either way.
-function publicHttpsOrigin(request: Request): string | undefined {
+export function publicHttpsOrigin(request: Request): string | undefined {
   let origin: URL;
   try {
     origin = new URL(process.env.PUBLIC_ORIGIN || new URL(request.url).origin);
@@ -408,7 +408,7 @@ function publicHttpsOrigin(request: Request): string | undefined {
 // Providers only call back over HTTPS. A server reachable only over plain
 // HTTP — a local one — gets no callback URL, and its jobs are finished by the
 // poll path instead of being refused at submission.
-function videoCallbackUrl(
+export function videoCallbackUrl(
   request: Request,
   jobId: string,
   callbackNonce: string,

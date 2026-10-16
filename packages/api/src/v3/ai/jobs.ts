@@ -1,6 +1,9 @@
 import {
+  getAiJobById,
+  getAiJobByIdempotency,
   getAiJobByUserId,
   finalizeAiJobDeletionByUserId,
+  isActiveAiJobStatus,
   listAiJobsByUserId,
   prepareAiJobDeletionByUserId,
   type AiJobHistoryCursor,
@@ -8,23 +11,21 @@ import {
 import { Hono } from "hono";
 import { z } from "zod";
 import { deleteAiOutputObject, prepareGatewayVideoUsageForDeletion } from "../../ai/storage";
-import { MAX_AI_PROMPT_LENGTH } from "../../ai/upload-limits";
-import {
-  AI_IMAGE_ASPECT_RATIOS,
-  AI_IMAGE_BACKGROUNDS,
-  AI_IMAGE_EDIT_TASKS,
-  AI_LEGACY_IMAGE_SIZES,
-  AI_MAX_SEED,
-  AI_MIN_SEED,
-  AI_VIDEO_ASPECT_RATIOS,
-  AI_VIDEO_RESOLUTIONS,
-  isAiVideoDurationSeconds,
-} from "@beutl/core";
 import { getUserId } from "../../api/auth";
 import { apiErrorResponse } from "../../api/error";
 import { getContentUrl } from "../../content-url";
 import { publicAiJobError } from "../../ai/job-errors";
-import { publicAiJobStatus, type PublicAiJobStatus } from "../../ai/job-response";
+import { parseReplayableAiJobInput, sanitizeAiJobInputParams } from "../../ai/job-inputs";
+import {
+  isTerminalAiJobStatus,
+  publicAiJobPayload,
+  publicAiJobStatus,
+  type PublicAiJobStatus,
+} from "../../ai/job-response";
+import { prepareAiJobRetry } from "../../ai/job-retry";
+import { getAiIdempotencyKeyHash } from "../../ai/request-integrity";
+import { eventStreamRequested, eventStreamResponse } from "../../ai/sse";
+import { publicHttpsOrigin, videoCallbackUrl } from "./videos";
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
@@ -61,92 +62,6 @@ const cursorPayloadSchema = z
     id: z.string().uuid(),
   })
   .strict();
-
-// Jobs created before aspect ratios existed carry `size`; new ones carry
-// `aspectRatio`. Exactly one is required so a retry has an unambiguous shape.
-const imageRetryInputSchema = z
-  .object({
-    prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
-    size: z.enum(AI_LEGACY_IMAGE_SIZES).optional(),
-    aspectRatio: z.enum(AI_IMAGE_ASPECT_RATIOS).optional(),
-    background: z.enum(AI_IMAGE_BACKGROUNDS).optional(),
-    seed: z.number().int().min(AI_MIN_SEED).max(AI_MAX_SEED).optional(),
-    // Only the names are kept; the pictures themselves are not, which is what
-    // closes retry for a reference-guided generation. "reference" is what jobs
-    // recorded while only one was allowed.
-    reference: z.object({ filename: z.string().min(1) }).optional(),
-    references: z
-      .array(z.object({ filename: z.string().min(1) }))
-      .optional(),
-  })
-  .refine(
-    (value) =>
-      (value.size !== undefined) !== (value.aspectRatio !== undefined),
-  );
-
-// A frame-conditioned video records which images it started from. The bytes are
-// not kept, so such a job cannot be rerun — but the history has to say the
-// frames were there, or it reads as a plain text-to-video job.
-const videoFrameHistorySchema = z.object({
-  filename: z.string().min(1),
-  mimeType: z.string().min(1),
-}).strict();
-
-const videoHistoryInputSchema = z.object({
-  prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH),
-  durationSeconds: z.number().refine(isAiVideoDurationSeconds).default(4),
-  resolution: z.enum(AI_VIDEO_RESOLUTIONS).default("720p"),
-  aspectRatio: z.enum(AI_VIDEO_ASPECT_RATIOS).default("16:9"),
-  generateAudio: z.boolean().default(true),
-  seed: z.number().int().min(AI_MIN_SEED).max(AI_MAX_SEED).optional(),
-  firstFrame: videoFrameHistorySchema.optional(),
-  lastFrame: videoFrameHistorySchema.optional(),
-});
-
-const imageEditHistoryInputSchema = z.object({
-  task: z.enum(AI_IMAGE_EDIT_TASKS),
-  prompt: z.string().trim().min(1).max(MAX_AI_PROMPT_LENGTH).optional(),
-});
-
-const transcriptionHistoryInputSchema = z.object({
-  durationSeconds: z.number().finite().nonnegative(),
-  language: z.string().length(2).optional(),
-});
-
-const translationHistoryInputSchema = z.object({
-  sourceLanguage: z.string().length(2).optional(),
-  targetLanguage: z.string().length(2),
-  segmentCount: z.number().int().positive(),
-  characterCount: z.number().int().positive(),
-});
-
-const VIDEO_REPLAY_KEYS = ["prompt", "durationSeconds", "resolution", "aspectRatio", "generateAudio", "seed"] as const;
-
-function canonicalVideoReplayInput(input: unknown, includeFrames = false): { success: true; data: Record<string, unknown> } | { success: false } {
-  if (!input || typeof input !== "object" || Array.isArray(input)) return { success: false };
-  const source = input as Record<string, unknown>;
-  if (typeof source.prompt !== "string" || source.prompt.length === 0 || source.prompt.length > MAX_AI_PROMPT_LENGTH || source.prompt !== source.prompt.trim()) return { success: false };
-  const parsed = videoHistoryInputSchema.safeParse(input);
-  const keys = Object.keys(source);
-  const allowed = new Set([...VIDEO_REPLAY_KEYS, "firstFrame", "lastFrame"]);
-  if (!parsed.success || keys.some((key) => !allowed.has(key)) || (!includeFrames && (keys.includes("firstFrame") || keys.includes("lastFrame")))) {
-    return { success: false };
-  }
-  const data: Record<string, unknown> = {};
-  for (const key of VIDEO_REPLAY_KEYS) {
-    if (source[key] !== undefined) data[key] = source[key];
-  }
-  if (includeFrames) {
-    for (const key of ["firstFrame", "lastFrame"] as const) {
-      if (source[key] !== undefined) data[key] = parsed.data[key];
-    }
-  }
-  if (data.durationSeconds === undefined) data.durationSeconds = 4;
-  if (data.resolution === undefined) data.resolution = "720p";
-  if (data.aspectRatio === undefined) data.aspectRatio = "16:9";
-  if (data.generateAudio === undefined) data.generateAudio = true;
-  return { success: true, data };
-}
 
 type AiJobRecord = NonNullable<
   Awaited<ReturnType<typeof getAiJobByUserId>>
@@ -206,35 +121,6 @@ function decodeCursor(value: string): AiJobHistoryCursor | null {
   }
 }
 
-/** Validate the exact persisted input shape that the dashboard retry action can replay. */
-export function parseReplayableAiJobInput(
-  kind: string,
-  input: unknown,
-): { success: true; data: { prompt: string; [key: string]: unknown } } | { success: false } {
-  if (kind === "image") {
-    const parsed = imageRetryInputSchema.safeParse(input);
-    const source = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : null;
-    const keys = source ? Object.keys(source) : [];
-    const allowed = new Set(["prompt", "size", "aspectRatio", "background", "seed", "reference", "references"]);
-    if (
-      !parsed.success ||
-      typeof source?.prompt !== "string" ||
-      source.prompt !== source.prompt.trim() ||
-      keys.some((key) => !allowed.has(key)) ||
-      keys.includes("reference") ||
-      keys.includes("references")
-    ) {
-      return { success: false };
-    }
-    return { success: true, data: input as { prompt: string; [key: string]: unknown } };
-  }
-  if (kind === "video") {
-    const canonical = canonicalVideoReplayInput(input);
-    return canonical.success ? { success: true, data: canonical.data as { prompt: string; [key: string]: unknown } } : canonical;
-  }
-  return { success: false };
-}
-
 function canRetry(job: AiJobRecord): boolean {
   if (
     job.status !== "succeeded" &&
@@ -247,44 +133,6 @@ function canRetry(job: AiJobRecord): boolean {
 
 function sanitizedInputParams(job: AiJobRecord): Record<string, unknown> | null {
   return sanitizeAiJobInputParams(job.kind, job.inputParams);
-}
-
-/** Return the same allow-listed, canonical history payload used by the API. */
-export function sanitizeAiJobInputParams(kind: string, input: unknown): Record<string, unknown> | null {
-  if (kind === "image" && input && typeof input === "object" && !Array.isArray(input)) {
-    const source = input as Record<string, unknown>;
-    const parsed = imageRetryInputSchema.safeParse(input);
-    if (
-      !parsed.success ||
-      typeof source.prompt !== "string" ||
-      source.prompt !== source.prompt.trim()
-    ) return null;
-    const result: Record<string, unknown> = { prompt: source.prompt };
-    for (const key of ["size", "aspectRatio", "background", "seed"] as const) {
-      if (source[key] !== undefined) result[key] = source[key];
-    }
-    if (parsed.data.reference !== undefined) result.reference = parsed.data.reference;
-    if (parsed.data.references !== undefined) result.references = parsed.data.references;
-    return result;
-  }
-  const parsed = (() => {
-    switch (kind) {
-      case "image": {
-        const result = imageRetryInputSchema.safeParse(input);
-        if (!result.success) return result;
-        return result;
-      }
-      case "image_edit": return imageEditHistoryInputSchema.safeParse(input);
-      case "video": {
-        const canonical = canonicalVideoReplayInput(input, true);
-        return canonical.success ? canonical : null;
-      }
-      case "stt": return transcriptionHistoryInputSchema.safeParse(input);
-      case "translation": return translationHistoryInputSchema.safeParse(input);
-      default: return null;
-    }
-  })();
-  return parsed?.success ? parsed.data : null;
 }
 
 async function toSummary(
@@ -347,6 +195,36 @@ const app = new Hono()
       ),
       nextCursor: page.nextCursor ? encodeCursor(page.nextCursor) : null,
     });
+  })
+  // Before "/:id", whose id check would answer 400. The key stays out of URLs.
+  .get("/by-idempotency-key", async (c) => {
+    const userId = await getUserId(c);
+    if (!userId) {
+      return c.json(await apiErrorResponse("authenticationIsRequired"), {
+        status: 401,
+      });
+    }
+
+    const idempotencyKeyHash = await getAiIdempotencyKeyHash(c.req.raw);
+    if (!idempotencyKeyHash) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+    const job = await getAiJobByIdempotency({ userId, idempotencyKeyHash });
+    if (!job) {
+      return c.json(await apiErrorResponse("aiJobNotFound"), {
+        status: 404,
+      });
+    }
+    // A deleted job keeps its key, so the key can never reserve again.
+    if (job.deletedAt) {
+      return c.json(await apiErrorResponse("aiRequestWasDeleted"), {
+        status: 409,
+      });
+    }
+
+    return c.json(await toSummary(job, c.req.raw));
   })
   .get("/:id", async (c) => {
     const userId = await getUserId(c);
@@ -425,6 +303,111 @@ const app = new Hono()
     });
 
     return c.json({ deleted: true });
+  })
+  // Answers as POST /v3/ai/images or POST /v3/ai/videos answers the same request.
+  .post("/:id/retry", async (c) => {
+    const userId = await getUserId(c);
+    if (!userId) {
+      return c.json(await apiErrorResponse("authenticationIsRequired"), {
+        status: 401,
+      });
+    }
+
+    const params = pathParamsSchema.safeParse(c.req.param());
+    if (!params.success) {
+      return c.json(await apiErrorResponse("invalidRequestBody"), {
+        status: 400,
+      });
+    }
+    const request = c.req.raw;
+    const retry = await prepareAiJobRetry({
+      userId,
+      jobId: params.data.id,
+      idempotencyKey: c.req.header("Idempotency-Key"),
+    });
+    if (!retry.ok) {
+      return c.json(await apiErrorResponse(retry.errorCode), {
+        status: retry.status,
+      });
+    }
+
+    if (retry.kind === "video") {
+      if (retry.outcome === "existing") {
+        return c.json(await publicAiJobPayload(retry.job, request), {
+          status: isTerminalAiJobStatus(retry.job.status) ? 200 : 202,
+        });
+      }
+      const submitted = await retry.submit({
+        mediaOrigin: () => publicHttpsOrigin(request),
+        callbackUrl: (jobId, nonce, provider) =>
+          videoCallbackUrl(request, jobId, nonce, provider),
+        signal: request.signal,
+      });
+      if (!submitted.ok) {
+        return c.json(await apiErrorResponse(submitted.errorCode), {
+          status: submitted.status,
+        });
+      }
+      const current = submitted.submitted
+        ? await getAiJobById({ jobId: submitted.job.id })
+        : null;
+      return c.json(await publicAiJobPayload(current ?? submitted.job, request));
+    }
+
+    if (retry.outcome === "existing") {
+      const job = retry.job;
+      if (job.status === "succeeded" && job.resultFileId) {
+        return c.json({
+          jobId: job.id,
+          fileId: job.resultFileId,
+          url: await getContentUrl(job.resultFileId, request),
+          ...(job.resultFile
+            ? { fileName: job.resultFile.name, contentType: job.resultFile.mimeType }
+            : {}),
+        });
+      }
+      return isActiveAiJobStatus(job.status)
+        ? c.json(await apiErrorResponse("aiRequestInProgress"), { status: 409 })
+        : c.json(await apiErrorResponse(publicAiJobError(job.error)), { status: 500 });
+    }
+
+    const generate = async (
+      onPartialImage?: (partial: { index: number; b64Json: string }) => void,
+    ) => {
+      const result = await retry.generate({
+        signal: request.signal,
+        ...(onPartialImage ? { onPartialImage } : {}),
+      });
+      if (!result.ok) return result;
+      return {
+        ok: true as const,
+        payload: {
+          jobId: result.jobId,
+          fileId: result.file.id,
+          url: await getContentUrl(result.file.id, request),
+          fileName: result.file.name,
+          contentType: result.file.mimeType,
+        },
+      };
+    };
+    if (!eventStreamRequested(request)) {
+      const outcome = await generate();
+      return outcome.ok
+        ? c.json(outcome.payload)
+        : c.json(await apiErrorResponse(outcome.errorCode), {
+            status: outcome.status,
+          });
+    }
+    return eventStreamResponse(async (emit) => {
+      const outcome = await generate((partial) =>
+        emit("partial", { index: partial.index, image: partial.b64Json }),
+      );
+      if (outcome.ok) {
+        emit("result", outcome.payload);
+        return;
+      }
+      emit("error", await apiErrorResponse(outcome.errorCode));
+    });
   });
 
 export default app;
