@@ -25,7 +25,7 @@
   },
   "devDependencies": {
     "next": "16.3.8",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   },
   "peerDependencies": {
     "next": "^15.5.0 || ^16.0.0"
