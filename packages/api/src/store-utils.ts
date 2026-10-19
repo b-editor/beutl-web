@@ -2,9 +2,9 @@
 // Web 版は next/headers ベースの contentPath/guessCurrency に依存するため、
 // packages/api の Worker 版 context を使う。
 import { getDb } from "@beutl/db";
-import { selectPricing, packageTypeWhere } from "@beutl/core";
+import { localizedDisplayName, localizedShortDescription, selectPricing, packageTypeWhere } from "@beutl/core";
 import type { PackageTypeFilter } from "@beutl/core";
-import { existsUserPaymentHistory } from "@beutl/db";
+import { existsUserPaymentHistory, packageTranslationSelect } from "@beutl/db";
 import { contentPath } from "./content-url";
 import { guessCurrency } from "./currency";
 
@@ -43,6 +43,7 @@ export async function retrievePackages(
   request?: Request,
   type?: PackageTypeFilter,
   pagination: { offset: number; count: number } = { offset: 0, count: 30 },
+  lang?: string,
 ): Promise<ListedPackage[]> {
   const db = await getDb();
   const currency = await guessCurrency(request);
@@ -58,6 +59,19 @@ export async function retrievePackages(
             { description: { contains: query } },
             { shortDescription: { contains: query } },
             { tags: { hasSome: [query] } },
+            // 翻訳文でも引けるようにする。表示言語に限らず全言語を対象に
+            // するのは、検索語の言語が表示言語と一致するとは限らないため。
+            {
+              PackageTranslation: {
+                some: {
+                  OR: [
+                    { displayName: { contains: query } },
+                    { shortDescription: { contains: query } },
+                    { description: { contains: query } },
+                  ],
+                },
+              },
+            },
           ],
         }
       : {}),
@@ -109,6 +123,7 @@ export async function retrievePackages(
           fallback: true,
         },
       },
+      ...(lang ? packageTranslationSelect(lang) : {}),
     },
   });
 
@@ -119,8 +134,8 @@ export async function retrievePackages(
       return {
         id: pkg.id,
         name: pkg.name,
-        displayName: pkg.displayName,
-        shortDescription: pkg.shortDescription,
+        displayName: localizedDisplayName(pkg, lang ?? ""),
+        shortDescription: localizedShortDescription(pkg, lang ?? ""),
         userName: pkg.user.Profile?.userName || null,
         userId: pkg.userId,
         iconFileUrl: url,

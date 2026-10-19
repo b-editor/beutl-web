@@ -1,4 +1,5 @@
 import { getDb } from "./provider";
+import { packageTranslationSelect } from "./localization";
 import { startTransaction, type PrismaTransaction } from "./transaction";
 
 export async function findUserPackageIdsByUserId({
@@ -123,12 +124,14 @@ export async function retrieveLibraryPackagesByUserId({
   userId,
   currency,
   take,
+  lang,
   prisma,
 }: {
   userId: string;
   currency: string | null;
   /** 先頭 N 件だけ要るとき (ダッシュボードの概要など) に指定する。 */
   take?: number;
+  lang?: string;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma || await getDb();
@@ -151,6 +154,7 @@ export async function retrieveLibraryPackagesByUserId({
           name: true,
           shortDescription: true,
           tags: true,
+          ...(lang ? packageTranslationSelect(lang) : {}),
           iconFile: {
             select: {
               id: true,

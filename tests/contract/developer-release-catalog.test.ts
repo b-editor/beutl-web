@@ -23,7 +23,7 @@ import Page from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/
 
 const appRequire = createRequire(new URL("../../apps/web/package.json", import.meta.url));
 const { renderToStaticMarkup } = appRequire("react-dom/server");
-const pkg = { id: "package-1" };
+const pkg = { id: "package-1", PackageTranslation: [], Release: [] };
 const params = () => Promise.resolve({ lang: "en", name: "package" });
 
 describe("developer release version catalog", () => {
@@ -44,7 +44,7 @@ describe("developer release version catalog", () => {
     renderToStaticMarkup(await Page({ params: params() }));
 
     expect(mocks.releaseForm).toHaveBeenCalledWith(
-      { pkg, lang: "en", beutlVersions: [] },
+      { pkg, lang: "en", languages: expect.any(Array), beutlVersions: [] },
       undefined,
     );
     expect(log).toHaveBeenCalledWith("Failed to load Beutl version suggestions", error);
@@ -63,7 +63,7 @@ describe("developer release version catalog", () => {
     renderToStaticMarkup(await Page({ params: params() }));
 
     expect(mocks.releaseForm).toHaveBeenCalledWith(
-      { pkg, lang: "en", beutlVersions: ["2.0.0", "2.0.0-preview.10", "2.0.0-preview.9", "1.9.0"] },
+      { pkg, lang: "en", languages: expect.any(Array), beutlVersions: ["2.0.0", "2.0.0-preview.10", "2.0.0-preview.9", "1.9.0"] },
       undefined,
     );
   });

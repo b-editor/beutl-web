@@ -8,13 +8,14 @@ import { formatAmount, visiblePackageTags } from "@beutl/core";
 import { getTranslation } from "@beutl/i18n";
 import { contentImageSources } from "@/lib/content-image";
 
-const getPublishedPackages = cache((name: string) => retrievePublishedPackages(name));
+const getPublishedPackages = cache((name: string, lang: string) =>
+  retrievePublishedPackages(name, lang));
 
 export async function generateMetadata(props: {
   params: Promise<{ lang: string; name: string }>;
 }): Promise<Metadata> {
   const { lang, name } = await props.params;
-  const { displayName } = await getPublishedPackages(name);
+  const { displayName } = await getPublishedPackages(name, lang);
   const { t } = await getTranslation(lang);
   const title = t("store:packagesCreatedByName", { name: displayName });
   return {
@@ -34,7 +35,7 @@ export default async function Page(props: { params: Promise<{ lang: string; name
   } = params;
 
   const { items: packages, displayName } =
-    await getPublishedPackages(name);
+    await getPublishedPackages(name, lang);
   const { t } = await getTranslation(lang);
 
   return (

@@ -2,16 +2,19 @@ import { getDb } from "@beutl/db";
 import type { Prisma } from "@prisma/client";
 import { packagePaied } from "../store-utils";
 import { getContentUrl } from "../content-url";
-import { selectPricing } from "@beutl/core";
+import { localizedPackageText, selectPricing } from "@beutl/core";
+import { packageTranslationSelect } from "@beutl/db";
 
 export async function getPackage({
   userId,
   query,
   currency,
+  lang,
 }: {
   userId?: string;
   query: Prisma.PackageWhereInput;
   currency?: string;
+  lang?: string;
 }) {
   const db = await getDb();
   const result = await db.package.findFirst({
@@ -75,6 +78,7 @@ export async function getPackage({
           take: 1,
         }
         : undefined,
+      ...(lang ? packageTranslationSelect(lang) : {}),
     },
   });
 
@@ -90,10 +94,12 @@ export async function getPackages({
   userId,
   query,
   currency,
+  lang,
 }: {
   userId?: string;
   query: Prisma.PackageWhereInput;
   currency?: string;
+  lang?: string;
 }) {
   const db = await getDb();
   return db.package.findMany({
@@ -157,6 +163,7 @@ export async function getPackages({
           take: 1,
         }
         : undefined,
+      ...(lang ? packageTranslationSelect(lang) : {}),
     },
   });
 }
@@ -166,11 +173,13 @@ export async function mapPackage({
   currency,
   pkg,
   request,
+  lang,
 }: {
   userId?: string;
   currency?: string;
   pkg: NonNullable<Awaited<ReturnType<typeof getPackage>>>;
   request?: Request;
+  lang?: string;
 }) {
   const owned = pkg.UserPackage && pkg.UserPackage.length > 0;
   let paied = false;
@@ -179,13 +188,14 @@ export async function mapPackage({
   }
 
   const price = selectPricing(pkg.packagePricing, currency);
+  const texts = localizedPackageText(pkg, lang ?? "");
 
   return {
     id: pkg.id,
     name: pkg.name,
-    displayName: pkg.displayName,
-    description: pkg.description,
-    shortDescription: pkg.shortDescription,
+    displayName: texts.displayName,
+    description: texts.description,
+    shortDescription: texts.shortDescription,
     website: pkg.webSite,
     tags: pkg.tags,
     screenshots: await Promise.all(pkg.PackageScreenshot.map(async (i) => await getContentUrl(i.fileId, request))),

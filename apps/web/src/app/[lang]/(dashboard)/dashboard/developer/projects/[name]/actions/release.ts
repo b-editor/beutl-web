@@ -20,6 +20,7 @@ import {
   getReleasePublishedByIdOrThrow,
   getReleaseWithFileById,
   updateRelease as updateReleaseRecord,
+  upsertReleaseTranslations,
 } from "@beutl/db";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
@@ -138,6 +139,13 @@ export async function updateRelease(
             nuget,
             prisma: tx,
           });
+          if (validated.data.translations) {
+            await upsertReleaseTranslations({
+              releaseId: validated.data.id,
+              translations: validated.data.translations,
+              prisma: tx,
+            });
+          }
 
           await refreshNugetPackageMetadata(tx, { id: release.packageId, audience: current.package.audience });
 

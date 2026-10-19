@@ -3,7 +3,7 @@ import { contentPath } from "@/lib/content-url";
 import { guessCurrency } from "@/lib/currency";
 import { retrievePublishedPackagesByUserName } from "@beutl/db";
 import { getProfileDisplayNameByUserName } from "@beutl/db";
-import { selectPricing } from "@beutl/core";
+import { localizedDisplayName, localizedShortDescription, selectPricing } from "@beutl/core";
 
 type ListedPackage = {
   id: string;
@@ -21,6 +21,7 @@ type ListedPackage = {
 
 export async function retrievePublishedPackages(
   userName: string,
+  lang: string,
 ): Promise<{ items: ListedPackage[]; displayName: string }> {
   const currency = await guessCurrency();
   const profile = getProfileDisplayNameByUserName({
@@ -29,6 +30,7 @@ export async function retrievePublishedPackages(
   const tmp = await retrievePublishedPackagesByUserName({
     userName,
     currency,
+    lang,
   });
   const items = Promise.all(
     tmp
@@ -38,8 +40,8 @@ export async function retrievePublishedPackages(
         return {
           id: pkg.id,
           name: pkg.name,
-          displayName: pkg.displayName || undefined,
-          shortDescription: pkg.shortDescription,
+          displayName: localizedDisplayName(pkg, lang) || undefined,
+          shortDescription: localizedShortDescription(pkg, lang),
           userName: pkg.user.Profile?.userName || undefined,
           iconFileUrl: url || undefined,
           tags: pkg.tags,

@@ -6,7 +6,8 @@ import { guessCurrency } from "../currency";
 import { getPackage, mapPackage } from "../api/packages-db";
 import { findPackageBasicByName } from "@beutl/db";
 import { findReleaseByPackageAndVersion, findReleasesForPackage } from "@beutl/db";
-import { compareNugetVersions } from "@beutl/core";
+import { compareNugetVersions, localizedReleaseDescription } from "@beutl/core";
+import { getLanguage } from "../lang-utils";
 
 const app = new Hono()
   .use("*", async (c, next) => {
@@ -17,12 +18,14 @@ const app = new Hono()
     const name = c.req.param("name");
     const userId = await getUserId(c);
     const currency = await guessCurrency(c.req.raw);
+    const lang = c.req.query("lang") ?? await getLanguage(c.req.raw);
     const pkg = await getPackage({
       query: {
         name: name,
       },
       userId: userId ?? undefined,
       currency: currency ?? undefined,
+      lang,
     });
     if (!pkg) {
       return c.json(await apiErrorResponse("packageNotFound"), { status: 404 });
@@ -39,12 +42,14 @@ const app = new Hono()
         currency: currency ?? undefined,
         pkg,
         request: c.req.raw,
+        lang,
       }),
     );
   })
   .get("/:name/releases", async (c) => {
     const name = c.req.param("name");
     const userId = await getUserId(c);
+    const lang = c.req.query("lang") ?? await getLanguage(c.req.raw);
     const pkg = await findPackageBasicByName({ name });
     if (!pkg) {
       return c.json(await apiErrorResponse("packageNotFound"), { status: 404 });
@@ -59,6 +64,7 @@ const app = new Hono()
     const releases = await findReleasesForPackage({
       packageId: pkg.id,
       published,
+      lang,
     });
     releases.sort((a, b) => {
       return compareNugetVersions(b.version, a.version);
@@ -69,7 +75,7 @@ const app = new Hono()
         id: r.id,
         version: r.version,
         title: r.title,
-        description: r.description,
+        description: localizedReleaseDescription(r, lang),
         targetVersion: r.targetVersion,
         fileId: r.fileId,
         fileUrl: r.fileId ? await nugetFileUrl(r.fileId, userId) : null,
@@ -80,6 +86,7 @@ const app = new Hono()
     const name = c.req.param("name");
     const version = c.req.param("version");
     const userId = await getUserId(c);
+    const lang = c.req.query("lang") ?? await getLanguage(c.req.raw);
 
     const pkg = await findPackageBasicByName({ name });
     if (!pkg) {
@@ -94,6 +101,7 @@ const app = new Hono()
     const release = await findReleaseByPackageAndVersion({
       packageId: pkg.id,
       version,
+      lang,
     });
     if (!release) {
       return c.json(await apiErrorResponse("releaseNotFound"), { status: 404 });
@@ -108,7 +116,7 @@ const app = new Hono()
       id: release.id,
       version: release.version,
       title: release.title,
-      description: release.description,
+      description: localizedReleaseDescription(release, lang),
       targetVersion: release.targetVersion,
       fileId: release.fileId,
       fileUrl: release.fileId ? await nugetFileUrl(release.fileId, userId) : null,

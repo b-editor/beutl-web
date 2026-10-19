@@ -50,10 +50,15 @@ const pkg = {
   shortDescription: "Plain summary",
   tags: [],
   iconFileUrl: null,
+  PackageTranslation: [],
   PackageScreenshot: [],
   Release: [release],
   user: { Profile: { userName: "publisher" } },
 };
+const languages = [
+  { code: "ja", name: "Japanese" },
+  { code: "en", name: "English" },
+];
 const labels = {
   write: "Write",
   preview: "Preview",
@@ -132,7 +137,13 @@ describe("package Markdown interactions", () => {
 
   it("previews and saves the exact package Markdown source", async () => {
     await act(() =>
-      root.render(createElement(PackageDescriptionForm, { pkg: pkg as never, lang: "en" })),
+      root.render(
+        createElement(PackageDescriptionForm, {
+          pkg: pkg as never,
+          lang: "en",
+          languages,
+        }),
+      ),
     );
     expect(container.querySelector("h1")?.textContent).toBe("Package description");
     await act(() => button("developer:common.edit").click());
@@ -144,6 +155,10 @@ describe("package Markdown interactions", () => {
     expect(mocks.updateDescription).toHaveBeenCalledWith({
       packageId: pkg.id,
       description: markdown,
+      translations: [
+        { lang: "ja", description: "" },
+        { lang: "en", description: "" },
+      ],
     });
   });
 
@@ -153,6 +168,7 @@ describe("package Markdown interactions", () => {
         createElement(ReleaseForm, {
           pkg: pkg as never,
           lang: "en",
+          languages,
           beutlVersions: ["2.0.0", "1.9.0"],
         }),
       ),

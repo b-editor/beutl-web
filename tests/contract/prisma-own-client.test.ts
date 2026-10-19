@@ -131,7 +131,7 @@ describe("work that outlives the response", () => {
     );
     const cached = storeUtils.slice(storeUtils.indexOf("unstable_cache("));
     expect(cached).toMatch(
-      /^unstable_cache\(\s*\(take: number\) =>\s*withOwnPrismaClient\(\(prisma\) => retrieveLatestPublishedPackages\(\{ take, prisma \}\)\)/u,
+      /^unstable_cache\(\s*\(take: number, lang: string\) =>\s*withOwnPrismaClient\(\(prisma\) => retrieveLatestPublishedPackages\(\{ take, lang, prisma \}\)\)/u,
     );
   });
 });

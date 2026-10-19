@@ -23,6 +23,7 @@ export * from "./customer";
 export * from "./feedback";
 export * from "./file";
 export * from "./git-storage";
+export * from "./localization";
 export * from "./native-app-auth";
 export * from "./nuget-package";
 export * from "./package";

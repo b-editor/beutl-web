@@ -47,7 +47,7 @@ export default async function Page(
     : isPackageTypeFilter(searchParams.type) ? searchParams.type : "all";
 
   const { t } = await getTranslation(lang);
-  const packages = type === "development" ? [] : await retrievePackages(query, type);
+  const packages = type === "development" ? [] : await retrievePackages(query, type, lang);
 
   return (
     <>
