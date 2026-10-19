@@ -70,7 +70,7 @@ async function createResponse(
     package: {
       id: pkg.id,
       name: pkg.name,
-      displayName: localizedDisplayName(pkg, displayLang),
+      displayName: localizedDisplayName(pkg, displayLang) || null,
       shortDescription: localizedShortDescription(pkg, displayLang),
       tags: pkg.tags,
       logoId: pkg.iconFileId,

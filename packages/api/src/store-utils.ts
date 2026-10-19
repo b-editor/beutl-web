@@ -134,7 +134,7 @@ export async function retrievePackages(
       return {
         id: pkg.id,
         name: pkg.name,
-        displayName: localizedDisplayName(pkg, lang ?? ""),
+        displayName: localizedDisplayName(pkg, lang ?? "") || null,
         shortDescription: localizedShortDescription(pkg, lang ?? ""),
         userName: pkg.user.Profile?.userName || null,
         userId: pkg.userId,

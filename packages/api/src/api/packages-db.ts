@@ -193,7 +193,7 @@ export async function mapPackage({
   return {
     id: pkg.id,
     name: pkg.name,
-    displayName: texts.displayName,
+    displayName: texts.displayName || null,
     description: texts.description,
     shortDescription: texts.shortDescription,
     website: pkg.webSite,
