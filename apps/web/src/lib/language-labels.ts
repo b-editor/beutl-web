@@ -8,6 +8,8 @@ export function languageLabels(lang: string): { code: string; name: string }[] {
   try {
     display = new Intl.DisplayNames([lang], { type: "language" });
   } catch {
+    // 言語タグとして不正な値では Intl が RangeError を投げる。その場合も
+    // この画面は落とさず、言語コードをそのまま名前に使う。
     display = null;
   }
   return availableLanguages.map((code) => ({
