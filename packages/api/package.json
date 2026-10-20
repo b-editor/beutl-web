@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./app": "./src/app.ts",
     "./error": "./src/error.ts",
     "./api/auth": "./src/api/auth.ts",
     "./api/error": "./src/api/error.ts",
@@ -13,6 +14,7 @@
     "./git/repositories": "./src/git/repositories.ts",
     "./git/repository-browser": "./src/git/repository-browser.ts",
     "./ai/entitlements": "./src/ai/entitlements.ts",
+    "./ai/job-input": "./src/ai/job-input.ts",
     "./ai/image-model-capabilities": "./src/ai/image-model-capabilities.ts",
     "./ai/model-catalog": "./src/ai/model-catalog.ts",
     "./ai/video-model-capabilities": "./src/ai/video-model-capabilities.ts",

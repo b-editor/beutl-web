@@ -1,6 +1,10 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("hono", () => {
+  throw new Error("Shared API services must not load HTTP routers");
+});
 
 function source(relativePath: string): string {
   return readFileSync(new URL(`../../${relativePath}`, import.meta.url), "utf8");
@@ -23,6 +27,17 @@ function sourceFiles(directory: string): string[] {
 }
 
 describe("Cloudflare Worker memory footprint", () => {
+  it("loads shared API services without constructing HTTP routers", async () => {
+    const services = await import("@beutl/api");
+
+    expect(services.parseReplayableAiJobInput("image", {
+      prompt: "A landscape",
+      aspectRatio: "1:1",
+    }).success).toBe(true);
+    expect(services.getEntitlements).toBeTypeOf("function");
+    expect(services.readBoundedResponseText).toBeTypeOf("function");
+  });
+
   it("keeps the OpenNext R2 registry independent from the API barrel", () => {
     const apiPackage = packageJson("packages/api/package.json");
     const prisma = source("apps/web/src/prisma.ts");
@@ -54,7 +69,7 @@ describe("Cloudflare Worker memory footprint", () => {
     expect(source("pnpm-lock.yaml")).not.toContain("zod@4.3.6");
   });
 
-  it("keeps the server API barrel out of browser modules", () => {
+  it("keeps server API entry points out of browser modules", () => {
     const webSource = new URL("../../apps/web/src", import.meta.url).pathname;
     const clientFiles = sourceFiles(webSource).filter((path) =>
       readFileSync(path, "utf8").startsWith('"use client";')
@@ -63,7 +78,7 @@ describe("Cloudflare Worker memory footprint", () => {
     expect(clientFiles.length).toBeGreaterThan(0);
     for (const path of clientFiles) {
       expect(readFileSync(path, "utf8"), path).not.toMatch(
-        /from "@beutl\/api"/u,
+        /from "@beutl\/api(?:\/(?:app|runtime))?"/u,
       );
     }
   });

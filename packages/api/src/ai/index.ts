@@ -3,6 +3,7 @@ export * from "./credits";
 export * from "./model-catalog";
 export * from "./model-pricing";
 export * from "./job-errors";
+export * from "./job-input";
 export * from "./job-response";
 export * from "./upload-limits";
 export * from "./request-integrity";

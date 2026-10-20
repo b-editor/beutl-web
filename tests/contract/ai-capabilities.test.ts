@@ -44,7 +44,7 @@ vi.mock(
   },
 );
 
-import { v3 } from "@beutl/api";
+import { v3 } from "@beutl/api/app";
 import { clearAiVideoModelCapabilitiesCache } from "../../packages/api/src/ai/video-model-capabilities";
 import { UNSTATED_VIDEO_INPUT_LIMITS } from "../../packages/api/src/ai/providers/types";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";

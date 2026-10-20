@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll } from "vitest";
 import { Hono } from "hono";
-import { v1, v2, v3, api } from "@beutl/api";
+import { v1, v2, v3, api } from "@beutl/api/app";
 import { setDbProvider } from "@beutl/db";
 
 // Web (route.ts) と Worker (worker.ts) の合成が同一レスポンスを返すことを検証する。

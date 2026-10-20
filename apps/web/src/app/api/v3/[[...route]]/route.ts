@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
-import { v3 } from "@beutl/api";
+import { v3 } from "@beutl/api/app";
 
 const app = new Hono().basePath("/api/v3").route("/", v3);
 

@@ -15,7 +15,7 @@ Cloudflare Workers.
 | `apps/admin` | `@beutl/admin` | Administrative console |
 | `apps/nuget-server` | `@beutl/nuget-server` | NuGet protocol and package distribution at nuget.beditor.net |
 | `apps/image-worker` | `@beutl/image-worker` | Private Cloudflare Worker for AI image editing |
-| `packages/api` | `@beutl/api` | Hono APIs for desktop clients (`v1`, `v2`, and `v3`) |
+| `packages/api` | `@beutl/api` | Shared server services and desktop HTTP APIs (`@beutl/api/app`) |
 | `packages/core` | `@beutl/core` | Framework-independent domain logic |
 | `packages/db` | `@beutl/db` | Prisma client and data-access helpers |
 | `packages/email` | `@beutl/email` | Server-only email delivery |
@@ -24,6 +24,11 @@ Cloudflare Workers.
 | `packages/ui` | `@beutl/ui` | Shared UI components |
 | `tests/contract` | — | Golden and external-contract tests |
 | `tests/integration` | — | Tests that use CockroachDB or live provider data when enabled |
+
+HTTP routes are composed through `@beutl/api/app`; shared services use
+`@beutl/api` or a focused subpath such as `@beutl/api/ai/job-input`.
+See [the module boundary decision](docs/adr/0003-separate-http-composition-from-services.md)
+for dependency direction and the next refactoring priorities.
 
 ## Getting started
 

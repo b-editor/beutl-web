@@ -14,18 +14,14 @@ const mocks = vi.hoisted(() => ({
   topUpRefunds: vi.fn(),
   customer: vi.fn(),
   billing: vi.fn(),
-  setR2: vi.fn(),
 }));
 
-vi.mock("@beutl/api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@beutl/api")>();
-  return {
-    ...actual,
-    reconcileAiJobs: mocks.jobs,
-    reconcileStripeCustomerProvisioning: mocks.customer,
-    setR2BucketProvider: mocks.setR2,
-  };
-});
+vi.mock("../../packages/api/src/ai/reconcile-jobs", () => ({
+  reconcileAiJobs: mocks.jobs,
+}));
+vi.mock("../../packages/api/src/stripe-customer-provisioning", () => ({
+  reconcileStripeCustomerProvisioning: mocks.customer,
+}));
 vi.mock("../../packages/api/src/storage-uploads", () => ({
   abandonStaleStorageUploads: mocks.storage,
   reconcileStorageMultipartCleanups: mocks.multipartStorage,

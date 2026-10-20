@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sign } from "hono/jwt";
 import { setDbProvider } from "@beutl/db";
-import { api } from "@beutl/api";
+import { api } from "@beutl/api/app";
 import { setR2BucketProvider } from "@beutl/api/ai/r2-provider";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 

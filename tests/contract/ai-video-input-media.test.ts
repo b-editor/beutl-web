@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { setDbProvider } from "@beutl/db";
-import { setR2BucketProvider, v3 } from "@beutl/api";
+import { setR2BucketProvider } from "@beutl/api";
+import { v3 } from "@beutl/api/app";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 import {
   AI_VIDEO_INPUT_PREFIX,

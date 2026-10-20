@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { setDbProvider } from "@beutl/db";
-import { v3 } from "@beutl/api";
+import { v3 } from "@beutl/api/app";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 import { createCallbackNonce } from "../../packages/api/src/ai/request-integrity";
 

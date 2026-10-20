@@ -4,6 +4,7 @@ import { throwIfUnauth } from "@/lib/auth-guard";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
 import { headers } from "next/headers";
+import { parseReplayableAiJobInput, sanitizeAiJobInputParams } from "@beutl/api/ai/job-input";
 import {
   AI_JOB_FAILURE_MESSAGES,
   AiProviderError,
@@ -42,8 +43,6 @@ import {
   translateSegments,
   translationCharacterCount,
   validateAiInputImage,
-  parseReplayableAiJobInput,
-  sanitizeAiJobInputParams,
   type TranslationStyle,
   validateTranscriptionResult,
   type AiInputImageMimeType,

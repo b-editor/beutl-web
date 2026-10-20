@@ -11,7 +11,7 @@ vi.mock("@/lib/ai-image-worker-binding", () => ({ getImageWorkerBinding }));
 // Hono app, because the route mounts what it is given.
 const forwarded = vi.hoisted(() => [] as Request[]);
 const forwardedPrepared = vi.hoisted(() => [] as boolean[]);
-vi.mock("@beutl/api", async () => {
+vi.mock("@beutl/api/app", async () => {
   const { Hono } = await import("hono");
   return {
     v3: new Hono().all("/*", (c) => {
