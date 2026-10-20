@@ -65,7 +65,7 @@ export default async function Page(props: {
   const { name, lang } = await props.params;
 
   const session = await authOrSignIn();
-  const pkg = await retrievePackage(name);
+  const pkg = await retrievePackage(name, lang);
   if (!pkg) {
     notFound();
   }

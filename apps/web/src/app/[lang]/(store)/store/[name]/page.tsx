@@ -14,7 +14,7 @@ import {
 } from "@/lib/store-utils";
 import { headers } from "next/headers";
 
-const getPackage = cache((name: string) => retrievePackage(name));
+const getPackage = cache((name: string, lang: string) => retrievePackage(name, lang));
 
 type Props = {
   params: Promise<{
@@ -29,8 +29,8 @@ type Props = {
 export async function generateMetadata(props: {
   params: Promise<{ lang: string; name: string }>;
 }): Promise<Metadata> {
-  const { name } = await props.params;
-  const pkg = await getPackage(name);
+  const { name, lang } = await props.params;
+  const pkg = await getPackage(name, lang);
   if (!pkg) {
     return {};
   }
@@ -59,7 +59,7 @@ export default async function Page(props: Props) {
     name
   } = params;
 
-  const pkg = await getPackage(name);
+  const pkg = await getPackage(name, lang);
   if (!pkg) {
     notFound();
   }

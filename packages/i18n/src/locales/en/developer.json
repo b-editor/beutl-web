@@ -42,6 +42,7 @@
     "descriptionMax": "Description must be 1000 characters or fewer",
     "displayNameMax": "Display name must be 50 characters or fewer",
     "idInvalid": "Invalid ID",
+    "languageUnsupported": "This language is not supported",
     "packageIdCharacters": "Use letters, numbers, underscores, dots and hyphens in the package ID.",
     "packageIdMax": "Package ID must be 50 characters or fewer",
     "packageIdMin": "Package ID must be at least 3 characters",
@@ -51,6 +52,7 @@
     "publishedInvalid": "Invalid publish setting",
     "shortDescriptionMax": "Short description must be 200 characters or fewer",
     "titleMax": "Title must be 50 characters or fewer",
+    "translationsInvalid": "The translations are not valid",
     "versionIncorrect": "The version is not valid",
     "versionInvalid": "Invalid version"
   },
@@ -61,6 +63,12 @@
   },
   "description": {
     "title": "Description"
+  },
+  "translation": {
+    "original": "Original",
+    "languageMenu": "Language",
+    "addLanguage": "Add language...",
+    "noLanguagesToAdd": "No languages left to add."
   },
   "markdown": {
     "write": "Write",

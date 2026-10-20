@@ -11,15 +11,21 @@ import { getUserId } from "../api/auth";
 import { getContentUrl } from "../content-url";
 import { findProfileForDiscover } from "@beutl/db";
 import { PACKAGE_TYPE_FILTERS } from "@beutl/core";
+import { getLanguage } from "../lang-utils";
 
 // Omitting `type` keeps the pre-data-package behaviour: every kind is listed.
 const packageTypeSchema = z.enum(PACKAGE_TYPE_FILTERS).optional().default("all");
 // Offset pagination traverses discarded rows too, so count alone cannot bound it.
 const MAX_SEARCH_OFFSET = 10_000;
 
+// 表示言語の上書き。省略時は Accept-Language から解決する (どちらも原文
+// フォールバックがあるので、未知の言語が来ても壊れない)。
+const langSchema = z.string().optional();
+
 const searchQuerySchema = z.object({
   query: z.string().optional(),
   type: packageTypeSchema,
+  lang: langSchema,
   offset: z.string().trim().min(1)
     .pipe(z.coerce.number<string>().int().min(0).max(MAX_SEARCH_OFFSET))
     .optional().default(0),
@@ -28,6 +34,7 @@ const searchQuerySchema = z.object({
 
 const featuredQuerySchema = z.object({
   type: packageTypeSchema,
+  lang: langSchema,
 });
 
 async function mapPackage(pkg: ListedPackage, userId: string | null, request?: Request) {
@@ -68,11 +75,12 @@ const app = new Hono()
   .get("/search", zValidator("query", searchQuerySchema), async (c) => {
     const query = c.req.valid("query");
     const userId = await getUserId(c);
+    const lang = query.lang ?? await getLanguage(c.req.raw);
 
     const packages = await retrievePackages(query.query, c.req.raw, query.type, {
       offset: query.offset,
       count: query.count,
-    });
+    }, lang);
     const result = await Promise.all(
       packages.map(async (pkg) => await mapPackage(pkg, userId, c.req.raw)),
     );
@@ -82,8 +90,9 @@ const app = new Hono()
   .get("/featured", zValidator("query", featuredQuerySchema), async (c) => {
     const query = c.req.valid("query");
     const userId = await getUserId(c);
+    const lang = query.lang ?? await getLanguage(c.req.raw);
 
-    const packages = await retrievePackages(undefined, c.req.raw, query.type);
+    const packages = await retrievePackages(undefined, c.req.raw, query.type, undefined, lang);
     const result = await Promise.all(
       packages.map(async (pkg) => await mapPackage(pkg, userId, c.req.raw)),
     );

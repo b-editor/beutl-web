@@ -42,6 +42,7 @@
     "descriptionMax": "説明は1000文字以下である必要があります",
     "displayNameMax": "表示名は50文字以下である必要があります",
     "idInvalid": "IDが不正です",
+    "languageUnsupported": "この言語には対応していません",
     "packageIdCharacters": "パッケージ ID には英数字、アンダースコア、ピリオド、ハイフンを使用できます。",
     "packageIdMax": "パッケージIDは50文字以下である必要があります",
     "packageIdMin": "パッケージIDは3文字以上である必要があります",
@@ -51,6 +52,7 @@
     "publishedInvalid": "公開設定が不正です",
     "shortDescriptionMax": "短い説明は200文字以下である必要があります",
     "titleMax": "タイトルは50文字以下である必要があります",
+    "translationsInvalid": "翻訳の内容が不正です",
     "versionIncorrect": "バージョンが正しくありません",
     "versionInvalid": "バージョンが不正です"
   },
@@ -61,6 +63,12 @@
   },
   "description": {
     "title": "説明"
+  },
+  "translation": {
+    "original": "原文",
+    "languageMenu": "言語",
+    "addLanguage": "言語の追加...",
+    "noLanguagesToAdd": "追加できる言語はありません。"
   },
   "markdown": {
     "write": "編集",

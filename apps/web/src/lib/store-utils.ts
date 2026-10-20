@@ -3,7 +3,14 @@ import { unstable_cache } from "next/cache";
 import { getDb, packageNameFilter } from "@beutl/db";
 import { contentPath } from "@/lib/content-url";
 import { withOwnPrismaClient } from "@/prisma";
-import { selectPricing, packageTypeWhere } from "@beutl/core";
+import {
+  localizedDisplayName,
+  localizedPackageText,
+  localizedReleaseDescription,
+  localizedShortDescription,
+  selectPricing,
+  packageTypeWhere,
+} from "@beutl/core";
 import type { PackageTypeFilter } from "@beutl/core";
 import { guessCurrency } from "./currency";
 import {
@@ -41,7 +48,7 @@ export async function retrievePrices(pkgId: string) {
 
 export type Package = NonNullable<Awaited<ReturnType<typeof retrievePackage>>>;
 
-export async function retrievePackage(name: string) {
+export async function retrievePackage(name: string, lang: string) {
   const db = await getDb();
   const pkg = await db.package.findFirst({
     where: {
@@ -58,6 +65,15 @@ export async function retrievePackage(name: string) {
       published: true,
       webSite: true,
       tags: true,
+      PackageTranslation: {
+        where: { lang },
+        select: {
+          lang: true,
+          displayName: true,
+          shortDescription: true,
+          description: true,
+        },
+      },
       user: {
         select: {
           Profile: {
@@ -94,6 +110,10 @@ export async function retrievePackage(name: string) {
           description: true,
           targetVersion: true,
           id: true,
+          ReleaseTranslation: {
+            where: { lang },
+            select: { lang: true, description: true },
+          },
         },
         where: {
           published: true,
@@ -114,8 +134,22 @@ export async function retrievePackage(name: string) {
     }),
   );
 
+  const text = localizedPackageText(pkg, lang);
+  // 翻訳行は表示用の文字列へ畳んだので、クライアントへは渡さない。
+  const { PackageTranslation: _translations, ...rest } = pkg;
+
   return {
-    ...pkg,
+    ...rest,
+    displayName: text.displayName,
+    shortDescription: text.shortDescription,
+    description: text.description,
+    Release: pkg.Release.map(({ ReleaseTranslation, ...release }) => ({
+      ...release,
+      description: localizedReleaseDescription(
+        { description: release.description, ReleaseTranslation },
+        lang,
+      ),
+    })),
     iconFileUrl: pkg.iconFile && contentPath(pkg.iconFile.id),
     PackageScreenshot: screenshots,
   };
@@ -141,8 +175,8 @@ export type LandingPackage = {
   which closes with the response.
 */
 const cachedLatestPublishedPackages = unstable_cache(
-  (take: number) =>
-    withOwnPrismaClient((prisma) => retrieveLatestPublishedPackages({ take, prisma })),
+  (take: number, lang: string) =>
+    withOwnPrismaClient((prisma) => retrieveLatestPublishedPackages({ take, lang, prisma })),
   ["landing-latest-packages"],
   { revalidate: 3600 },
 );
@@ -156,14 +190,15 @@ const cachedLatestPublishedPackages = unstable_cache(
 */
 export async function retrieveLatestPackagesForLanding(
   take: number,
+  lang: string,
 ): Promise<LandingPackage[]> {
   try {
-    const packages = await cachedLatestPublishedPackages(take);
+    const packages = await cachedLatestPublishedPackages(take, lang);
     return packages.map((pkg) => ({
       id: pkg.id,
       name: pkg.name,
-      displayName: pkg.displayName || pkg.name,
-      shortDescription: pkg.shortDescription,
+      displayName: localizedDisplayName(pkg, lang) || pkg.name,
+      shortDescription: localizedShortDescription(pkg, lang),
       publisherName:
         pkg.user.Profile?.displayName || pkg.user.Profile?.userName || null,
       iconFileUrl: pkg.iconFileId ? contentPath(pkg.iconFileId) : null,
@@ -194,8 +229,9 @@ export type ListedPackage = {
 };
 
 export async function retrievePackages(
-  query?: string,
-  type?: PackageTypeFilter,
+  query: string | undefined,
+  type: PackageTypeFilter,
+  lang: string,
 ): Promise<ListedPackage[]> {
   const db = await getDb();
   const currency = await guessCurrency();
@@ -233,6 +269,19 @@ export async function retrievePackages(
                   hasSome: [query],
                 },
               },
+              // 表示言語に限らずどの翻訳に一致しても拾う。訳した説明文で
+              // 探す利用者を取りこぼさない。
+              {
+                PackageTranslation: {
+                  some: {
+                    OR: [
+                      { displayName: { contains: query } },
+                      { shortDescription: { contains: query } },
+                      { description: { contains: query } },
+                    ],
+                  },
+                },
+              },
             ],
           }
         : {}),
@@ -248,6 +297,15 @@ export async function retrievePackages(
       tags: true,
       iconFileId: true,
       userId: true,
+      PackageTranslation: {
+        where: { lang },
+        select: {
+          lang: true,
+          displayName: true,
+          shortDescription: true,
+          description: true,
+        },
+      },
       user: {
         select: {
           Profile: {
@@ -289,8 +347,8 @@ export async function retrievePackages(
       return {
         id: pkg.id,
         name: pkg.name,
-        displayName: pkg.displayName,
-        shortDescription: pkg.shortDescription,
+        displayName: localizedDisplayName(pkg, lang),
+        shortDescription: localizedShortDescription(pkg, lang),
         userName: pkg.user.Profile?.userName || null,
         userId: pkg.userId,
         iconFileUrl: url,

@@ -21,7 +21,7 @@ export default async function Page(props: {
     storageFileCount,
     storageQuota,
     entitlements,
-  } = await retrieveDashboardOverview(session.user.id);
+  } = await retrieveDashboardOverview(session.user.id, lang);
 
   // File.size は BigInt。上限は最大でも 1TiB = 2^40 なので Number 化しても精度は落ちない。
   const usedBytes = Number(storageUsedBytes);

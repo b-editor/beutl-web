@@ -388,10 +388,27 @@ model Package {
   user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   packagePricing    PackagePricing[]
   PackageScreenshot PackageScreenshot[]
+  PackageTranslation PackageTranslation[]
   Release           Release[]
   UserPackage       UserPackage[]
 
   @@index([userId])
+}
+
+// 原文 (Package.description / shortDescription) は言語を持たない開発者の
+// 入力そのままで、翻訳だけを言語ごとの行にする。行が無い言語は原文を表示
+// するため、「原文と同じ内容を ja 行にもう一度書く」必要はない。
+model PackageTranslation {
+  packageId        String
+  lang             String
+  displayName      String?
+  shortDescription String?
+  description      String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  package          Package  @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  @@id([packageId, lang])
 }
 
 model PackageCheckoutAttempt {
@@ -1063,9 +1080,22 @@ model Release {
   updatedAt     DateTime @updatedAt
   file          File?    @relation(fields: [fileId], references: [id])
   package       Package  @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  ReleaseTranslation ReleaseTranslation[]
 
   @@index([packageId])
   @@unique([packageId, nugetVersion])
+}
+
+// Release.description (リリースノート) の翻訳。行が無い言語は原文を表示する。
+model ReleaseTranslation {
+  releaseId   String
+  lang        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  release     Release  @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+
+  @@id([releaseId, lang])
 }
 
 enum PackageAudience {

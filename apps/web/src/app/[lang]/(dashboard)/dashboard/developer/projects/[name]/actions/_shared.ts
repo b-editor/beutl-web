@@ -6,6 +6,7 @@ import { isValidNuGetVersionRange } from "@beutl/core";
 import { createDedicatedStorageFile } from "@/lib/storage";
 import type { StorageUploadFile } from "@/lib/storage";
 import type { PrismaTransaction } from "@beutl/db";
+import { isAvailableLanguage } from "@beutl/i18n";
 import type { Translator } from "@beutl/i18n";
 import SemVer from "semver";
 import { z } from "zod";
@@ -14,11 +15,80 @@ export type State = {
   errors?: {
     displayName?: string[];
     shortDescription?: string[];
+    translations?: string[];
   };
   success?: boolean;
   message?: string | null;
 };
 type ReleaseRecord = Awaited<ReturnType<typeof updateReleaseRecord>>;
+
+// 画面から届く翻訳の下書き。原文 (displayName など) とは別に、言語コードごとの
+// 上書きだけを運ぶ。空文字は「その言語の翻訳を消す」と同じ意味で、DB 側で行の
+// 削除になる（原文フォールバックに戻る）。
+const packageTranslationSchema = (t: Translator) =>
+  z.object({
+    lang: z
+      .string()
+      .refine(isAvailableLanguage, t("developer:validation.languageUnsupported")),
+    displayName: z
+      .string()
+      .max(50, t("developer:validation.displayNameMax"))
+      .nullish(),
+    shortDescription: z
+      .string()
+      .max(200, t("developer:validation.shortDescriptionMax"))
+      .nullish(),
+    description: z
+      .string()
+      .max(1000, t("developer:validation.descriptionMax"))
+      .nullish(),
+  });
+
+const releaseTranslationSchema = (t: Translator) =>
+  z.object({
+    lang: z
+      .string()
+      .refine(isAvailableLanguage, t("developer:validation.languageUnsupported")),
+    description: z
+      .string()
+      .max(1000, t("developer:validation.descriptionMax"))
+      .nullish(),
+  });
+
+// FormData の translations フィールドは JSON 文字列。未指定・空文字は「翻訳に
+// 触らない」ではなく「全言語ぶんの下書きが無い」を意味する。
+const translationsJson = <T extends z.ZodType>(t: Translator, item: T) =>
+  z
+    .string()
+    .optional()
+    .transform((value, ctx) => {
+      if (value === undefined || value.trim() === "") {
+        return undefined;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(value);
+      } catch {
+        // JSON として読めないこと自体が検証したい事実なので、原因は
+        // エラーではなくフィールドのエラーとして返す。
+        ctx.addIssue({
+          code: "custom",
+          message: t("developer:validation.translationsInvalid"),
+        });
+        return z.NEVER;
+      }
+      const result = z.array(item).safeParse(parsed);
+      if (!result.success) {
+        ctx.addIssue({
+          code: "custom",
+          message:
+            result.error.issues[0]?.message ??
+            t("developer:validation.translationsInvalid"),
+        });
+        return z.NEVER;
+      }
+      return result.data as z.output<T>[];
+    });
 
 const displayNameAndShortDescriptionSchema = (t: Translator) =>
   z.object({
@@ -27,6 +97,7 @@ const displayNameAndShortDescriptionSchema = (t: Translator) =>
       .string()
       .max(200, t("developer:validation.shortDescriptionMax")),
     id: z.string().uuid(t("developer:validation.idInvalid")),
+    translations: translationsJson(t, packageTranslationSchema(t)),
   });
 
 const releaseSchema = (t: Translator) =>
@@ -34,6 +105,7 @@ const releaseSchema = (t: Translator) =>
     title: z.string().max(50, t("developer:validation.titleMax")),
     description: z.string().max(1000, t("developer:validation.descriptionMax")),
     id: z.string().uuid(t("developer:validation.idInvalid")),
+    translations: translationsJson(t, releaseTranslationSchema(t)),
     targetVersion: z
       .string()
       .refine(
@@ -47,6 +119,13 @@ const releaseSchema = (t: Translator) =>
         t("developer:validation.publishedInvalid"),
       ),
     file: z.any().optional(),
+  });
+
+const descriptionUpdateSchema = (t: Translator) =>
+  z.object({
+    packageId: z.string().uuid(t("developer:validation.idInvalid")),
+    description: z.string().max(1000, t("developer:validation.descriptionMax")),
+    translations: z.array(packageTranslationSchema(t)).optional(),
   });
 
 async function sameUser<TResult>(
@@ -118,6 +197,7 @@ const intervalSchema = z.object({
 
 export {
   createDedicatedFile,
+  descriptionUpdateSchema,
   displayNameAndShortDescriptionSchema,
   intervalSchema,
   pricingSchema,

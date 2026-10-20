@@ -33,7 +33,7 @@ describe("nuspec-owned SDK metadata", () => {
         id: "pkg", name: "Beutl.Extensibility.Sdk", audience, published: true,
         displayName: "Beutl Extensibility SDK", shortDescription: "Libraries for building Beutl extensions.",
         description: "SDK metadata from the package manifest.", tags: ["sdk", "beutl"],
-        iconFileUrl: null, PackageScreenshot: [], Release: [],
+        iconFileUrl: null, PackageTranslation: [], PackageScreenshot: [], Release: [],
       });
       await act(async () => root.render(await Page({ params: Promise.resolve({ lang, name: "Beutl.Extensibility.Sdk" }) })));
       const header = container.querySelector("h2")!.parentElement!.parentElement!.parentElement!;

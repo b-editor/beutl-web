@@ -40,6 +40,7 @@ import {
 import { compareNugetVersions, isValidNugetVersion } from "@beutl/core";
 import { cn } from "@beutl/core";
 import { isValidNuGetVersionRange } from "@beutl/core";
+import { localizedReleaseDescription, pickTranslation } from "@beutl/core";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -52,25 +53,58 @@ import {
 } from "@beutl/ui/ui/alert-dialog";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { TargetVersionInput } from "./target-version-input";
+import type { LanguageLabel } from "@/lib/language-labels";
+import { useTranslationMode } from "./translation-mode";
+
+// 保存アクションの応答は翻訳行を運ばない (行は別テーブル)。画面の state では
+// その欠落を許し、読み出し時だけ翻訳行が付いてくる。
+type Release = Package["Release"][number];
+type ReleaseState = Omit<Release, "ReleaseTranslation"> & {
+  ReleaseTranslation?: Release["ReleaseTranslation"];
+};
+
+function initialDescriptions(
+  release: ReleaseState | undefined,
+  languages: LanguageLabel[],
+): Record<string, string> {
+  const saved = new Map(
+    (release?.ReleaseTranslation ?? []).map((translation) => [
+      translation.lang,
+      translation.description ?? "",
+    ]),
+  );
+  return Object.fromEntries(
+    languages.map((language) => [language.code, saved.get(language.code) ?? ""]),
+  );
+}
 
 export function ReleaseForm({
   pkg,
   lang,
+  languages,
   beutlVersions,
-}: { pkg: Package; lang: string; beutlVersions: string[] }) {
+}: {
+  pkg: Package;
+  lang: string;
+  languages: LanguageLabel[];
+  beutlVersions: string[];
+}) {
   const [edit, setEdit] = useState(false);
   const [open, setOpen] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState(false);
   const [saving, startSaveTransition] = useTransition();
   const [deleting, startDeleteTransition] = useTransition();
   const [creating, startCreateTransition] = useTransition();
-  const [releases, setReleases] = useState(pkg.Release);
-  const [release, setRelease] = useState<
-    Package["Release"][number] | undefined
-  >(releases?.[0]);
+  const [releases, setReleases] = useState<ReleaseState[]>(pkg.Release);
+  const [release, setRelease] = useState<ReleaseState | undefined>(
+    releases?.[0],
+  );
   const [title, setTitle] = useState(release?.title || "");
   const [files, setFiles] = useState<File[]>([]);
   const [description, setDescription] = useState(release?.description || "");
+  const [translations, setTranslations] = useState<Record<string, string>>(
+    () => initialDescriptions(release, languages),
+  );
   const [targetVersion, setTargetVersion] = useState({
     value: release?.targetVersion || "",
     message: "",
@@ -79,14 +113,38 @@ export function ReleaseForm({
   const [published, setPublished] = useState(release?.published || false);
   const { toast } = useToast();
   const { t } = useTranslation(lang);
+  const { language: selectedLanguage } = useTranslationMode();
+  const translationLanguage = languages.find(
+    (language) => language.code === selectedLanguage,
+  );
+  const descriptionIsFallback =
+    Boolean(selectedLanguage) &&
+    !pickTranslation(release?.ReleaseTranslation, selectedLanguage ?? "")
+      ?.description?.trim();
+
+  // 選択中のリリースに属する入力一式を差し替える。翻訳の下書きもリリース
+  // ごとなので、本体と一緒に切り替える。
+  const selectRelease = useCallback(
+    (selected: ReleaseState | undefined) => {
+      setRelease(selected);
+      setTitle(selected?.title || "");
+      setDescription(selected?.description || "");
+      setTranslations(initialDescriptions(selected, languages));
+      setTargetVersion({ value: selected?.targetVersion || "", message: "" });
+      setPublished(selected?.published || false);
+      setFiles([]);
+    },
+    [languages],
+  );
 
   const handleReset = useCallback(() => {
     setTitle(release?.title || "");
     setDescription(release?.description || "");
+    setTranslations(initialDescriptions(release, languages));
     setTargetVersion({ value: release?.targetVersion || "", message: "" });
     setPublished(release?.published || false);
     setFiles([]);
-  }, [release]);
+  }, [release, languages]);
 
   const handleSave = useCallback(async () => {
     if (!release) return;
@@ -98,14 +156,34 @@ export function ReleaseForm({
       formData.append("id", release.id);
       formData.append("title", title);
       formData.append("description", description);
+      formData.append(
+        "translations",
+        JSON.stringify(
+          languages.map((language) => ({
+            lang: language.code,
+            description: translations[language.code] ?? "",
+          })),
+        ),
+      );
       formData.append("targetVersion", pkg.audience === "DEVELOPMENT" ? "" : targetVersion.value);
       formData.append("published", published ? "on" : "off");
       const result = await updateRelease(formData);
       if (result.success) {
-        const data: Package["Release"][number] | undefined = result.data;
+        const data: ReleaseState | undefined = result.data;
         if (data) {
-          setRelease(data);
-          setReleases(releases.map((r) => (r.id === release.id ? data : r)));
+          // 保存応答は翻訳行を持たないので、今保存した下書きで補って
+          // プレビューが原文フォールバック表示に戻らないようにする。
+          const merged: ReleaseState = {
+            ...data,
+            ReleaseTranslation: languages
+              .map((language) => ({
+                lang: language.code,
+                description: translations[language.code] ?? "",
+              }))
+              .filter((translation) => translation.description.trim().length > 0),
+          };
+          setRelease(merged);
+          setReleases(releases.map((r) => (r.id === release.id ? merged : r)));
         }
         toast({
           variant: "default",
@@ -126,6 +204,8 @@ export function ReleaseForm({
     published,
     release,
     releases,
+    translations,
+    languages,
     t,
     targetVersion.value,
     pkg.audience,
@@ -152,18 +232,14 @@ export function ReleaseForm({
         version: version.value,
       });
       if (result.success) {
-        const data: Package["Release"][number] = result.data!;
+        const data: ReleaseState = result.data!;
         setReleases((releases) =>
           [...releases, data].toSorted((a, b) =>
             compareNugetVersions(b.version, a.version),
           ),
         );
-        setRelease(data);
-        setTitle(data.title);
-        setDescription(data.description);
-        setTargetVersion({ value: data.targetVersion, message: "" });
-        setPublished(data.published);
-        setFiles([]);
+        // 新規リリースに翻訳はまだ無いので、下書きも空から始める。
+        selectRelease(data);
         toast({
           variant: "default",
           title: t("developer:release.createSuccess"),
@@ -173,7 +249,7 @@ export function ReleaseForm({
         setVersion({ ...version, message: result.message || "" });
       }
     });
-  }, [handleClose, pkg.id, version, t, toast]);
+  }, [handleClose, selectRelease, pkg.id, version, t, toast]);
 
   const handleDelete = useCallback(() => {
     if (!release) return;
@@ -182,13 +258,7 @@ export function ReleaseForm({
       if (result.success) {
         const filtered = releases.filter((r) => r.id !== release.id);
         setReleases(filtered);
-        const data = filtered[0];
-        setRelease(data);
-        setTitle(data?.title || "");
-        setDescription(data?.description || "");
-        setTargetVersion({ value: data?.targetVersion || "", message: "" });
-        setPublished(data?.published || false);
-        setFiles([]);
+        selectRelease(filtered[0]);
         setEdit(false);
         toast({
           variant: "default",
@@ -202,7 +272,7 @@ export function ReleaseForm({
         });
       }
     });
-  }, [release, releases, t, toast]);
+  }, [release, releases, selectRelease, t, toast]);
 
   return (
     <div>
@@ -219,12 +289,7 @@ export function ReleaseForm({
               disabled={edit}
               onValueChange={(e) => {
                 const selected = releases.find((r) => r.id === e)!;
-                setRelease(selected);
-                setTitle(selected.title);
-                setDescription(selected.description);
-                setTargetVersion({ value: selected.targetVersion, message: "" });
-                setPublished(selected.published);
-                setFiles([]);
+                selectRelease(selected);
               }}
             >
               <SelectTrigger className="font-bold text-xl border-none bg-transparent px-0 pr-3 flex-1">
@@ -273,7 +338,19 @@ export function ReleaseForm({
           {release ? (
             <>
               <p className="mb-3 font-semibold break-words">{release.title}</p>
-              <Markdown>{release.description}</Markdown>
+              <Markdown
+                className={cn(
+                  descriptionIsFallback && "text-muted-foreground",
+                )}
+              >
+                {localizedReleaseDescription(
+                  {
+                    description: release.description,
+                    ReleaseTranslation: release.ReleaseTranslation,
+                  },
+                  selectedLanguage ?? "",
+                )}
+              </Markdown>
             </>
           ) : (
             <>{t("developer:release.noReleases")}</>
@@ -298,11 +375,29 @@ export function ReleaseForm({
           <MarkdownEditor
             key={release.id}
             id="release-description"
-            placeholder={t("developer:release.description")}
+            placeholder={
+              pkg.audience === "USER" && translationLanguage
+                ? description
+                : t("developer:release.description")
+            }
             maxLength={1000}
-            value={description}
+            value={
+              pkg.audience === "USER" && translationLanguage
+                ? translations[translationLanguage.code] ?? ""
+                : description
+            }
             disabled={saving}
-            onChange={(e) => setDescription(e.target.value)}
+            onChange={(e) => {
+              if (pkg.audience === "USER" && translationLanguage) {
+                const code = translationLanguage.code;
+                setTranslations((current) => ({
+                  ...current,
+                  [code]: e.target.value,
+                }));
+              } else {
+                setDescription(e.target.value);
+              }
+            }}
             labels={{
               write: t("developer:markdown.write"),
               preview: t("developer:markdown.preview"),
