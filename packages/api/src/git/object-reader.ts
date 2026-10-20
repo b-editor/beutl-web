@@ -179,12 +179,14 @@ export class GitObjectReader {
     checkSize?.(source); checkSize?.(target);
     return target;
   }
-  async info(oid: string, consumeLookup?: () => void, checkSize?: (size: number) => void): Promise<GitObjectInfo | null> {
+  async info(oid: string, consumeLookup?: () => void, checkSize?: (size: number) => void,
+    inspect?: (oid: string, entry: Entry) => void): Promise<GitObjectInfo | null> {
     const cached = this.infos.get(oid);
-    if (cached && !checkSize) return cached;
+    if (cached && !checkSize && !inspect) return cached;
     const entry = await this.entry(oid, consumeLookup);
     if (!entry) return null;
     const size = await this.entrySize(entry, checkSize);
+    inspect?.(oid, entry);
     let type = entry.type, base = entry.base;
     const seen = new Set([oid]);
     while (base) {
@@ -193,6 +195,7 @@ export class GitObjectReader {
       const source = await this.entry(base, consumeLookup);
       if (!source) throw new Error(`Git delta base ${base} is missing`);
       if (checkSize) await this.entrySize(source, checkSize);
+      inspect?.(base, source);
       type = source.type; base = source.base;
     }
     const info = { type: TYPES[type], size };

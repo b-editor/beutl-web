@@ -9,9 +9,10 @@ import { Readable } from "node:stream";
 import { createHash } from "node:crypto";
 import { deflateSync } from "node:zlib";
 import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable-object";
-import { receiveGitPack } from "../packages/api/src/git/git-http";
+import { readGitRepository, receiveGitPack } from "../packages/api/src/git/git-http";
 import { createGitPack, packEntryHeader } from "../packages/api/src/git/pack-writer";
 import { validateGitPack } from "../packages/api/src/git/pack-validation";
+import { GitObjectReader } from "../packages/api/src/git/object-reader";
 
 const execute = promisify(execFile);
 const repoId = "12345678-1234-1234-1234-123456789abc";
@@ -303,6 +304,131 @@ it.each([{ depth: 1, size: 24 * 1024 * 1024 }, { depth: 2, size: 24 * 1024 * 102
     } else {
       expect(response.status).toBe(200);
       expect(await response.text()).toContain(`ok refs/tags/test-${blobOid(Buffer.from("abc"))}`);
+      expect(reserve).toHaveBeenCalledOnce();
+    }
+  });
+
+it("rejects an unresolved REF_DELTA before reserving or storing the pack", async () => {
+  const bucket = new Bucket(), reserve = vi.fn(async () => true);
+  const response = await receive(bucket, pushBody([{
+    type: 7, base: Buffer.alloc(20, 1), data: Buffer.from([0, 1, 1, 97]),
+  }], blobOid(Buffer.from("a"))), reserve);
+  expect(response.status).toBe(400);
+  expect(reserve).not.toHaveBeenCalled();
+  expect([...bucket.objects.keys()].some((key) => key.endsWith(".pack"))).toBe(false);
+});
+
+it.each([6, 7])("resolves REF_DELTA bases produced by an in-pack type %s delta", async (type) => {
+  const data = Buffer.from("a"), middle = Buffer.from("ab"), target = Buffer.from("abc");
+  const entries = [{ data }, { type,
+    base: type === 7 ? Buffer.from(blobOid(data), "hex") : Buffer.from([packEntryHeader(3, 1).length + deflateSync(data).length]),
+    data: Buffer.from([1, 2, 0x90, 1, 1, 98]),
+  }, { type: 7, base: Buffer.from(blobOid(middle), "hex"), data: Buffer.from([2, 3, 0x90, 2, 1, 99]) }];
+  const response = await receive(new Bucket(), pushBody(entries, blobOid(target)));
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain(`ok refs/tags/test-${blobOid(target)}`);
+  // Resolve local delta chains before consulting storage, regardless of REF_DELTA order.
+  if (type === 7) entries.reverse();
+  const body = pushBody(entries), reader = { size: vi.fn(async () => null), info: vi.fn(async () => null) };
+  await validateGitPack(body.subarray(body.indexOf("PACK")), 16 * 1024 * 1024, reader as never);
+  expect(reader.size).not.toHaveBeenCalled();
+  expect(reader.info).not.toHaveBeenCalled();
+});
+
+it.each([false, true])("resolves an incoming delta chain rooted in stored history (loose=%s)", async (loose) => {
+  const bucket = new Bucket(), data = Buffer.from("a"), target = Buffer.from("abc");
+  if (loose) {
+    const oid = blobOid(data);
+    await bucket.put(`git/repos/${repoId}/repo.git/objects/${oid.slice(0, 2)}/${oid.slice(2)}`,
+      deflateSync(Buffer.concat([Buffer.from("blob 1\0"), data])));
+  } else {
+    expect((await receive(bucket, pushBody([{ data }], blobOid(data)))).status).toBe(200);
+  }
+  const entries = [
+    { type: 7, base: Buffer.from(blobOid(data), "hex"), data: Buffer.from([1, 2, 0x90, 1, 1, 98]) },
+    { type: 7, base: Buffer.from(blobOid(Buffer.from("ab")), "hex"), data: Buffer.from([2, 3, 0x90, 2, 1, 99]) },
+  ];
+  const reader = new GitObjectReader(readGitRepository(bucket as never, repoId)), info = vi.spyOn(reader, "info");
+  // The first missing base can become available after a later thin base resolves.
+  const body = pushBody([...entries].reverse());
+  await validateGitPack(body.subarray(body.indexOf("PACK")), 16 * 1024 * 1024, reader);
+  expect(info).toHaveBeenCalledTimes(2);
+  const response = await receive(bucket, pushBody(entries, blobOid(target)));
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain(`ok refs/tags/test-${blobOid(target)}`);
+});
+
+it("rejects an incorrect source size for a base produced by another delta", async () => {
+  const bucket = new Bucket(), reserve = vi.fn(async () => true), data = Buffer.from("a");
+  const body = pushBody([{ data }, {
+    type: 7, base: Buffer.from(blobOid(data), "hex"), data: Buffer.from([1, 2, 2, 97, 98]),
+  }, { type: 7, base: Buffer.from(blobOid(Buffer.from("ab")), "hex"), data: Buffer.from([1, 1, 1, 99]) }]);
+  expect((await receive(bucket, body, reserve)).status).toBe(400);
+  expect(reserve).not.toHaveBeenCalled();
+  expect([...bucket.objects.keys()].some((key) => key.endsWith(".pack"))).toBe(false);
+});
+
+it.each([
+  { stored: 262_145, incoming: 1, depth: 1, status: 413 },
+  { stored: 262_145, incoming: 1, depth: 2, status: 413 },
+  { stored: 131_072, incoming: 131_073, depth: 1, status: 413 },
+  { stored: 262_143, incoming: 1, depth: 1, status: 200 },
+])("shares the delta budget with $stored stored operations at depth $depth and $incoming incoming operations", async ({ stored, incoming, depth, status }) => {
+  const bucket = new Bucket(), reserve = vi.fn(async () => true);
+  const contents = [Buffer.from("x"), Buffer.alloc(stored, 97), Buffer.from("ab")].slice(0, depth + 1);
+  const pack = createGitPack(contents.map((content, i) => {
+    const data = i === 0 ? content : i === 1 ? literalDelta(stored) : Buffer.concat([
+      unsigned(contents[i - 1].length), unsigned(content.length), Buffer.from([content.length]), content,
+    ]);
+    return { oid: blobOid(content), entry: { type: i === 0 ? 3 : 7, size: data.length,
+      base: i === 0 ? undefined : blobOid(contents[i - 1]), data: deflateSync(data) } };
+  }), { index: true });
+  const path = `git/repos/${repoId}/repo.git/objects/pack/pack-${pack.checksum}`;
+  await bucket.put(`${path}.pack`, new Uint8Array(await new Response(pack.stream()).arrayBuffer()));
+  await bucket.put(`${path}.idx`, pack.index!);
+  const target = blobOid(Buffer.alloc(incoming, 97));
+  const response = await receive(bucket, pushBody([{
+    type: 7, base: Buffer.from(blobOid(contents.at(-1)!), "hex"), data: Buffer.concat([
+      unsigned(contents.at(-1)!.length), unsigned(incoming), Buffer.alloc(incoming * 2).fill(Buffer.from([1, 97])),
+    ]),
+  }], target), reserve);
+  expect(response.status).toBe(status);
+  if (status === 413) {
+    expect(await response.text()).toContain("delta operation budget");
+    expect(reserve).not.toHaveBeenCalled();
+    expect([...bucket.objects.keys()].filter((key) => key.endsWith(".pack"))).toHaveLength(1);
+  } else {
+    expect(await response.text()).toContain(`ok refs/tags/test-${target}`);
+    expect(reserve).toHaveBeenCalledOnce();
+  }
+});
+
+it.each([{ operations: 131_070, status: 200 }, { operations: 131_071, status: 413 }])(
+  "charges $operations cached ancestor operations for each stored base", async ({ operations, status }) => {
+    const bucket = new Bucket(), reserve = vi.fn(async () => true);
+    const contents = [Buffer.from("x"), Buffer.alloc(operations, 97), Buffer.from("ab"), Buffer.from("ac")];
+    const pack = createGitPack(contents.map((content, i) => {
+      const data = i === 0 ? content : i === 1 ? literalDelta(operations) : Buffer.concat([
+        unsigned(operations), unsigned(content.length), Buffer.from([content.length]), content,
+      ]);
+      return { oid: blobOid(content), entry: { type: i === 0 ? 3 : 7, size: data.length,
+        base: i === 0 ? undefined : blobOid(contents[i === 1 ? 0 : 1]), data: deflateSync(data) } };
+    }), { index: true });
+    const path = `git/repos/${repoId}/repo.git/objects/pack/pack-${pack.checksum}`;
+    await bucket.put(`${path}.pack`, new Uint8Array(await new Response(pack.stream()).arrayBuffer()));
+    await bucket.put(`${path}.idx`, pack.index!);
+    const target = blobOid(Buffer.from("ac!"));
+    const response = await receive(bucket, pushBody(contents.slice(2).map((data) => ({
+      type: 7, base: Buffer.from(blobOid(data), "hex"),
+      data: Buffer.concat([Buffer.from([2, 3, 3]), data, Buffer.from("!")]),
+    })), target), reserve);
+    expect(response.status).toBe(status);
+    if (status === 413) {
+      expect(await response.text()).toContain("delta operation budget");
+      expect(reserve).not.toHaveBeenCalled();
+      expect([...bucket.objects.keys()].filter((key) => key.endsWith(".pack"))).toHaveLength(1);
+    } else {
+      expect(await response.text()).toContain(`ok refs/tags/test-${target}`);
       expect(reserve).toHaveBeenCalledOnce();
     }
   });
