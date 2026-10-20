@@ -112,8 +112,9 @@ instructions, reconstructed objects and referenced stored base chains. Stored
 ancestors also obey the 16 MiB per-object limit. Oversized or
 malformed packs are rejected before indexing or storing the pack.
 Delta reconstruction has a shared processing budget of 262,144 insert/copy
-instructions across an incoming pack and its referenced stored chains. Cached
-stored instructions count on each chain visit. This is a hosted-service
+instructions across an incoming pack and its referenced stored chains. Each
+dependent counts the cumulative cost of replaying its local or stored ancestors,
+even when validation reuses cached objects. This is a hosted-service
 compatibility limit, independent of Git's format and the byte limits: it bounds
 validation work and per-instruction allocations during indexing. A pack that
 exceeds the budget is rejected with HTTP 413.

@@ -87,8 +87,8 @@ function inflateObject(data: Uint8Array, size: number) {
   return inflated;
 }
 
-type GitObject = { type: GitObjectType; data: Uint8Array };
-type Delta = { offset: number; data: Uint8Array };
+type GitObject = { type: GitObjectType; data: Uint8Array; operations: number; oid?: string };
+type Delta = { offset: number; data: Uint8Array; operations: number; baseOperations?: number; object?: GitObject };
 
 /** Bound expansion before isomorphic-git indexes or caches full object buffers. */
 export async function validateGitPack(pack: Uint8Array, maximum: number, reader: GitObjectReader): Promise<void> {
@@ -100,22 +100,38 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
   const count = new DataView(pack.buffer, pack.byteOffset).getUint32(8);
   const offsets = new Map<number, number>(), bases = new Map<string, number>();
   const local = new Map<string | number, GitObject>(), ready: (string | number)[] = [];
-  const pending = new Map<string | number, Delta[]>();
-  let next = 0;
+  const pending = new Map<string | number, Delta[]>(), queued = new Set<string | number>();
+  const prepaidBases = new Set<string | number>();
+  let next = 0, unresolved = 0;
   const publish = (object: GitObject, offset?: number) => {
-    const oid = createHash("sha1").update(`${object.type} ${object.data.length}\0`).update(object.data).digest("hex");
-    if (!local.has(oid)) { local.set(oid, object); ready.push(oid); }
-    if (offset !== undefined) { local.set(offset, object); ready.push(offset); }
+    const oid = object.oid ??= createHash("sha1").update(`${object.type} ${object.data.length}\0`).update(object.data).digest("hex");
+    for (const key of offset === undefined ? [oid] : [oid, offset]) {
+      const previous = local.get(key);
+      // An OID may have several encodings. Propagate the greatest replay cost,
+      // even when a cheaper encoding has already resolved its dependents.
+      if (previous && previous.operations >= object.operations) continue;
+      local.set(key, object);
+      if (!queued.has(key)) { ready.push(key); queued.add(key); }
+    }
   };
   const resolve = () => {
-    // Each dependency is visited once, including forward REF_DELTA references.
     while (next < ready.length) {
-      const key = ready[next++], base = local.get(key)!;
+      const key = ready[next++], base = local.get(key)!; queued.delete(key);
       for (const delta of pending.get(key) ?? []) {
-        const object = readDelta(delta.data, undefined, base.data).object!;
-        publish({ type: base.type, data: object }, delta.offset);
+        if (delta.object && delta.baseOperations === base.operations) continue;
+        // Stored-base inspection already paid for its first replay. Every
+        // other dependent pays the full cumulative cost of its ancestors.
+        if (delta.object || !prepaidBases.delete(key))
+          consumeOperations(deltaBudget, base.operations - (delta.baseOperations ?? 0));
+        const operations = base.operations + delta.operations;
+        if (delta.object) delta.object = { ...delta.object, operations };
+        else {
+          delta.object = { type: base.type, data: readDelta(delta.data, undefined, base.data).object!, operations };
+          unresolved--;
+        }
+        delta.baseOperations = base.operations;
+        publish(delta.object, delta.offset);
       }
-      pending.delete(key);
     }
   };
   const deltaBudget = { remaining: MAX_GIT_PACK_DELTA_OPERATIONS };
@@ -147,7 +163,7 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
     cursor.position += inflated.engine.bytesWritten;
     expanded += size;
     if (type === 6 || type === 7) {
-      const delta = readDelta(inflated.buffer, deltaBudget);
+      const before = deltaBudget.remaining, delta = readDelta(inflated.buffer, deltaBudget);
       if (baseSize !== undefined && baseSize !== delta.source) throw new GitPackValidationError("Git delta base size mismatch");
       expanded += delta.target;
       offsets.set(start, delta.target);
@@ -157,9 +173,10 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
         bases.set(base, delta.source);
       }
       const dependents = pending.get(base!) ?? [];
-      dependents.push({ offset: start, data: inflated.buffer }); pending.set(base!, dependents);
+      dependents.push({ offset: start, data: inflated.buffer, operations: before - deltaBudget.remaining });
+      pending.set(base!, dependents); unresolved++;
     } else {
-      publish({ type: OBJECT_TYPES[type], data: inflated.buffer }, start);
+      publish({ type: OBJECT_TYPES[type], data: inflated.buffer, operations: 0 }, start);
       offsets.set(start, size);
     }
     checkSize(expanded, maximum);
@@ -189,7 +206,7 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
         expanded += delta.target; checkSize(expanded, maximum);
         stored.set(oid, { instructions: data, base: entry.base, operations: before - deltaBudget.remaining });
       } else {
-        stored.set(oid, { object: { type: OBJECT_TYPES[entry.type], data }, operations: 0 });
+        stored.set(oid, { object: { type: OBJECT_TYPES[entry.type], data, operations: 0 }, operations: 0 });
       }
       chain.push(oid);
     });
@@ -199,11 +216,13 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
       const entry = stored.get(oid)!;
       if (!entry.instructions) continue;
       const base = stored.get(entry.base!)!.object!;
-      entry.object = { type: base.type, data: readDelta(entry.instructions, undefined, base.data).object! };
+      entry.object = { type: base.type, data: readDelta(entry.instructions, undefined, base.data).object!,
+        operations: base.operations + entry.operations };
       entry.instructions = undefined;
     }
+    prepaidBases.add(base);
     publish(stored.get(base)!.object!);
     resolve();
   }
-  if (pending.size) throw new GitPackValidationError("Git delta base is missing");
+  if (unresolved) throw new GitPackValidationError("Git delta base is missing");
 }

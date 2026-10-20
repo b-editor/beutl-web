@@ -99,6 +99,52 @@ it.each([{ counts: [262_145] }, { counts: [131_072, 131_073] }])("bounds delta o
   expect([...bucket.objects.keys()].some((key) => key.endsWith(".pack"))).toBe(false);
 });
 
+it.each([
+  { type: 6, operations: 87_380, children: 2, chain: false, status: 200 },
+  { type: 7, operations: 87_380, children: 2, chain: false, status: 200 },
+  { type: 6, operations: 87_381, children: 2, chain: false, status: 413 },
+  { type: 7, operations: 87_381, children: 2, chain: false, status: 413 },
+  { type: 6, operations: 87_380, children: 2, chain: true, status: 413 },
+  { type: 7, operations: 87_380, children: 2, chain: true, status: 413 },
+  { type: 7, operations: 250_000, children: 1_000, chain: false, status: 413 },
+  { type: 7, operations: 87_380, children: 2, chain: false, duplicate: true, status: 200 },
+  { type: 7, operations: 87_381, children: 2, chain: false, duplicate: true, status: 413 },
+])("charges in-pack ancestor replays: type=$type operations=$operations children=$children chain=$chain duplicate=$duplicate", async ({ type, operations, children, chain, duplicate, status }) => {
+  const bucket = new Bucket(), reserve = vi.fn(async () => status === 200);
+  const data = Buffer.from("x"), ancestor = Buffer.alloc(operations, 97);
+  const entries: Parameters<typeof pushBody>[0] = [{ data }, {
+    type: 7, base: Buffer.from(blobOid(data), "hex"), data: literalDelta(operations),
+  }];
+  const entryLength = (entry: typeof entries[number]) => packEntryHeader(entry.type ?? 3, entry.data.length).length
+    + (entry.base?.length ?? 0) + deflateSync(entry.data).length;
+  let distance = entryLength(entries[1]), base = ancestor, target = ancestor;
+  // A cheap encoding can expose the OID before a more expensive encoding resolves.
+  if (duplicate) entries.unshift({ data: ancestor });
+  for (let i = 0; i < children; i++) {
+    const offset = [distance & 127];
+    for (let remaining = Math.floor(distance / 128); remaining; remaining = Math.floor(remaining / 128)) {
+      remaining--; offset.unshift(128 | (remaining & 127));
+    }
+    target = Buffer.from([98, i % 256]);
+    const entry = { type, base: type === 7 ? Buffer.from(blobOid(base), "hex") : Buffer.from(offset),
+      data: Buffer.concat([unsigned(base.length), unsigned(target.length), Buffer.from([1, target[0], 1, target[1]])]) };
+    entries.push(entry);
+    distance = (chain ? 0 : distance) + entryLength(entry);
+    if (chain) base = target;
+  }
+  // Stop before indexing on a regression, so the large fan-out cannot replay hundreds of millions of commands.
+  const response = await receive(bucket, pushBody(entries, blobOid(target)), reserve);
+  expect(response.status).toBe(status);
+  if (status === 413) {
+    expect(await response.text()).toContain("delta operation budget");
+    expect(reserve).not.toHaveBeenCalled();
+    expect([...bucket.objects.keys()].some((key) => key.endsWith(".pack"))).toBe(false);
+  } else {
+    expect(await response.text()).toContain(`ok refs/tags/test-${blobOid(target)}`);
+    expect(reserve).toHaveBeenCalledOnce();
+  }
+});
+
 it.each([6, 7])("rejects oversized delta output for pack type %s", async (type) => {
   const data = Buffer.from("a"), header = packEntryHeader(3, data.length), compressed = deflateSync(data);
   const base = type === 7 ? Buffer.from(blobOid(data), "hex") : Buffer.from([header.length + compressed.length]);
@@ -373,7 +419,9 @@ it.each([
   { stored: 262_145, incoming: 1, depth: 2, status: 413 },
   { stored: 131_072, incoming: 131_073, depth: 1, status: 413 },
   { stored: 262_143, incoming: 1, depth: 1, status: 200 },
-])("shares the delta budget with $stored stored operations at depth $depth and $incoming incoming operations", async ({ stored, incoming, depth, status }) => {
+  { stored: 131_071, incoming: 1, depth: 1, copies: 2, status: 200 },
+  { stored: 131_072, incoming: 1, depth: 1, copies: 2, status: 413 },
+])("shares the delta budget with $stored stored operations at depth $depth and $incoming incoming operations (copies=$copies)", async ({ stored, incoming, depth, copies = 1, status }) => {
   const bucket = new Bucket(), reserve = vi.fn(async () => true);
   const contents = [Buffer.from("x"), Buffer.alloc(stored, 97), Buffer.from("ab")].slice(0, depth + 1);
   const pack = createGitPack(contents.map((content, i) => {
@@ -386,12 +434,12 @@ it.each([
   const path = `git/repos/${repoId}/repo.git/objects/pack/pack-${pack.checksum}`;
   await bucket.put(`${path}.pack`, new Uint8Array(await new Response(pack.stream()).arrayBuffer()));
   await bucket.put(`${path}.idx`, pack.index!);
-  const target = blobOid(Buffer.alloc(incoming, 97));
-  const response = await receive(bucket, pushBody([{
+  const target = blobOid(Buffer.alloc(incoming, 97 + copies - 1));
+  const response = await receive(bucket, pushBody(Array.from({ length: copies }, (_, i) => ({
     type: 7, base: Buffer.from(blobOid(contents.at(-1)!), "hex"), data: Buffer.concat([
-      unsigned(contents.at(-1)!.length), unsigned(incoming), Buffer.alloc(incoming * 2).fill(Buffer.from([1, 97])),
+      unsigned(contents.at(-1)!.length), unsigned(incoming), Buffer.alloc(incoming * 2).fill(Buffer.from([1, 97 + i])),
     ]),
-  }], target), reserve);
+  })), target), reserve);
   expect(response.status).toBe(status);
   if (status === 413) {
     expect(await response.text()).toContain("delta operation budget");
