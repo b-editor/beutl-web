@@ -20,7 +20,9 @@
 | --- | --- | --- |
 | `@beutl/api/app` | `api`, `v1`, `v2`, `v3` の HTTP ルートを組み立てる | Next.js Route Handlers、HTTP 契約テスト |
 | `@beutl/api/runtime` | Worker bindings、本文制限、DB の寿命、cron を管理する | Web Worker |
-| `@beutl/api` | ルートを組み立てない共有処理を公開する | Web、Admin、業務処理のテスト |
+| `@beutl/api` | 既存利用側向けの互換バレル | 共有処理の契約テスト |
+| `@beutl/api/ai/*` / `storage/*` など | 用途別の共有処理 | Web、Admin |
+| `@beutl/api/response-body` | SDK に依存しないレスポンスのサイズ制限・UTF-8 検証 | Admin のログ・使用状況取得、Stripe 価格照会、OpenRouter adapter |
 | `@beutl/api/ai/image-generation` | 画像生成の能力検証・利用量予約・実行・結果保存・失敗時の返金 | Web の生成・再試行アクション、画像生成 API |
 | `@beutl/api/ai/translation` / `transcription` | 翻訳・文字起こしの予約・実行・JSON 保存・返金 | Web の字幕アクション、字幕 API |
 | `@beutl/api/ai/image-editing` | 画像編集の能力検証・予約・実行・結果保存・返金 | Web の画像編集アクション、画像編集 API |
@@ -44,6 +46,10 @@ flowchart TD
   Input --> Core
 ```
 
+- Web と Admin は用途別の公開サブパスを import する。ドメイン定数・型は
+  `@beutl/core`、provider 共通の型・エラーは `ai/providers/types` / `errors` を参照する。
+  汎用レスポンス読み取りは SDK・DB を参照しない。OpenRouter 側でエラーを変換し、
+  通信断の実行結果不明と不正出力の確実な失敗という分類を維持する。
 - 同一パッケージ内では実装モジュールを直接 import し、自分自身の公開バレルを
   経由しない。runtime の各 reconciler も対象とする。
 - ルートと Server Action が共有する検証・業務処理は、ルートより下に置く。
@@ -89,13 +95,8 @@ v1 の認証契約は [ADR 0001](0001-v1-account-is-the-auth-backbone.md) に従
 `db` から他の workspace への依存は `core` に限定する。
 Stripe サービスも循環、Next.js の直接参照、アプリケーションルートへの逆向き参照を検出する。
 顧客・退会・Checkout・Webhook の契約テストで決済処理と HTTP 応答・画面遷移を検証する。
+Web / Admin の root import の再導入と、未公開サブパスの利用も境界テストで検出する。
+レスポンス読み取りは SDK・DB を読み込めない条件で Admin の利用側を import し、
+ストリーム中のバイト数制限・中断・UTF-8 と provider 側のエラー変換を検証する。
 PR の CI では workspace の型チェック、Web / Admin の OpenNext ビルド、および一時的な
 CockroachDB を使った既存の整合性・マイグレーションテストも実行する。
-
-## 次の改善候補
-
-入口の分離後も、業務処理の配置には改善余地がある。次は変更する機能ごとに
-既存の契約テストを使って移行する。
-
-Web と Admin の共有処理利用を、必要なサブパスへ順次移す。
-汎用レスポンス読み取りの OpenRouter SDK 依存なども、この単位で解消する。

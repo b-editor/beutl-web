@@ -1,6 +1,7 @@
 "use client";
 
-import type { MoveBatchOutcome, StorageProvider } from "@beutl/api";
+import type { MoveBatchOutcome } from "@beutl/api/storage/move-object";
+import type { StorageProvider } from "@beutl/api/storage/bucket-from-env";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { Button } from "@beutl/ui/ui/button";
 import { Checkbox } from "@beutl/ui/ui/checkbox";

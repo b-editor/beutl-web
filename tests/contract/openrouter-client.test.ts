@@ -16,6 +16,7 @@ import {
   editImage,
   generateImage,
   getOpenRouterRequestTimeoutMilliseconds,
+  readBoundedResponseText,
   MAX_OPENROUTER_JSON_RESPONSE_BYTES,
   OPENROUTER_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS,
   transcribeAudio,
@@ -331,6 +332,29 @@ describe("OpenRouter client contract", () => {
         model: "openai/gpt-image-1",
       }),
     ).rejects.toBeInstanceOf(AiProviderError);
+  });
+
+  it("preserves unknown execution when a response stream is interrupted", async () => {
+    const cause = new TypeError("connection reset");
+    const response = new Response(new ReadableStream({
+      start(controller) { controller.error(cause); },
+    }));
+    await expect(readBoundedResponseText(response, 100, "OpenRouter response"))
+      .rejects.toMatchObject({ name: "AiProviderError", execution: "unknown", cause });
+  });
+
+  it("preserves an existing provider error from the response stream", async () => {
+    const error = new AiProviderError("request rejected", { httpStatus: 402 });
+    const response = new Response(new ReadableStream({
+      start(controller) { controller.error(error); },
+    }));
+    await expect(readBoundedResponseText(response, 100, "OpenRouter response"))
+      .rejects.toBe(error);
+  });
+
+  it("keeps invalid UTF-8 classified as a definite provider failure", async () => {
+    await expect(readBoundedResponseText(new Response(Uint8Array.of(0xff)), 1, "OpenRouter response"))
+      .rejects.toMatchObject({ name: "AiProviderError", execution: "definite_failure" });
   });
 
   it("sends image edits as base64 input references", async () => {

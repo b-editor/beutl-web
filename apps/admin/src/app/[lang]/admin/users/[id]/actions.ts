@@ -1,9 +1,24 @@
 "use server";
 
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
-import type { ActionResult } from "@beutl/core";
+import {
+  type ActionResult,
+  isAdmin,
+  normalizeUsageUnits,
+  addUtcMonths,
+  isActiveSubscription,
+  isSubscriptionPlanId,
+  SUBSCRIPTION_GRANT_MAX_YEARS,
+  SUBSCRIPTION_GRANT_REASON_MAX_LENGTH,
+} from "@beutl/core";
+import { closeStripeCustomerForAdminAccountDeletion } from "@beutl/api/account-deletion-stripe";
+import { isActiveProSubscription } from "@beutl/api/ai/entitlements";
+import { loadAiSettings } from "@beutl/api/ai/settings";
+import { PRO_PLAN } from "@beutl/api/ai/pricing";
+import { createStripeClient } from "@beutl/api/stripe-client";
+import { resolveLegacyPackageCheckoutMultiple } from "@beutl/api/ai/stripe-checkout-cleanups";
 import { adminAction } from "@/lib/auth-guard";
-import { isAdmin, normalizeUsageUnits } from "@beutl/core";
+
 import {
   adjustPurchasedCreditsByAdmin,
   createSubscriptionGrant,
@@ -27,28 +42,14 @@ import {
   revokeSubscriptionGrant,
   terminalizeTopUpCheckoutIntervention,
 } from "@beutl/db";
-import {
-  closeStripeCustomerForAdminAccountDeletion,
-  isActiveProSubscription,
-  loadAiSettings,
-  PRO_PLAN,
-} from "@beutl/api";
-import {
-  addUtcMonths,
-  isActiveSubscription,
-  isSubscriptionPlanId,
-  SUBSCRIPTION_GRANT_MAX_YEARS,
-  SUBSCRIPTION_GRANT_REASON_MAX_LENGTH,
-} from "@beutl/core";
 
 // How a plan is called in a message to an administrator.
 function subscriptionPlanLabel(planId: string): string {
   return { pro: "AI Pro", storage: "storage" }[planId] ?? planId;
 }
 import { revalidatePath } from "next/cache";
-import { createStripeClient } from "@beutl/api/stripe-client";
+
 import { claimPackageCheckoutInterventionById, reschedulePackageCheckoutIntervention } from "@beutl/db";
-import { resolveLegacyPackageCheckoutMultiple } from "@beutl/api";
 
 export async function resolvePackageCheckoutMultiple(input: unknown): Promise<ActionResult> {
   return await adminAction(async (session) => {
@@ -125,7 +126,6 @@ export async function terminalizeTopUpCheckoutRecovery(input: unknown): Promise<
       : { success: false, message: result.status === "unsafe" ? result.reason : "Resolution changed; reload and retry" };
   });
 }
-
 
 // A typo of one order of magnitude must not hand out a fortune. Larger
 // corrections are still possible by repeating the adjustment.

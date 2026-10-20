@@ -10,11 +10,6 @@ import {
 import { fetchDesktopErrors } from "../../apps/admin/src/lib/desktop-errors-server";
 import { ERROR_NOW, errorLogFixture, logEntry, logResponse } from "../fixtures/desktop-errors";
 
-vi.mock("@beutl/api", async () => ({
-  readBoundedResponseText: (await import("../../packages/api/src/ai/openrouter"))
-    .readBoundedResponseText,
-}));
-
 const env = {
   GRAFANA_LOKI_URL: "https://logs.example.test",
   GRAFANA_LOKI_USER: "logs-tenant",

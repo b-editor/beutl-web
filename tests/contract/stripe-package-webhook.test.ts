@@ -20,8 +20,8 @@ const mocks = vi.hoisted(() => ({
   revokePackagePayment: vi.fn(),
 }));
 
-vi.mock("@beutl/api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@beutl/api")>()),
+vi.mock("@beutl/api/ai/billing-refunds", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@beutl/api/ai/billing-refunds")>()),
   observeBillingRefundForPaymentIntent:
     mocks.observeBillingRefundForPaymentIntent,
 }));

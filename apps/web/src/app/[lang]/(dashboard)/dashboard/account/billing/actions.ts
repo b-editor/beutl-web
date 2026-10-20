@@ -24,16 +24,15 @@ import {
   subscriptionPlanConfig,
   subscriptionPlanConfigOf,
 } from "@/lib/stripe/subscription-plans";
-import {
-  discoverTopUpCheckoutAttempt,
-  isActiveProSubscription,
-  PRO_PLAN,
-} from "@beutl/api";
+import { discoverTopUpCheckoutAttempt } from "@beutl/api/package-checkout-discovery";
+import { isActiveProSubscription } from "@beutl/api/ai/entitlements";
+import { PRO_PLAN } from "@beutl/api/ai/pricing";
 import {
   allowsStripePromotionCodes,
   isValidStripeCheckoutSessionAmount,
   isZeroCostStripeCheckoutSessionAmount,
 } from "@beutl/core";
+
 import {
   bindTopUpCheckoutCreation,
   claimTopUpCheckoutCreation,
@@ -55,7 +54,6 @@ function expandableId(
 ): string | null {
   return typeof value === "string" ? value : value?.id ?? null;
 }
-
 
 // 追加クレジットは Pro の権利がある間だけ使えるので、購入もそれを条件にする。
 // 管理者の付与で Pro を使っている人も買える。

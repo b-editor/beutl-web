@@ -2,8 +2,6 @@
 
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import type { ActionResult } from "@beutl/core";
-import { getTranslation } from "@beutl/i18n";
-import { findFileForAdminById, listFilesForAdminAfter } from "@beutl/db";
 import {
   moveStorageObject,
   moveStorageObjectsBatch,
@@ -11,8 +9,11 @@ import {
   type MoveBatchOutcome,
   type MoveOutcome,
   type MovableFile,
-  type StorageProvider,
-} from "@beutl/api";
+} from "@beutl/api/storage/move-object";
+import type { StorageProvider } from "@beutl/api/storage/bucket-from-env";
+import { getTranslation } from "@beutl/i18n";
+import { findFileForAdminById, listFilesForAdminAfter } from "@beutl/db";
+
 import { adminAction } from "@/lib/auth-guard";
 import { RAW } from "@/lib/i18n";
 import {

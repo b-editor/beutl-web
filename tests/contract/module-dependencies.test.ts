@@ -95,3 +95,22 @@ for (const name of ["core", "db", "stripe"]) {
     });
   });
 }
+
+// The compatibility barrel remains available, but application imports declare
+// which service they depend on instead of loading every service in the package.
+it("uses exported API subpaths from Web and Admin", () => {
+  const manifest = JSON.parse(readFileSync(resolve(root, "packages/api/package.json"), "utf8")) as {
+    exports: Record<string, string>;
+  };
+  for (const app of ["web", "admin"]) {
+    for (const file of sourceFiles(resolve(root, "apps", app, "src"))) {
+      for (const { fileName: specifier } of ts.preProcessFile(readFileSync(file, "utf8"), true, true).importedFiles) {
+        const context = `${relative(root, file)} -> ${specifier}`;
+        expect(specifier, context).not.toBe("@beutl/api");
+        if (specifier.startsWith("@beutl/api/")) {
+          expect(manifest.exports[specifier.replace("@beutl/api", ".")], context).toBeDefined();
+        }
+      }
+    }
+  }
+});

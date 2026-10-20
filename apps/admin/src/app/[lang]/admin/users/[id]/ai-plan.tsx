@@ -10,11 +10,11 @@ import {
 import {
   getMonthlyUsageRemaining,
   isActiveProSubscription,
-  PRO_PLAN,
-  loadAiSettings,
   toAiBalanceSnapshot,
   toUsedPercent,
-} from "@beutl/api";
+} from "@beutl/api/ai/entitlements";
+import { PRO_PLAN } from "@beutl/api/ai/pricing";
+import { loadAiSettings } from "@beutl/api/ai/settings";
 import { getTranslation } from "@beutl/i18n";
 import { Badge } from "@beutl/ui/ui/badge";
 import { Progress } from "@beutl/ui/ui/progress";

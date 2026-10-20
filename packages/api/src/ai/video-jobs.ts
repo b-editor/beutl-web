@@ -19,8 +19,7 @@ import {
   AiVideoSubmissionError,
   InvalidAiProviderOutputError,
   isDefiniteVideoSubmissionFailure,
-  type VideoFrameImage,
-} from "./openrouter";
+} from "./providers/errors";
 import {
   DEFAULT_AI_PROVIDER_ID,
   videoProviderFor,
@@ -28,6 +27,7 @@ import {
 import type {
   AiVideoContent,
   AiVideoJobInfo,
+  VideoFrameImage,
   VideoFrameImage as ProviderVideoFrameImage,
   VideoInputReference,
 } from "./providers/types";

@@ -9,54 +9,18 @@ import { prepareTranscription, recoverTranscription } from "@beutl/api/ai/transc
 import { prepareImageEdit } from "@beutl/api/ai/image-editing";
 import { prepareImageGeneration } from "@beutl/api/ai/image-generation";
 import { parseReplayableAiJobInput, sanitizeAiJobInputParams } from "@beutl/api/ai/job-input";
+import { AiProviderError, aiProviderFailureCode } from "@beutl/api/ai/providers/errors";
+import { publicAiJobError } from "@beutl/api/ai/job-errors";
 import {
-  AiProviderError,
-  aiProviderFailureCode,
-  publicAiJobError,
   MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
   MAX_AI_IMAGE_UPLOAD_BYTES,
   MAX_AI_PROMPT_LENGTH,
   MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
-  createCallbackNonce,
-  createReservedAiJob,
   isIso6391LanguageCode,
-  DEFAULT_AI_PROVIDER_ID,
-  loadAiModelCatalog,
-  parseAudio,
-  readAiJsonResult,
-  prepareGatewayVideoUsageForDeletion,
-  sha256Hex,
   MAX_TRANSLATION_CHARACTERS,
   MAX_TRANSLATION_SEGMENTS,
   SAFE_SEGMENT_ID_PATTERN,
-  synchronizeAiVideoJob,
-  type AiRequestIdentity,
-  findReplayableAiJob,
-  toAiRequestIdentity,
   translationCharacterCount,
-  validateAiInputImage,
-  type TranslationStyle,
-  type AiInputImageMimeType,
-  type ImageEditTask,
-} from "@beutl/api";
-import {
-  finalizeAiJobDeletionByUserId,
-  getAiJobById,
-  getAiJobResultFile,
-  listAiJobsByUserId,
-  prepareAiJobDeletionByUserId,
-  findStorageFolderNameByIdAndUserId,
-  retrieveStorageFoldersByUserId,
-} from "@beutl/db";
-import {
-  settleVideoSubmissionFailure,
-  createAndAttachVideoJob,
-  deleteAiOutputObject,
-  loadAiVideoModelCapabilities,
-  videoCapabilityOf,
-  unsupportedVideoRequestReason,
-} from "@beutl/api";
-import {
   AI_IMAGE_ASPECT_RATIOS,
   AI_MAX_IMAGE_REFERENCES,
   AI_IMAGE_BACKGROUNDS,
@@ -67,11 +31,53 @@ import {
   aspectRatioOfLegacyImageSize,
   isAiSeed,
   isAiVideoDurationSeconds,
+  type AiImageEditTask,
   type AiImageAspectRatio,
   type AiImageBackground,
   type AiVideoAspectRatio,
   type AiVideoResolution,
 } from "@beutl/core";
+import {
+  createCallbackNonce,
+  sha256Hex,
+  type AiRequestIdentity,
+  toAiRequestIdentity,
+} from "@beutl/api/ai/request-integrity";
+import { createReservedAiJob, findReplayableAiJob } from "@beutl/api/ai/credits";
+import { DEFAULT_AI_PROVIDER_ID } from "@beutl/api/ai/providers/registry";
+import { loadAiModelCatalog } from "@beutl/api/ai/model-catalog";
+import { parseAudio } from "@beutl/api/ai/audio-metadata";
+import {
+  readAiJsonResult,
+  prepareGatewayVideoUsageForDeletion,
+  deleteAiOutputObject,
+} from "@beutl/api/ai/storage";
+import {
+  synchronizeAiVideoJob,
+  settleVideoSubmissionFailure,
+  createAndAttachVideoJob,
+} from "@beutl/api/ai/video-jobs";
+import {
+  validateAiInputImage,
+  type AiInputImageMimeType,
+} from "@beutl/api/ai/input-image-validation";
+import type { TranslationStyle } from "@beutl/api/ai/providers/types";
+import {
+  loadAiVideoModelCapabilities,
+  videoCapabilityOf,
+  unsupportedVideoRequestReason,
+} from "@beutl/api/ai/video-model-capabilities";
+
+import {
+  finalizeAiJobDeletionByUserId,
+  getAiJobById,
+  getAiJobResultFile,
+  listAiJobsByUserId,
+  prepareAiJobDeletionByUserId,
+  findStorageFolderNameByIdAndUserId,
+  retrieveStorageFoldersByUserId,
+} from "@beutl/db";
+
 import { composePrompt } from "@/lib/ai-prompt";
 import { parseGlossary } from "@/lib/subtitle-format";
 import { getContentUrl } from "@/lib/content-url";
@@ -658,7 +664,7 @@ export async function editImageAction(
   const session = await throwIfUnauth();
   const lang = await getLanguage();
   const { t } = await getTranslation(lang);
-  const task = String(formData.get("task") ?? "") as ImageEditTask;
+  const task = String(formData.get("task") ?? "") as AiImageEditTask;
   const prompt = String(formData.get("prompt") ?? "").trim();
   const outpaintExpansion = Number(formData.get("outpaintExpansion") ?? 25);
   const file = formData.get("file");
