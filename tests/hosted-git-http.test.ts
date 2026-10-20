@@ -11,6 +11,7 @@ import { deflateSync } from "node:zlib";
 import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable-object";
 import { receiveGitPack } from "../packages/api/src/git/git-http";
 import { createGitPack, packEntryHeader } from "../packages/api/src/git/pack-writer";
+import { validateGitPack } from "../packages/api/src/git/pack-validation";
 
 const execute = promisify(execFile);
 const repoId = "12345678-1234-1234-1234-123456789abc";
@@ -104,6 +105,26 @@ it.each([6, 7])("rejects oversized delta output for pack type %s", async (type) 
   expect((await receive(new Bucket(), pushBody([{ data }, { type, base, data: delta }]))).status).toBe(413);
 });
 
+it.each([3, 6, 7])("validates an OFS_DELTA source against a preceding type %s result", async (type) => {
+  const bucket = new Bucket(), reserve = vi.fn(async () => true), data = Buffer.alloc(0);
+  const entries: Parameters<typeof pushBody>[0] = [{ data }];
+  if (type !== 3) entries.push({ type, data: Buffer.from([0, 2, 2, 97, 98]),
+    base: type === 7 ? Buffer.from(blobOid(data), "hex") : Buffer.from([packEntryHeader(3, 0).length + deflateSync(data).length]) });
+  const preceding = entries.at(-1)!;
+  const distance = packEntryHeader(type, preceding.data.length).length + (preceding.base?.length ?? 0) + deflateSync(preceding.data).length;
+  const target = blobOid(Buffer.from("abc"));
+  const body = (source: number) => pushBody([...entries, {
+    type: 6, base: Buffer.from([distance]), data: Buffer.from([source, 3, 3, 97, 98, 99]),
+  }], target);
+  const invalid = await receive(bucket, body(type === 3 ? 1 : 5), reserve);
+  expect(invalid.status).toBe(400);
+  expect(reserve).not.toHaveBeenCalled();
+  expect([...bucket.objects.keys()].some((key) => key.endsWith(".pack"))).toBe(false);
+  const valid = await receive(bucket, body(type === 3 ? 0 : 2), reserve);
+  expect(valid.status).toBe(200);
+  expect(await valid.text()).toContain(`ok refs/tags/test-${target}`);
+});
+
 it("rejects delta instructions that exceed the declared output and truncated streams", async () => {
   const data = Buffer.from("a"), base = Buffer.from(blobOid(data), "hex");
   const delta = Buffer.from([1, 1, 2, 97, 98]);
@@ -173,8 +194,7 @@ it.each([0, 4])("accepts matching declarations for a repeated %s-byte stored del
   expect(reserve).toHaveBeenCalledOnce();
 });
 
-it("bounds thin-base lookups across cached pack indexes before reserving or storing the pack", async () => {
-  const bucket = new Bucket(), reserve = vi.fn(async () => true);
+async function storeFragmentedHistory(bucket: Bucket) {
   for (let i = 0; i < 128; i++) {
     const data = Buffer.from(`stored blob ${i}`);
     const pack = createGitPack([{ oid: blobOid(data), entry: { type: 3, size: data.length, data: deflateSync(data) } }], { index: true });
@@ -182,6 +202,46 @@ it("bounds thin-base lookups across cached pack indexes before reserving or stor
     await bucket.put(`${path}.pack`, new Uint8Array(await new Response(pack.stream()).arrayBuffer()));
     await bucket.put(`${path}.idx`, pack.index!);
   }
+}
+
+it("accepts in-pack bases without spending the stored-base lookup budget", async () => {
+  const bucket = new Bucket(), reserve = vi.fn(async () => true);
+  await storeFragmentedHistory(bucket);
+  const contents = Array.from({ length: 512 }, (_, i) => Buffer.from(`incoming blob ${i}`));
+  const deltas = contents.map((data) => ({
+    type: 7, base: Buffer.from(blobOid(data), "hex"), data: Buffer.from([data.length, data.length + 1, 0x90, data.length, 1, 33]),
+  }));
+  const target = blobOid(Buffer.concat([contents.at(-1)!, Buffer.from("!")]));
+  const response = await receive(bucket, pushBody([...contents.map((data) => ({ data })), ...deltas], target), reserve);
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain(`ok refs/tags/test-${target}`);
+  expect(reserve).toHaveBeenCalledOnce();
+  expect([...bucket.objects.keys()].filter((key) => key.endsWith(".pack"))).toHaveLength(129);
+});
+
+it.each([0, 4])("rejects an incorrect source size for a %s-byte in-pack base", async (size) => {
+  const bucket = new Bucket(), reserve = vi.fn(async () => true), data = Buffer.alloc(size, 97);
+  const body = pushBody([{
+    type: 7, base: Buffer.from(blobOid(data), "hex"), data: Buffer.from([size === 0 ? 1 : 0, 1, 1, 97]),
+  }, { data }], blobOid(Buffer.from("a")));
+  const response = await receive(bucket, body, reserve);
+  expect(response.status).toBe(400);
+  expect(reserve).not.toHaveBeenCalled();
+  expect([...bucket.objects.keys()].some((key) => key.endsWith(".pack"))).toBe(false);
+});
+
+it.each([{ type: 1, name: "commit" }, { type: 2, name: "tree" }, { type: 3, name: "blob" }, { type: 4, name: "tag" }])(
+  "resolves an in-pack $name base without a stored lookup", async ({ type, name }) => {
+    const data = Buffer.alloc(0), oid = createHash("sha1").update(`${name} 0\0`).digest();
+    const body = pushBody([{ type: 7, base: oid, data: Buffer.from([0, 0]) }, { type, data }]);
+    const reader = { size: vi.fn(async () => null) };
+    await validateGitPack(body.subarray(body.indexOf("PACK")), 16 * 1024 * 1024, reader as never);
+    expect(reader.size).not.toHaveBeenCalled();
+  });
+
+it("bounds thin-base lookups across cached pack indexes before reserving or storing the pack", async () => {
+  const bucket = new Bucket(), reserve = vi.fn(async () => true);
+  await storeFragmentedHistory(bucket);
   // Zero-output deltas do no reconstruction work, but each missing base scans
   // every stored index, even after all index files have been cached.
   const entries = Array.from({ length: 512 }, (_, i) => ({
@@ -217,6 +277,35 @@ it("counts cached delta-chain visits against the shared thin-base lookup budget"
   expect(reserve).not.toHaveBeenCalled();
   expect([...bucket.objects.keys()].filter((key) => key.endsWith(".pack"))).toHaveLength(1);
 });
+
+it.each([{ depth: 1, size: 24 * 1024 * 1024 }, { depth: 2, size: 24 * 1024 * 1024 }, { depth: 2, size: 4 }])(
+  "validates a $size-byte stored delta ancestor at depth $depth", async ({ depth, size }) => {
+    const bucket = new Bucket(), reserve = vi.fn(async () => true), legacy = Buffer.alloc(size, 97);
+    const contents = [legacy, Buffer.from("a"), Buffer.from("ab")].slice(0, depth + 1);
+    const pack = createGitPack(contents.map((content, i) => {
+      const data = i === 0 ? content : Buffer.concat([
+        unsigned(contents[i - 1].length), unsigned(content.length), Buffer.from([content.length]), content,
+      ]);
+      return { oid: blobOid(content), entry: { type: i === 0 ? 3 : 7, size: data.length,
+        base: i === 0 ? undefined : blobOid(contents[i - 1]), data: deflateSync(data) } };
+    }), { index: true });
+    const path = `git/repos/${repoId}/repo.git/objects/pack/pack-${pack.checksum}`;
+    await bucket.put(`${path}.pack`, new Uint8Array(await new Response(pack.stream()).arrayBuffer()));
+    await bucket.put(`${path}.idx`, pack.index!);
+    const base = contents.at(-1)!;
+    const response = await receive(bucket, pushBody([{
+      type: 7, base: Buffer.from(blobOid(base), "hex"), data: Buffer.from([base.length, 3, 3, 97, 98, 99]),
+    }], blobOid(Buffer.from("abc"))), reserve);
+    if (size > 16 * 1024 * 1024) {
+      expect(response.status).toBe(413);
+      expect(reserve).not.toHaveBeenCalled();
+      expect([...bucket.objects.keys()].filter((key) => key.endsWith(".pack"))).toHaveLength(1);
+    } else {
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain(`ok refs/tags/test-${blobOid(Buffer.from("abc"))}`);
+      expect(reserve).toHaveBeenCalledOnce();
+    }
+  });
 
 it("preserves storage failures while inspecting a thin pack base", async () => {
   const bucket = new Bucket();

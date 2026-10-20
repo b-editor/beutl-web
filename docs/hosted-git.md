@@ -108,7 +108,8 @@ behavior. Git and Git LFS must be installed on the client.
 Git smart HTTP supports small project history: an 8 MiB push, 16 MiB of current
 repository objects, 128 refs and 9,000 history objects.
 Each incoming pack is also limited to 16 MiB of expanded data, counting delta
-instructions, reconstructed objects and referenced stored bases. Oversized or
+instructions, reconstructed objects and referenced stored bases. Stored delta
+ancestors are checked against the 16 MiB per-object limit. Oversized or
 malformed packs are rejected before indexing or storing the pack.
 Delta reconstruction has a shared processing budget of 262,144 insert/copy
 instructions across all objects in an incoming pack. This is a hosted-service
@@ -117,6 +118,8 @@ validation work and per-instruction allocations during indexing. A pack that
 exceeds the budget is rejected with HTTP 413.
 Thin-pack base validation also shares a budget of 65,536 object-entry visits and
 pack-index probes, including cached entries/indexes and stored delta chains.
+Non-delta bases supplied in the same pack are resolved locally and do not consume
+this lookup budget.
 This bounds searches across fragmented history; exceeding it returns HTTP 413
 before quota reservation or pack storage. Pack SHA-1 checksum mismatches return
 HTTP 400 before indexing.

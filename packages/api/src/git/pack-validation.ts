@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { inflateSync } from "node:zlib";
 import { sha1, toHex } from "git-fs-s3";
 import { MAX_GIT_OBJECT_BYTES } from "./git-object-store";
@@ -9,6 +10,7 @@ const MAX_GIT_PACK_DELTA_OPERATIONS = 262_144;
 // Count entry visits and index probes, including cached indexes and base chains,
 // so many distinct thin bases cannot multiply work by the repository's pack count.
 const MAX_GIT_PACK_BASE_LOOKUPS = 65_536;
+const OBJECT_TYPES: Record<number, string> = { 1: "commit", 2: "tree", 3: "blob", 4: "tag" };
 
 export class GitPackValidationError extends Error {}
 export class GitPackLimitError extends GitPackValidationError {}
@@ -69,7 +71,8 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
   const cursor = new Cursor(pack.subarray(0, -20));
   cursor.position = 12;
   const count = new DataView(pack.buffer, pack.byteOffset).getUint32(8);
-  const offsets = new Set<number>(), bases = new Map<string, number>();
+  const offsets = new Map<number, number>(), bases = new Map<string, number>();
+  const localSizes = new Map<string, number>();
   const deltaBudget = { remaining: MAX_GIT_PACK_DELTA_OPERATIONS };
   let expanded = 0;
   for (let index = 0; index < count; index++) {
@@ -81,14 +84,15 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
       checkSize(size, MAX_GIT_OBJECT_BYTES);
     }
     checkSize(expanded + size, maximum);
-    let base: string | undefined;
+    let base: string | undefined, baseSize: number | undefined;
     if (type === 6) {
       value = cursor.byte(); let distance = value & 127;
       while (value & 128) {
         value = cursor.byte(); distance = (distance + 1) * 128 + (value & 127);
         if (!Number.isSafeInteger(distance)) throw new GitPackValidationError("Invalid Git delta offset");
       }
-      if (!offsets.has(start - distance)) throw new GitPackValidationError("Git delta names no preceding base");
+      baseSize = offsets.get(start - distance);
+      if (baseSize === undefined) throw new GitPackValidationError("Git delta names no preceding base");
     } else if (type === 7) {
       base = "";
       for (let i = 0; i < 20; i++) base += cursor.byte().toString(16).padStart(2, "0");
@@ -113,15 +117,20 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
     expanded += size;
     if (type === 6 || type === 7) {
       const delta = deltaSize(inflated.buffer, deltaBudget);
+      if (baseSize !== undefined && baseSize !== delta.source) throw new GitPackValidationError("Git delta base size mismatch");
       expanded += delta.target;
+      offsets.set(start, delta.target);
       if (base) {
         if (bases.has(base) && bases.get(base) !== delta.source)
           throw new GitPackValidationError("Git delta base size mismatch");
         bases.set(base, delta.source);
       }
+    } else {
+      const oid = createHash("sha1").update(`${OBJECT_TYPES[type]} ${size}\0`).update(inflated.buffer).digest("hex");
+      localSizes.set(oid, size);
+      offsets.set(start, size);
     }
     checkSize(expanded, maximum);
-    offsets.add(start);
   }
   if (cursor.position !== cursor.bytes.length) throw new GitPackValidationError("Git pack object count mismatch");
   // A thin pack can reference older stored objects. Reject oversized legacy
@@ -131,7 +140,12 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
     if (--lookupsRemaining < 0) throw new GitPackLimitError("Git pack exceeds its base lookup budget");
   };
   for (const [base, source] of bases) {
-    const size = await reader.size(base, consumeLookup);
+    const localSize = localSizes.get(base);
+    if (localSize !== undefined) {
+      if (localSize !== source) throw new GitPackValidationError("Git delta base size mismatch");
+      continue;
+    }
+    const size = await reader.size(base, consumeLookup, (size) => checkSize(size, MAX_GIT_OBJECT_BYTES));
     if (size !== null) {
       checkSize(size, MAX_GIT_OBJECT_BYTES);
       if (size !== source) throw new GitPackValidationError("Git delta base size mismatch");
