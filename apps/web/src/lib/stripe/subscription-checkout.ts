@@ -19,7 +19,6 @@ import {
   setSubscriptionCheckoutAttemptParams,
   startRetryableTransaction,
 } from "@beutl/db";
-import { redirect } from "next/navigation";
 import type Stripe from "stripe";
 import { getSubscriptionPeriod } from "./ai-billing";
 import {
@@ -520,7 +519,7 @@ async function hasBlockingStripeSubscription(
 
 // The two-attempt Checkout loop. Reuses an open bound Session, expires or
 // compensates a stale one, and creates a new Session under a durable
-// idempotency key. Always ends in a redirect.
+// idempotency key. Returns the destination for the caller to redirect to.
 async function runSubscriptionCheckout({
   stripe,
   userId,
@@ -537,7 +536,7 @@ async function runSubscriptionCheckout({
   checkoutParams: Stripe.Checkout.SessionCreateParams;
   plan: SubscriptionPlanConfig;
   tier: string | null;
-}): Promise<never> {
+}): Promise<string> {
   const recognizedPriceIds = configuredPriceIds(plan);
   // A bound Session may be reused only for the offer being asked for now: the
   // same plan, a recognized Price, and the same tier. Anything else is expired
@@ -605,15 +604,13 @@ async function runSubscriptionCheckout({
         existingSession.url &&
         promotionCodesEnabled
       ) {
-        redirect(existingSession.url);
+        return existingSession.url;
       }
       if (
         authorizedOffer &&
         existingSession.status === "complete"
       ) {
-        redirect(
-          `/dashboard/account/billing?checkout=${plan.checkoutSuccessParam}&session_id=${existingSession.id}`,
-        );
+        return `/dashboard/account/billing?checkout=${plan.checkoutSuccessParam}&session_id=${existingSession.id}`;
       }
 
       let finalSession = existingSession;
@@ -650,9 +647,7 @@ async function runSubscriptionCheckout({
         finalSession.status === "complete" &&
         isValidatedBoundSession(finalSession)
       ) {
-        redirect(
-          `/dashboard/account/billing?checkout=${plan.checkoutSuccessParam}&session_id=${finalSession.id}`,
-        );
+        return `/dashboard/account/billing?checkout=${plan.checkoutSuccessParam}&session_id=${finalSession.id}`;
       }
       if (finalSession.status === "complete") {
         if (!attemptOffer || !isValidatedBoundSession(finalSession)) {
@@ -677,7 +672,7 @@ async function runSubscriptionCheckout({
           expectedUserId: userId,
         });
         if (!cancellationConfirmed) {
-          redirect("/dashboard/account/billing");
+          return "/dashboard/account/billing";
         }
         await deleteBoundSubscriptionCheckoutAttempt({
           userId: userId,
@@ -743,14 +738,14 @@ async function runSubscriptionCheckout({
         expectedUserId: userId,
       });
       if (!cancellationConfirmed) {
-        redirect("/dashboard/account/billing");
+        return "/dashboard/account/billing";
       }
       await deleteBoundSubscriptionCheckoutAttempt({
         userId: userId,
         checkoutKey: attempt.checkoutKey,
         stripeCheckoutSessionId: checkoutSession.id,
       });
-      redirect("/dashboard/account/billing");
+      return "/dashboard/account/billing";
     }
     if (binding === "superseded") {
       let finalSession: Stripe.Checkout.Session;
@@ -786,7 +781,7 @@ async function runSubscriptionCheckout({
           expectedUserId: userId,
         });
         if (!cancellationConfirmed) {
-          redirect("/dashboard/account/billing");
+          return "/dashboard/account/billing";
         }
       }
       continue;
@@ -798,9 +793,7 @@ async function runSubscriptionCheckout({
         checkoutSession,
       );
       if (finalSession.status === "complete") {
-        redirect(
-          `/dashboard/account/billing?checkout=${plan.checkoutSuccessParam}&session_id=${finalSession.id}`,
-        );
+        return `/dashboard/account/billing?checkout=${plan.checkoutSuccessParam}&session_id=${finalSession.id}`;
       }
       if (finalSession.status === "expired") {
         await deleteBoundSubscriptionCheckoutAttempt({
@@ -817,19 +810,19 @@ async function runSubscriptionCheckout({
 
     if (!checkoutSession.url) {
       console.error("Checkout session URL is missing");
-      redirect("/dashboard/account/billing");
+      return "/dashboard/account/billing";
     }
-    redirect(checkoutSession.url);
+    return checkoutSession.url;
   }
 
-  redirect("/dashboard/account/billing");
+  return "/dashboard/account/billing";
 }
 
 // Start a Checkout for one plan and tier. Stripe is the source of truth for
 // whether a subscription still blocks a new checkout: a refund can cancel the
 // subscription in Stripe while the local row keeps its last non-terminal
 // status, and trusting that row would leave the user unable to resubscribe
-// until the stored period finally elapsed. Always ends in a redirect.
+// until the stored period finally elapsed. Returns the destination for the caller to redirect to.
 export async function createSubscriptionCheckout({
   stripe,
   plan,
@@ -842,7 +835,7 @@ export async function createSubscriptionCheckout({
   tier: string | null;
   userId: string;
   customerId: string;
-}): Promise<never> {
+}): Promise<string> {
   const offer = await activateConfiguredSubscriptionOffer(plan, stripe, tier);
   if (
     await hasBlockingStripeSubscription(
@@ -852,7 +845,7 @@ export async function createSubscriptionCheckout({
       blocksNewSubscriptionCheckout,
     )
   ) {
-    redirect(BILLING_PATH);
+    return BILLING_PATH;
   }
 
   const metadata = {

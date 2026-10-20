@@ -5,7 +5,10 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
-const compilerOptions = { moduleResolution: ts.ModuleResolutionKind.Bundler };
+const compilerOptions = {
+  moduleResolution: ts.ModuleResolutionKind.Bundler,
+  paths: { "@/*": [resolve(root, "apps/web/src/*")] },
+};
 const resolutionCache = ts.createModuleResolutionCache(root, (path) => path, compilerOptions);
 
 function sourceFiles(directory: string): string[] {
@@ -22,8 +25,10 @@ function isWithin(file: string, directory: string): boolean {
   return file.startsWith(`${directory}${sep}`);
 }
 
-for (const name of ["core", "db"]) {
-  const directory = resolve(root, "packages", name, "src");
+for (const name of ["core", "db", "stripe"]) {
+  const directory = name === "stripe"
+    ? resolve(root, "apps/web/src/lib/stripe")
+    : resolve(root, "packages", name, "src");
   const files = sourceFiles(directory);
   // Include type-only dependencies: lower layers must not know application types.
   const imports = new Map(files.map((file) => [
@@ -35,7 +40,7 @@ for (const name of ["core", "db"]) {
     }),
   ]));
 
-  describe(`@beutl/${name} module boundaries`, () => {
+  describe(`${name} module boundaries`, () => {
     it("depends only on its own modules and lower workspace layers", () => {
       const allowedDirectories = [directory];
       const allowedPackages = [`@beutl/${name}`];
@@ -51,6 +56,11 @@ for (const name of ["core", "db"]) {
           expect(specifier, context).not.toMatch(
             /^(?:next|react|react-dom|hono|server-only|client-only|@opennextjs\/[^/]+)(?:\/|$)/u,
           );
+          if (name === "stripe") {
+            expect(specifier, context).not.toMatch(/^@\/app(?:\/|$)/u);
+            if (target) expect(isWithin(target, resolve(root, "apps/web/src/app")), context).toBe(false);
+            continue;
+          }
           if (name === "core") expect(specifier, context).not.toMatch(/^@prisma\//u);
           if (specifier.startsWith("@beutl/")) {
             expect(allowedPackages, context).toContain(specifier.split("/").slice(0, 2).join("/"));

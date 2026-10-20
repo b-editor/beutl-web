@@ -36,7 +36,7 @@ vi.mock("@beutl/email", () => ({
   emailButton: (url: string) => url,
   sendEmail: external.confirmationEmail,
 }));
-vi.mock("@/lib/customer", () => ({ updateCustomerEmailIfExist: external.stripe }));
+vi.mock("@/lib/stripe/customer", () => ({ updateCustomerEmailIfExist: external.stripe }));
 
 const SECRET = "auth-email-security-test-secret-at-least-32-characters";
 type Row = Record<string, any>;

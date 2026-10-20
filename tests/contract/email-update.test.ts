@@ -38,7 +38,7 @@ vi.mock("@beutl/db", () => ({
   startTransaction: mocks.startTransaction,
   updateUserEmail: mocks.updateUserEmail,
 }));
-vi.mock("@/lib/customer", () => ({
+vi.mock("@/lib/stripe/customer", () => ({
   updateCustomerEmailIfExist: mocks.updateCustomerEmailIfExist,
 }));
 vi.mock("@beutl/next/audit-log", () => ({

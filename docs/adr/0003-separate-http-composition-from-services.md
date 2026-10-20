@@ -58,6 +58,11 @@ flowchart TD
   キャンバスの条件を維持する。動画は `video-jobs.ts` が provider への登録・紐付け、
   登録失敗時の返金／待機継続、および状態同期を担当する。HTTP 側は callback の認証と
   応答を担当し、callback・poll・cron は同じ状態同期を使う。
+- Web の Stripe 処理は `lib/stripe` に置く。顧客作成とメール同期は `customer.ts`、
+  退会時の決済精算と顧客削除は `customer-closure.ts` が担当し、所有権の検証を共有する。
+  Webhook の署名検証と HTTP 応答は route、検証済みイベントの処理は `webhook.ts` が担当する。
+  Subscription Checkout は遷移先 URL を返し、Server Action が redirect を行う。
+  既存の DB トランザクション、および返金・キャンセルと外部呼び出しの順序を維持する。
 - 保存済み入力、課金単位、冪等性キー、外部向け URL・応答の互換性を維持する。
 - `@beutl/core` はフレームワーク非依存、`@beutl/db` は永続化を担当する。
   `@beutl/api` の共有処理は DB や外部サービスを利用できるため、純粋関数の層とは異なる。
@@ -82,6 +87,8 @@ v1 の認証契約は [ADR 0001](0001-v1-account-is-the-auth-backbone.md) に従
 `module-dependencies.test.ts` は TypeScript の依存解決を使い、`core` / `db` 内の循環、
 上位の workspace、Next.js・React・Hono への依存を検出する。型だけの参照も対象とし、
 `db` から他の workspace への依存は `core` に限定する。
+Stripe サービスも循環、Next.js の直接参照、アプリケーションルートへの逆向き参照を検出する。
+顧客・退会・Checkout・Webhook の契約テストで決済処理と HTTP 応答・画面遷移を検証する。
 PR の CI では workspace の型チェック、Web / Admin の OpenNext ビルド、および一時的な
 CockroachDB を使った既存の整合性・マイグレーションテストも実行する。
 
@@ -90,7 +97,5 @@ CockroachDB を使った既存の整合性・マイグレーションテスト�
 入口の分離後も、業務処理の配置には改善余地がある。次は変更する機能ごとに
 既存の契約テストを使って移行する。
 
-1. `apps/web/src/lib/customer.ts` と Stripe 関連処理の責務を、顧客管理・checkout・
-   webhook の用途で整理する。DB トランザクションと外部呼び出しの境界を保持する。
-2. Web と Admin の共有処理利用を、必要なサブパスへ順次移す。
-   汎用レスポンス読み取りの OpenRouter SDK 依存なども、この単位で解消する。
+Web と Admin の共有処理利用を、必要なサブパスへ順次移す。
+汎用レスポンス読み取りの OpenRouter SDK 依存なども、この単位で解消する。

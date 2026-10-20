@@ -10,7 +10,7 @@ import { getTranslation, type Zod } from "@beutl/i18n";
 import { getLanguage } from "@beutl/next/language";
 import { existsUserByEmail, updateUserEmail } from "@beutl/db";
 import { isAuthEmailRateLimitError, limitAuthEmailSend } from "@beutl/next/auth-email-rate-limit";
-import { updateCustomerEmailIfExist } from "@/lib/customer";
+import { updateCustomerEmailIfExist } from "@/lib/stripe/customer";
 import { startTransaction } from "@beutl/db";
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import {
