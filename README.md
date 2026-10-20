@@ -149,8 +149,12 @@ English/Japanese description in sync with the recording.
 [GitHub Actions](.github/workflows/ci.yml) type-checks the workspaces, runs the Vitest
 suite (including module boundary checks), and runs the CockroachDB integration
 suite against a disposable database on pull requests and pushes to `main`.
-Pull requests also build both Web and Admin with OpenNext without deployment
-secrets. After tests and type checks pass on `main`, it builds and deploys
+Pull requests also build both Web and Admin with OpenNext and render pages
+through the generated Workers in local workerd, without production credentials.
+Run `pnpm --filter @beutl/web check:runtime` or
+`pnpm --filter @beutl/admin check:runtime` after the corresponding OpenNext build.
+The same runtime checks run before deployment on `main`.
+After tests and type checks pass on `main`, it builds and deploys
 `beutl-ai-images`, `beutl-nuget-server`, `beutl-web` (including desktop APIs), and
 `beutl-admin` in that order using the existing deployment tooling. Web and Admin are built without Cloudflare
 credentials. Immediately before each Worker deployment, the run's commit must
