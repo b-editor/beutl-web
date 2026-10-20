@@ -76,7 +76,7 @@
     "git-fs-s3": "0.3.13",
     "hono": "^4.13.13",
     "isomorphic-git": "1.44.3",
-    "music-metadata": "^11.16.1",
+    "music-metadata": "^12.2.2",
     "negotiator": "^1.1.0",
     "semver": "^7.8.5",
     "spdx-exceptions": "2.5.0",
