@@ -38,6 +38,7 @@ vi.mock("@/lib/content-url", () => ({
 import {
   deleteJobAction,
   generateImageAction,
+  editImageAction,
   listJobsAction,
   refreshVideoJobAction,
   retryJobAction,
@@ -1283,7 +1284,7 @@ describe("shared AI workflows across entry points", () => {
     vi.mocked(getAiJobResultFile).mockReset().mockImplementation(db.getAiJobResultFile);
     vi.spyOn(usageCost, "quoteAiUsageReservation").mockImplementation(async ({ kind }) => ({
       providerCostUsd: 0.1, estimatedProviderCostUsd: 0.1,
-      operation: kind === "stt" ? "audio.transcribe" : kind === "translation" ? "subtitle.translate" : "image.generate",
+      operation: kind === "stt" ? "audio.transcribe" : kind === "translation" ? "subtitle.translate" : kind === "video" ? "video.generate" : kind === "image_edit" ? "image.edit.remove_background" : "image.generate",
     }));
     await upsertSubscription({
       userId: "user-1", stripeSubscriptionId: "sub_shared_image", status: "active",
@@ -1488,5 +1489,65 @@ describe("shared AI workflows across entry points", () => {
 
     expect(memory.state.creditTransactions.filter((item) => item.kind === "refund")).toHaveLength(0);
     expect([...memory.state.aiJobs.values()][0].status).toBe("running");
+  });
+
+  it.each(["web", "api"] as const)("recovers an image edit started by %s without a second provider call", async (entry) => {
+    await upsertAiOperationModel({
+      operation: "image.edit.remove_background", modelId, provider: "openrouter",
+      usagePercent: 100, priceUnits: 5, displayName: null, sortOrder: 0, enabled: true, updatedBy: "admin-1",
+    });
+    editImage.mockReset().mockResolvedValue({ b64Json: png.toString("base64"), mediaType: "image/png" });
+    const send = async (target: "web" | "api") => {
+      const data = new FormData();
+      data.set("model", modelId); data.set("idempotencyKey", idempotencyKey);
+      data.set("task", "remove_background");
+      data.set("file", new File([png], "source.png", { type: "image/png" }));
+      if (target === "web") {
+        const result = await editImageAction({ success: false }, data);
+        expect(result.success).toBe(true);
+        return result;
+      }
+      const token = await sign({
+        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": "user-1",
+        exp: Math.floor(Date.now() / 1_000) + 300,
+      }, jwtSecret, "HS256");
+      const response = await new Hono().route("/", images).request("/edit", {
+        method: "POST", body: data,
+        headers: { Authorization: `Bearer ${token}`, "Idempotency-Key": idempotencyKey },
+      });
+      expect(response.status).toBe(200);
+      return await response.json();
+    };
+
+    const first = await send(entry);
+    const replay = await send(entry === "web" ? "api" : "web");
+
+    expect(replay).toMatchObject({ jobId: first.jobId, url: first.url, contentType: "image/png" });
+    expect(editImage).toHaveBeenCalledTimes(1);
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "usage")).toHaveLength(1);
+    expect([...memory.state.aiJobs.values()][0]).toMatchObject({ kind: "image_edit", status: "succeeded" });
+  });
+
+  it.each([402, undefined])("keeps video retry accounting consistent for provider status %s", async (httpStatus) => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await upsertAiOperationModel({
+      operation: "video.generate", modelId: "test/video", provider: "openrouter",
+      usagePercent: 100, priceUnits: 5, displayName: null, sortOrder: 0, enabled: true, updatedBy: "admin-1",
+    });
+    loadAiVideoModelCapabilities.mockReset().mockResolvedValue(new Map());
+    const original = await createAiJob({
+      userId: "user-1", kind: "video", provider: "openrouter", status: "failed", usageUnits: 1,
+      model: "test/video", inputParams: { prompt: "a lighthouse", durationSeconds: 4, resolution: "720p" },
+    });
+    createAndAttachVideoJob.mockRejectedValue(new AiProviderError("Provider outcome", { httpStatus }));
+
+    const result = await retryJobAction(original.id, idempotencyKey);
+
+    expect(result.success).toBe(httpStatus === undefined);
+    const retried = [...memory.state.aiJobs.values()].find((job) => job.id !== original.id)!;
+    expect(retried.status).toBe(httpStatus === 402 ? "failed" : "queued");
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "refund")).toHaveLength(httpStatus === 402 ? 1 : 0);
+    if (httpStatus === 402) expect(result.message).toBe("api-errors:aiProviderBillingUnavailable");
+    else expect(result.jobId).toBe(retried.id);
   });
 });

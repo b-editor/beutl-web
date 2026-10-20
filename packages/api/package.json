@@ -17,6 +17,7 @@
     "./ai/job-input": "./src/ai/job-input.ts",
     "./ai/translation": "./src/ai/translation.ts",
     "./ai/transcription": "./src/ai/transcription.ts",
+    "./ai/image-editing": "./src/ai/image-editing.ts",
     "./ai/image-generation": "./src/ai/image-generation.ts",
     "./ai/image-model-capabilities": "./src/ai/image-model-capabilities.ts",
     "./ai/model-catalog": "./src/ai/model-catalog.ts",
