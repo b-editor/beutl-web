@@ -14,7 +14,6 @@ import { GitObjectStore, type GitObjectBucket } from "./git-object-store";
 import { GitObjectReader, type PackedGitEntry } from "./object-reader";
 import { collectGitObjects } from "./object-graph";
 import { createGitPack, gitPackResponse } from "./pack-writer";
-import { GitPackLimitError, GitPackValidationError, validateGitPack } from "./pack-validation";
 
 // git-fs-s3's HTTP handlers and isomorphic-git build full packs in memory.
 // Keep the Git history small; media must go through LFS.
@@ -180,8 +179,7 @@ export async function receiveGitPack(
   reserveHistory?: (maxAdditionalBytes: number) => Promise<boolean>,
 ): Promise<Response> {
   const body = await readBodyAtMost(request, MAX_GIT_PUSH_BYTES);
-  const repository = await openRepository(bucket, repoId);
-  const { store, prefix, repo } = repository;
+  const { store, prefix, repo } = await openRepository(bucket, repoId);
   const parsed = parseReceivePackBody(body);
   let additionalBytes: number;
   try { additionalBytes = incomingGitObjectBytes(parsed.packData); }
@@ -220,16 +218,6 @@ export async function receiveGitPack(
   }
   if (storedBytes + additionalBytes > MAX_GIT_REPOSITORY_BYTES) {
     return new Response("Git history quota exceeded; track media with Git LFS", { status: 413 });
-  }
-  try {
-    if (parsed.packData.length && new DataView(parsed.packData.buffer, parsed.packData.byteOffset).getUint32(8) > MAX_GIT_REPOSITORY_OBJECTS)
-      throw new GitPackLimitError("Git pack has too many objects");
-    await validateGitPack(parsed.packData, MAX_GIT_REPOSITORY_BYTES, new GitObjectReader(repository));
-  } catch (error) {
-    if (!(error instanceof GitPackValidationError)) throw error;
-    return new Response(error instanceof GitPackLimitError ? error.message : "Invalid Git pack", {
-      status: error instanceof GitPackLimitError ? 413 : 400,
-    });
   }
   if (reserveHistory && !await reserveHistory(additionalBytes)) {
     return new Response("Account storage quota exceeded", { status: 413 });

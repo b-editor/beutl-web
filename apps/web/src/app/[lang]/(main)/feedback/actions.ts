@@ -6,7 +6,6 @@ import { createFeedback } from "@beutl/db";
 import { sendEmail } from "@beutl/email";
 import { auth } from "@/lib/better-auth";
 import { headers } from "next/headers";
-import { isAuthEmailRateLimitError, limitFeedbackSend } from "@beutl/next/auth-email-rate-limit";
 
 const feedbackSchema = (z: Zod) =>
   z.object({
@@ -47,12 +46,12 @@ export async function submitFeedback(
 
   const { name, email, category, message } = validated.data;
 
+  // Signed-out senders have no session; only a failed lookup throws, and that
+  // is not the same as being anonymous.
+  const session = await auth.api.getSession({ headers: await headers() });
+  const userId = session?.user?.id ?? null;
+
   try {
-    const requestHeaders = await headers();
-    await limitFeedbackSend(requestHeaders);
-    // Only a missing session is anonymous; a failed lookup aborts submission.
-    const session = await auth.api.getSession({ headers: requestHeaders });
-    const userId = session?.user?.id ?? null;
     const categoryLabels: Record<string, string> = {
       BUG_REPORT: t("feedback:categories.BUG_REPORT"),
       FEATURE_REQUEST: t("feedback:categories.FEATURE_REQUEST"),
@@ -89,9 +88,6 @@ export async function submitFeedback(
       message: t("feedback:successMessage"),
     };
   } catch (error) {
-    if (isAuthEmailRateLimitError(error)) {
-      return { success: false, message: t("feedback:rateLimited") };
-    }
     console.error("Failed to submit feedback:", error);
     return {
       success: false,

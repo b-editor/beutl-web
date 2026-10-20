@@ -10,7 +10,7 @@ null/undefined in the shipped JavaScript and its TypeScript source.
 checks zero, nonzero and absent seeds on the outgoing HTTP requests. Remove
 this patch when upgrading to an SDK version that passes these tests without it.
 
-## next 16.4.1
+## next 16.3.8
 
 Next strips `_rsc` from the URL that middleware sees and copies it back onto a
 middleware rewrite only when the value is truthy. The fetch Next makes to
@@ -24,7 +24,7 @@ both the CommonJS and ESM builds of `dist/server/web/adapter.js`.
 `tests/contract/next-middleware-rsc-rewrite.test.ts` runs the installed adapter
 with `localeMiddleware` and checks empty, non-empty and absent `_rsc` values.
 Remove this patch when upgrading to a Next version that passes these tests
-without it (Next 16.4.1 still uses the truthy check).
+without it (Next 16.4.0 still uses the truthy check).
 
 The root `pnpm.patchedDependencies` entry and lockfile apply the patches during
 installation; they must remain committed with them.

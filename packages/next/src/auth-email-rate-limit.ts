@@ -1,14 +1,15 @@
 import "server-only";
 import { APIError, createAuthMiddleware, getIP, isAPIError } from "better-auth/api";
-import { consumeAuthEmailSendLimits, pruneAuthEmailSendLimits, type AuthEmailSendLimit } from "@beutl/db";
+import { consumeAuthEmailSendLimits, pruneAuthEmailSendLimits } from "@beutl/db";
 
 const RATE_LIMIT_CODE = "AUTH_EMAIL_RATE_LIMITED";
 
-async function emailLimitKeys(
+/** One policy for HTTP endpoints, Server Actions, Web and Admin. */
+export async function limitAuthEmailSend(
   email: string,
   headers: Headers,
   secret = process.env.BETTER_AUTH_SECRET,
-) {
+): Promise<void> {
   if (!secret) throw new Error("BETTER_AUTH_SECRET is not configured");
   // Cloudflare overwrites this header. X-Forwarded-For is client-controlled
   // behind an appending proxy and must not provide a new quota identity.
@@ -31,12 +32,15 @@ async function emailLimitKeys(
     hash(`ip:${ip}`),
     hash(`recipient:${recipient}`),
   ]);
-  return { ipKey, recipientKey };
-}
-
-async function consumeEmailLimits(limits: readonly AuthEmailSendLimit[]): Promise<void> {
   const now = new Date();
-  const result = await consumeAuthEmailSendLimits(limits, now);
+  const result = await consumeAuthEmailSendLimits(
+    [
+      { key: `ip-minute:${ipKey}`, max: 20, windowMilliseconds: 60_000 },
+      { key: `recipient-minute:${recipientKey}`, max: 5, windowMilliseconds: 60_000 },
+      { key: `recipient-hour:${recipientKey}`, max: 20, windowMilliseconds: 60 * 60_000 },
+    ],
+    now,
+  );
   if (!result.allowed) {
     throw new APIError(
       "TOO_MANY_REQUESTS",
@@ -45,31 +49,6 @@ async function consumeEmailLimits(limits: readonly AuthEmailSendLimit[]): Promis
     );
   }
   await pruneAuthEmailSendLimits(now);
-}
-
-/** One policy for HTTP endpoints, Server Actions, Web and Admin. */
-export async function limitAuthEmailSend(
-  email: string,
-  headers: Headers,
-  secret = process.env.BETTER_AUTH_SECRET,
-): Promise<void> {
-  const { ipKey, recipientKey } = await emailLimitKeys(email, headers, secret);
-  await consumeEmailLimits([
-    { key: `ip-minute:${ipKey}`, max: 20, windowMilliseconds: 60_000 },
-    { key: `recipient-minute:${recipientKey}`, max: 5, windowMilliseconds: 60_000 },
-    { key: `recipient-hour:${recipientKey}`, max: 20, windowMilliseconds: 60 * 60_000 },
-  ]);
-}
-
-export async function limitFeedbackSend(headers: Headers): Promise<void> {
-  const { ipKey } = await emailLimitKeys("", headers);
-  // The sender's email is unverified. Use the trusted IP and a shared ceiling;
-  // keep these counters separate so feedback cannot lock out sign-in emails.
-  await consumeEmailLimits([
-    { key: `feedback-ip-ten-minutes:${ipKey}`, max: 3, windowMilliseconds: 10 * 60_000 },
-    { key: `feedback-ip-hour:${ipKey}`, max: 10, windowMilliseconds: 60 * 60_000 },
-    { key: "feedback-global-hour", max: 100, windowMilliseconds: 60 * 60_000 },
-  ]);
 }
 
 // Better Auth's router limiter is skipped by auth.api, but endpoint hooks run

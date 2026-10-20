@@ -11,8 +11,6 @@ import {
 import { signUpWithEmailAction } from "../../apps/web/src/app/[lang]/(auth-flow)/account/sign-up/actions";
 import { signInWithEmailAction } from "../../apps/web/src/app/[lang]/(auth-flow)/account/sign-in/actions";
 import { signInWithEmailAction as adminSignIn } from "../../apps/admin/src/app/[lang]/account/sign-in/actions";
-import { submitFeedback } from "../../apps/web/src/app/[lang]/(main)/feedback/actions";
-import { limitAuthEmailSend, limitFeedbackSend } from "@beutl/next/auth-email-rate-limit";
 
 const external = vi.hoisted(() => ({
   headers: new Headers(),
@@ -48,7 +46,6 @@ let tokens: Map<string, Row>;
 let counters: Map<string, Row>;
 let transactions: Promise<unknown>;
 const db = {
-  feedback: { create: vi.fn(async () => ({ id: "feedback" })) },
   profile: { findFirst: vi.fn() },
   user: { findFirst: vi.fn(), update: vi.fn() },
   session: { findFirst: vi.fn(), deleteMany: vi.fn() },
@@ -247,47 +244,6 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
-});
-
-describe("feedback admission", () => {
-  function feedback(email = "sender@example.com") {
-    const data = new FormData();
-    for (const [key, value] of Object.entries({ name: "Sender", email, category: "OTHER", message: "Feedback" }))
-      data.set(key, value);
-    return data;
-  }
-  it("limits anonymous concurrent submissions before saving or sending", async () => {
-    external.headers = new Headers({ "cf-connecting-ip": "203.0.113.5" });
-    const results = await Promise.all(Array.from({ length: 25 }, (_, i) => submitFeedback({}, feedback(`sender${i}@example.com`))));
-    expect(results.filter((result) => result.success)).toHaveLength(3);
-    expect(results.filter((result) => !result.success).every((result) => result.message?.includes("Too many"))).toBe(true);
-    expect(db.feedback.create).toHaveBeenCalledTimes(3);
-    expect(external.confirmationEmail).toHaveBeenCalledTimes(3);
-    expect(db.feedback.create.mock.calls.every(([input]: any[]) => input.data.userId === null)).toBe(true);
-    // Rejected feedback must not consume the independent authentication budget.
-    await expect(limitAuthEmailSend("owner@example.com", external.headers)).resolves.toBeUndefined();
-  });
-
-  it("shares a ceiling across different IPs and expires it", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    for (let i = 0; i < 100; i++)
-      await limitFeedbackSend(new Headers({ "cf-connecting-ip": `203.0.113.${i + 1}` }));
-    const fresh = new Headers({ "cf-connecting-ip": "198.51.100.1" });
-    await expect(limitFeedbackSend(fresh)).rejects.toMatchObject({ statusCode: 429 });
-    vi.setSystemTime(Date.now() + 60 * 60_000);
-    await expect(limitFeedbackSend(fresh)).resolves.toBeUndefined();
-  });
-
-  it("does not trust forwarded IPs or accept input when the limiter is unavailable", async () => {
-    for (let i = 0; i < 3; i++)
-      await limitFeedbackSend(new Headers({ "x-forwarded-for": `203.0.113.${i + 1}` }));
-    await expect(limitFeedbackSend(new Headers({ "x-forwarded-for": "198.51.100.1" })))
-      .rejects.toMatchObject({ statusCode: 429 });
-    db.$transaction.mockRejectedValueOnce(new Error("database unavailable"));
-    expect(await submitFeedback({}, feedback())).toMatchObject({ success: false });
-    expect(db.feedback.create).not.toHaveBeenCalled();
-    expect(external.confirmationEmail).not.toHaveBeenCalled();
-  });
 });
 
 describe("email-change authorization", () => {
