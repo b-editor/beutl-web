@@ -344,7 +344,7 @@ describe("email-change authorization", () => {
         userId: "owner",
         createdAt: new Date(),
         updatedAt: new Date(),
-        expiresAt: new Date(Date.now() + 86400000),
+        expiresAt: new Date(Date.now() + 30 * 86400000),
       });
       await expect(approved ? confirm(link) : approve(link)).rejects.toThrow(failed);
       expect(user.email).toBe("owner@example.com");
