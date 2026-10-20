@@ -1,5 +1,5 @@
 import { authOrSignIn } from "@/lib/auth-guard";
-import { createOrRetrieveOwnedCustomerId } from "@/lib/customer";
+import { createOrRetrieveOwnedCustomerId } from "@/lib/stripe/customer";
 import {
   bindPackageCheckoutSession,
   bindDiscoveredPackageCheckoutSession,

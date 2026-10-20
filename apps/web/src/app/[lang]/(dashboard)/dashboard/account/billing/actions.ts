@@ -1,7 +1,7 @@
 "use server";
 
 import { throwIfUnauth } from "@/lib/auth-guard";
-import { createOrRetrieveOwnedCustomerId } from "@/lib/customer";
+import { createOrRetrieveOwnedCustomerId } from "@/lib/stripe/customer";
 import {
   activateConfiguredTopUpOffer,
   fulfillOrRefundTopUpPayment,
@@ -75,13 +75,14 @@ export async function createProCheckout(): Promise<void> {
     email: session.user.email as string,
     userId: session.user.id,
   });
-  await createSubscriptionCheckout({
+  const url = await createSubscriptionCheckout({
     stripe: createStripe(),
     plan: subscriptionPlanConfig("pro"),
     tier: null,
     userId: session.user.id,
     customerId,
   });
+  redirect(url);
 }
 
 const TOP_UP_CHECKOUT_RETENTION_MS = 24 * 60 * 60_000;

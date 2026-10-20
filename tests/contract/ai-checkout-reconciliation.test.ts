@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/auth-guard", () => ({ throwIfUnauth: mocks.throwIfUnauth }));
-vi.mock("@/lib/customer", () => ({
+vi.mock("@/lib/stripe/customer", () => ({
   createOrRetrieveOwnedCustomerId: vi.fn(),
 }));
 vi.mock("@/lib/stripe/config", () => ({

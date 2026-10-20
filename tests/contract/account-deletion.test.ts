@@ -29,7 +29,7 @@ vi.mock("@beutl/next/audit-log", () => ({
 vi.mock("@/lib/confirmation-token-flow", () => ({
   authorizeAccountDeletion: mocks.authorizeAccountDeletion,
 }));
-vi.mock("@/lib/customer", () => ({
+vi.mock("@/lib/stripe/customer-closure", () => ({
   closeStripeCustomerForAccountDeletion:
     mocks.closeStripeCustomerForAccountDeletion,
 }));

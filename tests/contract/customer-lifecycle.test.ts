@@ -92,11 +92,11 @@ vi.mock("@/lib/stripe/config", () => ({
   }),
 }));
 
+import { closeStripeCustomerForAccountDeletion } from "../../apps/web/src/lib/stripe/customer-closure";
 import {
-  closeStripeCustomerForAccountDeletion,
   createOrRetrieveOwnedCustomerId,
   updateCustomerEmailIfExist,
-} from "../../apps/web/src/lib/customer";
+} from "../../apps/web/src/lib/stripe/customer";
 
 const resourceMissing = {
   code: "resource_missing",

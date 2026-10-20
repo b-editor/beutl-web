@@ -5,7 +5,7 @@
 // adds the storage-specific rule that a downgrade may not drop below the
 // current usage.
 import { throwIfUnauth } from "@/lib/auth-guard";
-import { createOrRetrieveOwnedCustomerId } from "@/lib/customer";
+import { createOrRetrieveOwnedCustomerId } from "@/lib/stripe/customer";
 import { createStripe } from "@/lib/stripe/config";
 import {
   changeSubscriptionTier,
@@ -50,7 +50,7 @@ export async function createStorageCheckout(formData: FormData): Promise<void> {
     email: session.user.email as string,
     userId: session.user.id,
   });
-  await unlessOfferUnavailable(
+  const url = await unlessOfferUnavailable(
     () =>
       createSubscriptionCheckout({
         stripe: createStripe(),
@@ -61,6 +61,7 @@ export async function createStorageCheckout(formData: FormData): Promise<void> {
       }),
     `${BILLING_PATH}?checkout=unavailable`,
   );
+  redirect(url);
 }
 
 export async function reconcileStorageCheckoutSuccess(
