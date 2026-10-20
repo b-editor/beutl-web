@@ -98,7 +98,7 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
     } catch (error) {
       if ((error as { code?: string }).code === "ERR_BUFFER_TOO_LARGE")
         throw new GitPackLimitError("Git object exceeds its declared expansion limit");
-      if (["Z_DATA_ERROR", "Z_BUF_ERROR"].includes((error as { code?: string }).code ?? ""))
+      if (["Z_DATA_ERROR", "Z_BUF_ERROR", "Z_NEED_DICT"].includes((error as { code?: string }).code ?? ""))
         throw new GitPackValidationError("Invalid compressed Git object");
       throw error;
     }

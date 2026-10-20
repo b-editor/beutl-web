@@ -42,10 +42,10 @@ function unsigned(value: number): Buffer {
   do { bytes.push((value & 127) | (value >= 128 ? 128 : 0)); value = Math.floor(value / 128); } while (value);
   return Buffer.from(bytes);
 }
-function pushBody(entries: { data: Uint8Array; type?: number; size?: number; base?: Uint8Array }[], oid = "1".repeat(40)) {
+function pushBody(entries: { data: Uint8Array; type?: number; size?: number; base?: Uint8Array; compressed?: Uint8Array }[], oid = "1".repeat(40)) {
   const header = Buffer.alloc(12); header.write("PACK"); header.writeUInt32BE(2, 4); header.writeUInt32BE(entries.length, 8);
-  const pack = Buffer.concat([header, ...entries.flatMap(({ data, type = 3, size = data.length, base }) => [
-    packEntryHeader(type, size), ...(base ? [base] : []), deflateSync(data),
+  const pack = Buffer.concat([header, ...entries.flatMap(({ data, type = 3, size = data.length, base, compressed }) => [
+    packEntryHeader(type, size), ...(base ? [base] : []), compressed ?? deflateSync(data),
   ])]);
   const update = `${"0".repeat(40)} ${oid} refs/tags/test-${oid}\0report-status\n`;
   return Buffer.concat([Buffer.from(`${(Buffer.byteLength(update) + 4).toString(16).padStart(4, "0")}${update}0000`),
@@ -112,6 +112,16 @@ it("rejects delta instructions that exceed the declared output and truncated str
   expect((await receive(new Bucket(), body.subarray(0, body.length - 24))).status).toBe(400);
   body[body.indexOf("PACK") + 13] = 0;
   expect((await receive(new Bucket(), body)).status).toBe(400);
+});
+
+it("rejects preset-dictionary zlib streams before reserving or storing the pack", async () => {
+  const bucket = new Bucket(), reserve = vi.fn(async () => true), data = Buffer.from("dictionary-backed object");
+  const compressed = deflateSync(data, { dictionary: data });
+  const response = await receive(bucket, pushBody([{ data, compressed }], blobOid(data)), reserve);
+  expect(response.status).toBe(400);
+  expect(await response.text()).toBe("Invalid Git pack");
+  expect(reserve).not.toHaveBeenCalled();
+  expect([...bucket.objects.keys()].some((key) => key.endsWith(".pack"))).toBe(false);
 });
 
 it("rejects a thin delta referencing an oversized legacy blob", async () => {
