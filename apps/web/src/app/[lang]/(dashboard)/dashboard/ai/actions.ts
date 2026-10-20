@@ -6,14 +6,12 @@ import { getTranslation } from "@beutl/i18n";
 import { headers } from "next/headers";
 import { prepareTranslation } from "@beutl/api/ai/translation";
 import { prepareTranscription, recoverTranscription } from "@beutl/api/ai/transcription";
+import { prepareImageEdit } from "@beutl/api/ai/image-editing";
 import { prepareImageGeneration } from "@beutl/api/ai/image-generation";
 import { parseReplayableAiJobInput, sanitizeAiJobInputParams } from "@beutl/api/ai/job-input";
 import {
-  AI_JOB_FAILURE_MESSAGES,
   AiProviderError,
   aiProviderFailureCode,
-  aiJobFailureMessage,
-  reportAiProviderFailure,
   publicAiJobError,
   MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
   MAX_AI_IMAGE_UPLOAD_BYTES,
@@ -21,15 +19,11 @@ import {
   MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
   createCallbackNonce,
   createReservedAiJob,
-  decodeGeneratedImageBase64,
-  failAiJobAndRefundUsage,
-  inspectGeneratedImage,
   isIso6391LanguageCode,
   DEFAULT_AI_PROVIDER_ID,
   loadAiModelCatalog,
   parseAudio,
   readAiJsonResult,
-  saveAiImage,
   prepareGatewayVideoUsageForDeletion,
   sha256Hex,
   MAX_TRANSLATION_CHARACTERS,
@@ -55,15 +49,11 @@ import {
   retrieveStorageFoldersByUserId,
 } from "@beutl/db";
 import {
-  classifyVideoSubmissionFailure,
+  settleVideoSubmissionFailure,
   createAndAttachVideoJob,
   deleteAiOutputObject,
-  imageCapabilityOf,
-  loadAiImageModelCapabilities,
-  imageProviderFor,
   loadAiVideoModelCapabilities,
   videoCapabilityOf,
-  unsupportedImageRequestReason,
   unsupportedVideoRequestReason,
 } from "@beutl/api";
 import {
@@ -340,42 +330,6 @@ async function answerFromExistingVideoJob(
     message: t(`api-errors:${publicAiJobError(job.error)}`),
     status: job.status,
   };
-}
-
-// Submitting a video is the one AI operation whose failure is not simply a
-// refund: OpenRouter may have accepted a job we lost track of. The shared
-// classifier decides, so this path and the v3 endpoints cannot drift apart.
-async function handleVideoSubmissionFailure({
-  userId,
-  jobId,
-  error,
-  t,
-}: {
-  userId: string;
-  jobId: string;
-  error: unknown;
-  t: (key: string) => string;
-}): Promise<AiActionResult> {
-  const handling = classifyVideoSubmissionFailure(error);
-  if (handling.action === "refund") {
-    await failAiJobAndRefundUsage({
-      userId,
-      aiJobId: jobId,
-      error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.videoSubmission),
-      ...(handling.detachProviderJob ? { expectedProviderJobId: null } : {}),
-    });
-    return { success: false, message: t(`api-errors:${aiProviderFailureCode(error)}`) };
-  }
-  if (handling.action === "keepQueued") {
-    // The provider may still call back, so the job stays queued rather than
-    // being refunded out from under a submission that was accepted.
-    console.error(
-      `OpenRouter video submission outcome is unknown for AI job ${jobId}`,
-      error,
-    );
-    return { success: true, jobId };
-  }
-  throw error;
 }
 
 async function recoverTranslation({
@@ -756,53 +710,15 @@ export async function editImageAction(
     return await answerFromExistingFileJob(replay.job, t);
   }
 
-  const selectedModel = await resolveModelOf(formData, `image.edit.${task}`);
-  if (!selectedModel) {
-    return { success: false, message: t("api-errors:aiModelUnavailable") };
-  }
-  // An edit hands the model a picture, cuts out a background or asks for a
-  // size; a model that takes none of those is refused before it is paid for.
-  if (
-    unsupportedImageRequestReason(
-      imageCapabilityOf(
-        await loadAiImageModelCapabilities([selectedModel]),
-        selectedModel,
-      ),
-      {
-        // The picture being edited.
-        referenceImages: 1,
-        // Removing a background is asking for a transparent one.
-        ...(task === "remove_background"
-          ? { background: "transparent" as const }
-          : {}),
-        resolution: task === "upscale",
-      },
-    )
-  ) {
-    return {
-      success: false,
-      message: t("api-errors:aiModelDoesNotSupportRequest"),
-    };
-  }
-
-  const reservation = await createReservedAiJob({
+  const reservation = await prepareImageEdit({
     userId: session.user.id,
-    // The same kind the v3 edit endpoint writes. Tagging an edit as "image"
-    // makes it indistinguishable from a generation, and the retry path then
-    // reruns it as text-to-image: no source picture, and the generation price.
-    kind: "image_edit",
-    provider: selectedModel.provider,
-    status: "running",
-    inputParams: {
-      task,
-      filename: file.name,
+    model: await resolveModelOf(formData, `image.edit.${task}`),
+    identity,
+    input: {
+      task, image: validated.bytes, mimeType: validated.mimeType, filename: file.name,
       ...(editPrompt ? { prompt: editPrompt } : {}),
       ...(task === "outpaint" ? { outpaintExpansion } : {}),
     },
-    usagePercent: selectedModel.usagePercent,
-    imageOutputTokenProfile: selectedModel.imageOutputTokenProfile,
-    model: selectedModel.modelId,
-    ...identity,
   });
   if (!reservation.ok) {
     return reservationFailure(reservation.errorCode, t);
@@ -813,24 +729,12 @@ export async function editImageAction(
     return await answerFromExistingFileJob(job, t);
   }
 
+  const outcome = await reservation.execute();
+  if (!outcome.ok) {
+    return { success: false, message: t(`api-errors:${errorMessage(outcome.error)}`) };
+  }
+  const { file: saved } = outcome;
   try {
-    const result = await imageProviderFor(selectedModel.provider).edit({
-      task,
-      image: validated.bytes,
-      mimeType: validated.mimeType,
-      ...(editPrompt ? { prompt: editPrompt } : {}),
-      model: selectedModel.modelId,
-    });
-    const bytes = decodeGeneratedImageBase64(result.b64Json);
-    await inspectGeneratedImage(bytes, result.mediaType);
-    const saved = await saveAiImage({
-      jobId: job.id,
-      userId: session.user.id,
-      bytes,
-      mimeType: "image/png",
-      filename: `ai-edit-${job.id}.png`,
-      providerCostUsd: result.providerCostUsd,
-    });
     return {
       success: true,
       jobId: job.id,
@@ -839,17 +743,6 @@ export async function editImageAction(
       contentType: saved.mimeType,
     };
   } catch (error) {
-    await failAiJobAndRefundUsage({
-      userId: session.user.id,
-      aiJobId: job.id,
-      error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.imageEdit),
-    });
-    if (error instanceof AiProviderError) {
-      reportAiProviderFailure({
-        operation: `image.edit.${task}`, jobId: job.id,
-        provider: selectedModel.provider, model: selectedModel.modelId, error,
-      });
-    }
     return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
   }
 }
@@ -1388,12 +1281,12 @@ export async function retryJobAction(
       });
       return { success: true, jobId: retried.id };
     } catch (error) {
-      return await handleVideoSubmissionFailure({
-        userId: session.user.id,
-        jobId: retried.id,
-        error,
-        t,
+      const handling = await settleVideoSubmissionFailure({
+        userId: session.user.id, jobId: retried.id, provider: retryModel.provider, error,
       });
+      return handling === "refund"
+        ? { success: false, message: t(`api-errors:${aiProviderFailureCode(error)}`) }
+        : { success: true, jobId: retried.id };
     }
   }
 
