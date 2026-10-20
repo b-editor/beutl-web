@@ -146,6 +146,33 @@ it("rejects a thin delta referencing an oversized legacy blob", async () => {
   expect((await receive(bucket, pushBody([{ data: delta, type: 7, base: Buffer.from(oid, "hex") }]))).status).toBe(413);
 });
 
+it.each([0, 4])("rejects conflicting declarations for a repeated %s-byte stored delta base", async (size) => {
+  const bucket = new Bucket(), reserve = vi.fn(async () => true), data = Buffer.alloc(size, 97);
+  expect(await (await receive(bucket, pushBody([{ data }], blobOid(data)))).text()).toContain("unpack ok");
+  const stored = [...bucket.objects.keys()];
+  const body = pushBody([size === 0 ? 1 : 0, size].map((source, i) => ({
+    type: 7, base: Buffer.from(blobOid(data), "hex"), data: Buffer.from([source, 1, 1, 97 + i]),
+  })), blobOid(Buffer.from("b")));
+  const response = await receive(bucket, body, reserve);
+  expect(response.status).toBe(400);
+  expect(await response.text()).toBe("Invalid Git pack");
+  expect(reserve).not.toHaveBeenCalled();
+  expect([...bucket.objects.keys()]).toEqual(stored);
+});
+
+it.each([0, 4])("accepts matching declarations for a repeated %s-byte stored delta base", async (size) => {
+  const bucket = new Bucket(), reserve = vi.fn(async () => true), data = Buffer.alloc(size, 97);
+  expect(await (await receive(bucket, pushBody([{ data }], blobOid(data)))).text()).toContain("unpack ok");
+  const target = blobOid(Buffer.from("b"));
+  const body = pushBody([97, 98].map((value) => ({
+    type: 7, base: Buffer.from(blobOid(data), "hex"), data: Buffer.from([size, 1, 1, value]),
+  })), target);
+  const response = await receive(bucket, body, reserve);
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain(`ok refs/tags/test-${target}`);
+  expect(reserve).toHaveBeenCalledOnce();
+});
+
 it("bounds thin-base lookups across cached pack indexes before reserving or storing the pack", async () => {
   const bucket = new Bucket(), reserve = vi.fn(async () => true);
   for (let i = 0; i < 128; i++) {

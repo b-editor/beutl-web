@@ -114,7 +114,11 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
     if (type === 6 || type === 7) {
       const delta = deltaSize(inflated.buffer, deltaBudget);
       expanded += delta.target;
-      if (base) bases.set(base, delta.source);
+      if (base) {
+        if (bases.has(base) && bases.get(base) !== delta.source)
+          throw new GitPackValidationError("Git delta base size mismatch");
+        bases.set(base, delta.source);
+      }
     }
     checkSize(expanded, maximum);
     offsets.add(start);
