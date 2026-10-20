@@ -1,6 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { sign } from "hono/jwt";
-import { api, setR2BucketProvider } from "@beutl/api";
+import { setR2BucketProvider } from "@beutl/api";
+import { api } from "@beutl/api/app";
 import { setDbProvider } from "@beutl/db";
 import {
   apiRequestBodyLimit,

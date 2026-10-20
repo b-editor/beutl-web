@@ -17,8 +17,8 @@ import {
 import {
   AI_TEXT_RESULT_RETENTION_MILLISECONDS,
   setR2BucketProvider,
-  v3,
 } from "@beutl/api";
+import { v3 } from "@beutl/api/app";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 vi.mock("../../packages/api/src/ai/openrouter", async (importOriginal) => {

@@ -8,7 +8,8 @@ import {
   upsertAiSetting,
   upsertSubscription,
 } from "@beutl/db";
-import { setR2BucketProvider, v3 } from "@beutl/api";
+import { setR2BucketProvider } from "@beutl/api";
+import { v3 } from "@beutl/api/app";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 // What a caller may choose, and what that choice costs. The two must come out

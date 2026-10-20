@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { sign } from "hono/jwt";
 import { getCreditAccount, setDbProvider, upsertAiOperationModel, upsertSubscription } from "@beutl/db";
-import { AiVideoSubmissionError, setR2BucketProvider, v3 } from "@beutl/api";
+import { AiVideoSubmissionError, setR2BucketProvider } from "@beutl/api";
+import { v3 } from "@beutl/api/app";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 const startVideo = vi.hoisted(() => vi.fn());
