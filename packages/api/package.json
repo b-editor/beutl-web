@@ -15,6 +15,7 @@
     "./git/repository-browser": "./src/git/repository-browser.ts",
     "./ai/entitlements": "./src/ai/entitlements.ts",
     "./ai/job-input": "./src/ai/job-input.ts",
+    "./ai/image-generation": "./src/ai/image-generation.ts",
     "./ai/image-model-capabilities": "./src/ai/image-model-capabilities.ts",
     "./ai/model-catalog": "./src/ai/model-catalog.ts",
     "./ai/video-model-capabilities": "./src/ai/video-model-capabilities.ts",

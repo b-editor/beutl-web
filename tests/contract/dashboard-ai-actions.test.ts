@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Hono } from "hono";
+import { sign } from "hono/jwt";
+import images from "../../packages/api/src/v3/ai/images";
+import * as usageCost from "../../packages/api/src/ai/usage-cost";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 import { setDbProvider } from "@beutl/db";
 import { aiCapabilityKey, setR2BucketProvider } from "@beutl/api";
@@ -79,6 +83,23 @@ const editImage = vi.hoisted(() => vi.fn());
 const translateSegments = vi.hoisted(() => vi.fn());
 const transcribeAudio = vi.hoisted(() => vi.fn());
 
+vi.mock("../../packages/api/src/ai/credits", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../packages/api/src/ai/credits")>(),
+  createReservedAiJob: vi.fn(),
+}));
+vi.mock("../../packages/api/src/ai/storage", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../packages/api/src/ai/storage")>(),
+  saveAiImage: vi.fn(),
+}));
+vi.mock("../../packages/api/src/ai/providers/registry", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../packages/api/src/ai/providers/registry")>(),
+  imageProviderFor: () => ({ generate: generateImage, edit: editImage }),
+}));
+vi.mock("../../packages/api/src/ai/image-model-capabilities", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../packages/api/src/ai/image-model-capabilities")>(),
+  loadAiImageModelCapabilities,
+}));
+
 vi.mock("@beutl/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@beutl/api")>();
   return {
@@ -87,14 +108,10 @@ vi.mock("@beutl/api", async (importOriginal) => {
     editImage,
     translateSegments,
     transcribeAudio,
-    imageProviderFor: () => ({ generate: generateImage, edit: editImage }),
     translationProviderFor: () => ({ translate: translateSegments }),
     transcriptionProviderFor: () => ({ transcribe: transcribeAudio }),
-    saveAiImage: vi.fn(),
-    createReservedAiJob: vi.fn(),
     listAiJobsByUserId: vi.fn(),
     readAiJsonResult: vi.fn(),
-    loadAiImageModelCapabilities,
     loadAiVideoModelCapabilities,
     createAndAttachVideoJob,
     synchronizeAiVideoJob,
@@ -1209,5 +1226,160 @@ describe("dashboard AI actions", () => {
       });
       expect(createReservedAiJob).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("shared image generation across entry points", () => {
+  const modelId = "openai/gpt-image-1";
+  const jwtSecret = "shared-image-generation-contract";
+  const idempotencyKey = "3f1a0d0e-0000-4000-8000-000000000020";
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  let memory: ReturnType<typeof createInMemoryPrisma>;
+
+  async function registerModel(enabled: boolean) {
+    await upsertAiOperationModel({
+      operation: "image.generate", modelId, provider: "openrouter",
+      usagePercent: 100, priceUnits: 5, displayName: null,
+      sortOrder: 0, enabled, updatedBy: "admin-1",
+    });
+  }
+
+  beforeEach(async () => {
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    memory = createInMemoryPrisma();
+    setDbProvider(async () => memory.prisma as never);
+    setR2BucketProvider(() => ({
+      put: vi.fn(async () => ({})),
+      delete: vi.fn(async () => undefined),
+    }));
+    vi.stubEnv("JWT_SECRET", jwtSecret);
+    vi.stubEnv("PUBLIC_ORIGIN", "https://beutl.example");
+    loadAiImageModelCapabilities.mockReset().mockResolvedValue(new Map());
+    generateImage.mockReset().mockResolvedValue({ b64Json: png.toString("base64"), mediaType: "image/png" });
+    // Exercise the shared reservation, persistence and ledger; only the remote
+    // quote/provider and storage bucket are replaced for these entry-point tests.
+    const credits = await vi.importActual<typeof import("../../packages/api/src/ai/credits")>(
+      "../../packages/api/src/ai/credits",
+    );
+    const storage = await vi.importActual<typeof import("../../packages/api/src/ai/storage")>(
+      "../../packages/api/src/ai/storage",
+    );
+    vi.mocked(createReservedAiJob).mockReset().mockImplementation(credits.createReservedAiJob);
+    vi.mocked(saveAiImage).mockReset().mockImplementation(storage.saveAiImage);
+    vi.spyOn(usageCost, "quoteAiUsageReservation").mockResolvedValue({
+      providerCostUsd: 0.1, estimatedProviderCostUsd: 0.1, operation: "image.generate",
+    });
+    await upsertSubscription({
+      userId: "user-1", stripeSubscriptionId: "sub_shared_image", status: "active",
+      planId: "pro", billingOfferId: "offer_pro_test",
+      currentPeriodStart: new Date(Date.now() - 86_400_000),
+      currentPeriodEnd: new Date(Date.now() + 30 * 86_400_000),
+    });
+    await registerModel(true);
+  });
+
+  afterEach(() => {
+    setDbProvider(async () => memory.prisma as never);
+    vi.mocked(createReservedAiJob).mockReset();
+    vi.mocked(saveAiImage).mockReset();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  function form() {
+    const data = new FormData();
+    data.set("idempotencyKey", idempotencyKey);
+    data.set("model", modelId);
+    data.set("prompt", "a lighthouse");
+    data.set("aspectRatio", "16:9");
+    data.set("background", "auto");
+    data.set("seed", "42");
+    data.set("reference", new File([png], "guide.png", { type: "image/png" }));
+    return data;
+  }
+
+  async function submit(entry: "web" | "api") {
+    if (entry === "web") {
+      const result = await generateImageAction({ success: false }, form());
+      expect(result.success).toBe(true);
+      return result;
+    }
+    const token = await sign({
+      "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": "user-1",
+      exp: Math.floor(Date.now() / 1_000) + 300,
+    }, jwtSecret, "HS256");
+    const response = await new Hono().route("/api/v3/ai/images", images).request(
+      "https://beutl.example/api/v3/ai/images",
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Idempotency-Key": idempotencyKey },
+        body: form(),
+      },
+    );
+    expect(response.status).toBe(200);
+    return await response.json();
+  }
+
+  it.each(["web", "api"] as const)("recovers a request first sent through %s after its model is disabled", async (firstEntry) => {
+    const first = await submit(firstEntry);
+    const charged = (await getCreditAccount({ userId: "user-1" })).monthlyUsageUsed;
+    expect(charged).toBeGreaterThan(0);
+    await registerModel(false);
+    loadAiImageModelCapabilities.mockRejectedValue(new Error("Replay must not revalidate the disabled model"));
+
+    const recovered = await submit(firstEntry === "web" ? "api" : "web");
+
+    expect(recovered).toMatchObject({
+      jobId: first.jobId, url: first.url,
+      fileName: first.fileName, contentType: "image/png",
+    });
+    expect(createReservedAiJob).toHaveBeenCalledTimes(1);
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
+      model: modelId, prompt: "a lighthouse", aspectRatio: "16:9", seed: 42,
+      referenceImages: [{ bytes: expect.any(ArrayBuffer), mimeType: "image/png" }],
+    }));
+    expect(saveAiImage).toHaveBeenCalledTimes(1);
+    expect(memory.state.aiJobs.size).toBe(1);
+    expect([...memory.state.aiJobs.values()][0]).toMatchObject({
+      status: "succeeded", model: modelId,
+      inputParams: { prompt: "a lighthouse", aspectRatio: "16:9", seed: 42, references: [{ filename: "guide.png" }] },
+    });
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "usage")).toHaveLength(1);
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "refund")).toHaveLength(0);
+    expect((await getCreditAccount({ userId: "user-1" })).monthlyUsageUsed).toBe(charged);
+  });
+
+  it("refunds a failed Web generation once and retains the public billing error", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    generateImage.mockRejectedValue(new AiProviderError("private provider billing detail", { httpStatus: 402 }));
+
+    const first = await generateImageAction({ success: false }, form());
+    const replay = await generateImageAction({ success: false }, form());
+
+    expect(first).toMatchObject({ success: false, message: "api-errors:aiProviderBillingUnavailable" });
+    expect(replay).toMatchObject(first);
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "refund")).toHaveLength(1);
+    expect((await getCreditAccount({ userId: "user-1" })).monthlyUsageUsed).toBe(0);
+    expect([...memory.state.aiJobs.values()][0].status).toBe("failed");
+    expect(saveAiImage).not.toHaveBeenCalled();
+  });
+
+  it("does not report a terminal Web failure when the refund transaction cannot run", async () => {
+    generateImage.mockImplementationOnce(async () => {
+      setDbProvider(async () => { throw new Error("Database unavailable during refund"); });
+      throw new AiProviderError("Provider response lost");
+    });
+
+    await expect(generateImageAction({ success: false }, form())).rejects.toThrow("Database unavailable during refund");
+
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "usage")).toHaveLength(1);
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "refund")).toHaveLength(0);
+    expect([...memory.state.aiJobs.values()][0].status).toBe("running");
   });
 });
