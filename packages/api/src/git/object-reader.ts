@@ -130,13 +130,14 @@ export class GitObjectReader {
     const index = await this.index(path.replace(/\.pack$/u, ".idx")), pack = await this.pack(path, index);
     return new Map(Array.from({ length: index.count }, (_, i) => [this.oid(index, i), this.packedEntry(index, pack, i)]));
   }
-  private entry(oid: string): Promise<Entry | null> {
+  private entry(oid: string, consumeLookup?: () => void): Promise<Entry | null> {
+    consumeLookup?.();
     if (!/^[0-9a-f]{40}$/u.test(oid)) throw new Error("Invalid Git object ID");
     let pending = this.entries.get(oid);
-    if (!pending) { pending = this.findEntry(oid); this.entries.set(oid, pending); }
+    if (!pending) { pending = this.findEntry(oid, consumeLookup); this.entries.set(oid, pending); }
     return pending;
   }
-  private async findEntry(oid: string): Promise<Entry | null> {
+  private async findEntry(oid: string, consumeLookup?: () => void): Promise<Entry | null> {
     const { repo, fs } = this.repository;
     const loose = await this.file(`${repo.gitdir}/objects/${oid.slice(0, 2)}/${oid.slice(2)}`);
     if (loose) {
@@ -150,6 +151,7 @@ export class GitObjectReader {
     this.names ??= fs.promises.readdir(directory).then((names) => names.filter((name) => name.endsWith(".idx")))
       .catch((error) => { if (error.code === "ENOENT") return []; throw error; });
     for (const name of await this.names) {
+      consumeLookup?.();
       const path = `${directory}/${name}`, index = await this.index(path);
       let low = 0, high = index.count;
       while (low < high) {
@@ -161,17 +163,17 @@ export class GitObjectReader {
     }
     return null;
   }
-  async info(oid: string): Promise<GitObjectInfo | null> {
+  async info(oid: string, consumeLookup?: () => void): Promise<GitObjectInfo | null> {
     const cached = this.infos.get(oid);
     if (cached) return cached;
-    const entry = await this.entry(oid);
+    const entry = await this.entry(oid, consumeLookup);
     if (!entry) return null;
     let type = entry.type, base = entry.base;
     const seen = new Set([oid]);
     while (base) {
       if (seen.has(base)) throw new Error("Git delta bases form a cycle");
       seen.add(base);
-      const source = await this.entry(base);
+      const source = await this.entry(base, consumeLookup);
       if (!source) throw new Error(`Git delta base ${base} is missing`);
       type = source.type; base = source.base;
     }
@@ -184,7 +186,9 @@ export class GitObjectReader {
     if (!info.type) throw new Error("Unsupported Git object type");
     this.infos.set(oid, info); return info;
   }
-  async size(oid: string): Promise<number | null> { return (await this.info(oid))?.size ?? null; }
+  async size(oid: string, consumeLookup?: () => void): Promise<number | null> {
+    return (await this.info(oid, consumeLookup))?.size ?? null;
+  }
 
   async read(oid: string, maximum = MAX_GIT_OBJECT_BYTES): Promise<Uint8Array<ArrayBuffer>> {
     const info = await this.info(oid);

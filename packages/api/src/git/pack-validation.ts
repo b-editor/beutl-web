@@ -1,10 +1,14 @@
 import { inflateSync } from "node:zlib";
+import { sha1, toHex } from "git-fs-s3";
 import { MAX_GIT_OBJECT_BYTES } from "./git-object-store";
 import type { GitObjectReader } from "./object-reader";
 
 // Bound validation work and isomorphic-git's per-command chunk allocations.
 // Share the budget across the pack rather than resetting it for each delta.
 const MAX_GIT_PACK_DELTA_OPERATIONS = 262_144;
+// Count entry visits and index probes, including cached indexes and base chains,
+// so many distinct thin bases cannot multiply work by the repository's pack count.
+const MAX_GIT_PACK_BASE_LOOKUPS = 65_536;
 
 export class GitPackValidationError extends Error {}
 export class GitPackLimitError extends GitPackValidationError {}
@@ -60,6 +64,8 @@ function deltaSize(data: Uint8Array, budget: { remaining: number }): { source: n
 /** Bound expansion before isomorphic-git indexes or caches full object buffers. */
 export async function validateGitPack(pack: Uint8Array, maximum: number, reader: GitObjectReader): Promise<void> {
   if (!pack.length) return;
+  if (await sha1(pack.subarray(0, -20)) !== toHex(pack.subarray(-20)))
+    throw new GitPackValidationError("Invalid Git pack checksum");
   const cursor = new Cursor(pack.subarray(0, -20));
   cursor.position = 12;
   const count = new DataView(pack.buffer, pack.byteOffset).getUint32(8);
@@ -116,8 +122,12 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
   if (cursor.position !== cursor.bytes.length) throw new GitPackValidationError("Git pack object count mismatch");
   // A thin pack can reference older stored objects. Reject oversized legacy
   // bases before the library inflates them while resolving the incoming delta.
+  let lookupsRemaining = MAX_GIT_PACK_BASE_LOOKUPS;
+  const consumeLookup = () => {
+    if (--lookupsRemaining < 0) throw new GitPackLimitError("Git pack exceeds its base lookup budget");
+  };
   for (const [base, source] of bases) {
-    const size = await reader.size(base);
+    const size = await reader.size(base, consumeLookup);
     if (size !== null) {
       checkSize(size, MAX_GIT_OBJECT_BYTES);
       if (size !== source) throw new GitPackValidationError("Git delta base size mismatch");

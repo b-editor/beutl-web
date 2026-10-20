@@ -115,6 +115,11 @@ instructions across all objects in an incoming pack. This is a hosted-service
 compatibility limit, independent of Git's format and the byte limits: it bounds
 validation work and per-instruction allocations during indexing. A pack that
 exceeds the budget is rejected with HTTP 413.
+Thin-pack base validation also shares a budget of 65,536 object-entry visits and
+pack-index probes, including cached entries/indexes and stored delta chains.
+This bounds searches across fragmented history; exceeding it returns HTTP 413
+before quota reservation or pack storage. Pack SHA-1 checksum mismatches return
+HTTP 400 before indexing.
 
 Fetches negotiate with `multi_ack_detailed`, so a client receives only the objects its common history
 with the server lacks. Track videos and other large media with Git LFS. An LFS
