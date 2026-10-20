@@ -38,7 +38,7 @@ import {
 } from "../../ai/openrouter";
 import type { VideoInputReference } from "../../ai/providers/types";
 import {
-  classifyVideoSubmissionFailure,
+  settleVideoSubmissionFailure,
   createAndAttachVideoJob,
   synchronizeAiVideoJob,
 } from "../../ai/video-jobs";
@@ -62,7 +62,7 @@ import {
   getAiJobById,
   getAiJobByProviderJobId,
 } from "@beutl/db";
-import { AI_JOB_FAILURE_MESSAGES, aiJobFailureMessage } from "../../ai/job-errors";
+import { AI_JOB_FAILURE_MESSAGES } from "../../ai/job-errors";
 import {
   callbackNonceMatches,
   createCallbackNonce,
@@ -678,26 +678,13 @@ const app = new Hono()
       const current = await getAiJobById({ jobId: job.id });
       return c.json(await publicAiJobPayload(current ?? job, c.req.raw));
     } catch (err) {
-      const handling = classifyVideoSubmissionFailure(err);
-      if (handling.action === "refund") {
-        await failAiJobAndRefundUsage({
-          userId,
-          aiJobId: job.id,
-          error: aiJobFailureMessage(err, AI_JOB_FAILURE_MESSAGES.videoSubmission),
-          ...(handling.detachProviderJob ? { expectedProviderJobId: null } : {}),
-        });
-        return c.json(await apiErrorResponse(aiProviderFailureCode(err)), {
-          status: 500,
-        });
+      const handling = await settleVideoSubmissionFailure({
+        userId, jobId: job.id, provider: selectedModel.provider, error: err,
+      });
+      if (handling === "refund") {
+        return c.json(await apiErrorResponse(aiProviderFailureCode(err)), { status: 500 });
       }
-      if (handling.action === "keepQueued") {
-        console.error(
-          `${selectedModel.provider} video submission outcome is unknown for AI job ${job.id}`,
-          err,
-        );
-        return c.json(await publicAiJobPayload(job, c.req.raw));
-      }
-      throw err;
+      return c.json(await publicAiJobPayload(job, c.req.raw));
     }
   })
   .post("/frames", async (c) => {
@@ -1182,26 +1169,13 @@ const app = new Hono()
       const current = await getAiJobById({ jobId: job.id });
       return c.json(await publicAiJobPayload(current ?? job, c.req.raw));
     } catch (err) {
-      const handling = classifyVideoSubmissionFailure(err);
-      if (handling.action === "refund") {
-        await failAiJobAndRefundUsage({
-          userId,
-          aiJobId: job.id,
-          error: aiJobFailureMessage(err, AI_JOB_FAILURE_MESSAGES.videoSubmission),
-          ...(handling.detachProviderJob ? { expectedProviderJobId: null } : {}),
-        });
-        return c.json(await apiErrorResponse(aiProviderFailureCode(err)), {
-          status: 500,
-        });
+      const handling = await settleVideoSubmissionFailure({
+        userId, jobId: job.id, provider: selectedModel.provider, error: err,
+      });
+      if (handling === "refund") {
+        return c.json(await apiErrorResponse(aiProviderFailureCode(err)), { status: 500 });
       }
-      if (handling.action === "keepQueued") {
-        console.error(
-          `${selectedModel.provider} video submission outcome is unknown for AI job ${job.id}`,
-          err,
-        );
-        return c.json(await publicAiJobPayload(job, c.req.raw));
-      }
-      throw err;
+      return c.json(await publicAiJobPayload(job, c.req.raw));
     }
   })
   .post("/:id/openrouter-callback", async (c) => {
@@ -1513,33 +1487,13 @@ const app = new Hono()
       const current = await getAiJobById({ jobId: job.id });
       return c.json(await publicAiJobPayload(current ?? job, c.req.raw));
     } catch (err) {
-      const handling = classifyVideoSubmissionFailure(err);
-      if (handling.action === "refund") {
-        await failAiJobAndRefundUsage({
-          userId,
-          aiJobId: job.id,
-          error: aiJobFailureMessage(err, AI_JOB_FAILURE_MESSAGES.videoSubmission),
-          ...(handling.detachProviderJob
-            ? { expectedProviderJobId: null }
-            : {}),
-        });
-        return c.json(await apiErrorResponse(aiProviderFailureCode(err)), {
-          status: 500,
-        });
+      const handling = await settleVideoSubmissionFailure({
+        userId, jobId: job.id, provider: selectedModel.provider, error: err,
+      });
+      if (handling === "refund") {
+        return c.json(await apiErrorResponse(aiProviderFailureCode(err)), { status: 500 });
       }
-      if (handling.action === "keepQueued") {
-        // The provider may have taken the job: its answer was lost, not
-        // refused. Reporting a failure here would have the client drop the
-        // idempotency key and start a second paid generation while the first
-        // is still queued and may yet arrive by callback. Return the queued
-        // job so the client can keep polling it.
-        console.error(
-          `${selectedModel.provider} video submission outcome is unknown for AI job ${job.id}`,
-          err,
-        );
-        return c.json(await publicAiJobPayload(job, c.req.raw));
-      }
-      throw err;
+      return c.json(await publicAiJobPayload(job, c.req.raw));
     }
   })
 
@@ -1796,33 +1750,13 @@ const app = new Hono()
       const current = await getAiJobById({ jobId: job.id });
       return c.json(await publicAiJobPayload(current ?? job, c.req.raw));
     } catch (err) {
-      const handling = classifyVideoSubmissionFailure(err);
-      if (handling.action === "refund") {
-        await failAiJobAndRefundUsage({
-          userId,
-          aiJobId: job.id,
-          error: aiJobFailureMessage(err, AI_JOB_FAILURE_MESSAGES.videoSubmission),
-          ...(handling.detachProviderJob
-            ? { expectedProviderJobId: null }
-            : {}),
-        });
-        return c.json(await apiErrorResponse(aiProviderFailureCode(err)), {
-          status: 500,
-        });
+      const handling = await settleVideoSubmissionFailure({
+        userId, jobId: job.id, provider: selectedModel.provider, error: err,
+      });
+      if (handling === "refund") {
+        return c.json(await apiErrorResponse(aiProviderFailureCode(err)), { status: 500 });
       }
-      if (handling.action === "keepQueued") {
-        // The provider may have taken the job: its answer was lost, not
-        // refused. Reporting a failure here would have the client drop the
-        // idempotency key and start a second paid generation while the first
-        // is still queued and may yet arrive by callback. Return the queued
-        // job so the client can keep polling it.
-        console.error(
-          `${selectedModel.provider} video submission outcome is unknown for AI job ${job.id}`,
-          err,
-        );
-        return c.json(await publicAiJobPayload(job, c.req.raw));
-      }
-      throw err;
+      return c.json(await publicAiJobPayload(job, c.req.raw));
     }
   })
 

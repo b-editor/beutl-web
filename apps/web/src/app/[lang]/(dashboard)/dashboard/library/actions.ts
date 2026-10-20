@@ -2,7 +2,7 @@ import "server-only";
 import { contentPath } from "@/lib/content-url";
 import { guessCurrency } from "@/lib/currency";
 import { retrieveLibraryPackagesByUserId, type PrismaTransaction } from "@beutl/db";
-import { selectPricing } from "@beutl/core";
+import { localizedDisplayName, localizedShortDescription, selectPricing } from "@beutl/core";
 
 export type ListedPackage = {
   id: string;
@@ -20,6 +20,7 @@ export type ListedPackage = {
 
 export async function retrievePackages(
   userId: string,
+  lang: string,
   options: {
     // 概要ページは他のクエリと 1 つの接続を共有するため注入できるようにしてある。
     prisma?: PrismaTransaction;
@@ -32,6 +33,7 @@ export async function retrievePackages(
     userId,
     currency,
     take: options.take,
+    lang,
     prisma: options.prisma,
   });
 
@@ -44,8 +46,8 @@ export async function retrievePackages(
         return {
           id: pkg.id,
           name: pkg.name,
-          displayName: pkg.displayName || undefined,
-          shortDescription: pkg.shortDescription,
+          displayName: localizedDisplayName(pkg, lang) || undefined,
+          shortDescription: localizedShortDescription(pkg, lang),
           userName: pkg.user.Profile?.userName || undefined,
           iconFileUrl: url || undefined,
           tags: pkg.tags,

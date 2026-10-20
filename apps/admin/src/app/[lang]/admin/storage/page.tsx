@@ -1,7 +1,8 @@
 import { listFilesForAdmin, type AdminFileOrder } from "@beutl/db";
 import { formatBytes } from "@beutl/core";
+import type { StorageStores } from "@beutl/api/storage/bucket-from-env";
 import { getTranslation } from "@beutl/i18n";
-import type { StorageStores } from "@beutl/api";
+
 import { Badge } from "@beutl/ui/ui/badge";
 import {
   Table,

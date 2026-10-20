@@ -12,10 +12,6 @@ import {
 } from "../../apps/admin/src/lib/desktop-usage";
 import { fetchDesktopUsage } from "../../apps/admin/src/lib/desktop-usage-server";
 
-vi.mock("@beutl/api", () => ({
-  readBoundedResponseText: async (response: Response) => response.text(),
-}));
-
 const NOW = new Date("2026-10-01T12:34:00Z");
 const env = {
   GRAFANA_TEMPO_URL: "https://tempo.example.test/tempo",

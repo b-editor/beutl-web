@@ -10,11 +10,13 @@ import {
   getPackageNameFromPackageId,
   getPackagePublishedByIdOrThrow,
   retrieveDevPackageByName,
+  startTransaction,
   updateDevPackageDescription,
   updateDevPackageDisplay,
   replaceDevPackageIconFile,
   updateDevPackagePublished,
   updateDevPackageTags,
+  upsertPackageTranslations,
 } from "@beutl/db";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
@@ -23,6 +25,7 @@ import { redirect } from "next/navigation";
 import { compareNugetVersions } from "@beutl/core";
 import {
   createDedicatedFile,
+  descriptionUpdateSchema,
   displayNameAndShortDescriptionSchema,
   sameUser,
 } from "./_shared";
@@ -46,12 +49,23 @@ export async function updateDisplayNameAndShortDescription(
       };
     }
 
-    const { displayName, shortDescription, id } = validated.data;
+    const { displayName, shortDescription, id, translations } = validated.data;
     return await sameUser(id, session.user.id, t, async () => {
-      const { name } = await updateDevPackageDisplay({
-        packageId: id,
-        displayName,
-        shortDescription,
+      const { name } = await startTransaction(async (tx) => {
+        const updated = await updateDevPackageDisplay({
+          packageId: id,
+          displayName,
+          shortDescription,
+          prisma: tx,
+        });
+        if (translations) {
+          await upsertPackageTranslations({
+            packageId: id,
+            translations,
+            prisma: tx,
+          });
+        }
+        return updated;
       });
       await addAuditLog({
         userId: session.user.id,
@@ -69,21 +83,43 @@ export async function updateDisplayNameAndShortDescription(
 export async function updateDescription({
   packageId,
   description,
-}: { packageId: string; description: string }): Promise<ActionResult> {
+  translations,
+}: {
+  packageId: string;
+  description: string;
+  translations?: { lang: string; shortDescription?: string | null; description?: string | null }[];
+}): Promise<ActionResult> {
   return await authenticated(async (session) => {
     const lang = await getLanguage();
     const { t } = await getTranslation(lang);
-    if (description.length > 1000) {
+    const validated = descriptionUpdateSchema(t).safeParse({
+      packageId,
+      description,
+      translations,
+    });
+    if (!validated.success) {
       return {
-        message: t("developer:validation.descriptionMax"),
+        message: validated.error.issues[0]?.message ??
+          t("developer:errors.invalidInput"),
         success: false,
       };
     }
 
     return await sameUser(packageId, session.user.id, t, async () => {
-      const { name } = await updateDevPackageDescription({
-        packageId,
-        description,
+      const { name } = await startTransaction(async (tx) => {
+        const updated = await updateDevPackageDescription({
+          packageId,
+          description: validated.data.description,
+          prisma: tx,
+        });
+        if (validated.data.translations) {
+          await upsertPackageTranslations({
+            packageId,
+            translations: validated.data.translations,
+            prisma: tx,
+          });
+        }
+        return updated;
       });
       await addAuditLog({
         userId: session.user.id,

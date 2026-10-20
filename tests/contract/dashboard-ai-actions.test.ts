@@ -1,4 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Hono } from "hono";
+import { sign } from "hono/jwt";
+import translations from "../../packages/api/src/v3/ai/translations";
+import transcriptions from "../../packages/api/src/v3/ai/transcriptions";
+import images from "../../packages/api/src/v3/ai/images";
+import * as usageCost from "../../packages/api/src/ai/usage-cost";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 import { setDbProvider } from "@beutl/db";
 import { aiCapabilityKey, setR2BucketProvider } from "@beutl/api";
@@ -32,16 +38,20 @@ vi.mock("@/lib/content-url", () => ({
 import {
   deleteJobAction,
   generateImageAction,
+  editImageAction,
   listJobsAction,
   refreshVideoJobAction,
   retryJobAction,
   translateAction,
+  transcribeAction,
 } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/actions";
 import { aiFailureResult } from "../../apps/web/src/lib/ai-screen";
 import {
   AI_JOB_FAILURE_MESSAGES,
   AiProviderError,
+  createReservedAiJob,
   readAiJsonResult,
+  saveAiImage,
   toAiRequestIdentity,
 } from "@beutl/api";
 import {
@@ -67,8 +77,6 @@ const createAndAttachVideoJob = vi.hoisted(() =>
   vi.fn(async () => undefined),
 );
 const synchronizeAiVideoJob = vi.hoisted(() => vi.fn());
-const createReservedAiJob = vi.hoisted(() => vi.fn());
-const saveAiImage = vi.hoisted(() => vi.fn());
 
 // The actions resolve a provider from the catalog rather than importing one,
 // so the registry accessors are pointed at the same mocks the assertions below
@@ -79,52 +87,34 @@ const editImage = vi.hoisted(() => vi.fn());
 const translateSegments = vi.hoisted(() => vi.fn());
 const transcribeAudio = vi.hoisted(() => vi.fn());
 
-vi.mock("@beutl/api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@beutl/api")>();
-  return {
-    ...actual,
-    generateImage,
-    editImage,
-    translateSegments,
-    transcribeAudio,
-    imageProviderFor: () => ({ generate: generateImage, edit: editImage }),
-    translationProviderFor: () => ({ translate: translateSegments }),
-    transcriptionProviderFor: () => ({ transcribe: transcribeAudio }),
-    saveAiImage,
-    createReservedAiJob,
-    listAiJobsByUserId: vi.fn(),
-    readAiJsonResult: vi.fn(),
-    loadAiImageModelCapabilities,
-    loadAiVideoModelCapabilities,
-    createAndAttachVideoJob,
-    synchronizeAiVideoJob,
-  };
-});
-
-// The retry runs in @beutl/api's own modules, so they get the same mocks.
 vi.mock("../../packages/api/src/ai/credits", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../packages/api/src/ai/credits")>()),
-  createReservedAiJob,
+  ...await importOriginal<typeof import("../../packages/api/src/ai/credits")>(),
+  createReservedAiJob: vi.fn(),
 }));
 vi.mock("../../packages/api/src/ai/storage", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../packages/api/src/ai/storage")>()),
-  saveAiImage,
+  ...await importOriginal<typeof import("../../packages/api/src/ai/storage")>(),
+  saveAiImage: vi.fn(),
+  readAiJsonResult: vi.fn(),
 }));
 vi.mock("../../packages/api/src/ai/providers/registry", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../packages/api/src/ai/providers/registry")>()),
+  ...await importOriginal<typeof import("../../packages/api/src/ai/providers/registry")>(),
   imageProviderFor: () => ({ generate: generateImage, edit: editImage }),
+  translationProviderFor: () => ({ translate: translateSegments }),
+  transcriptionProviderFor: () => ({ transcribe: transcribeAudio }),
 }));
 vi.mock("../../packages/api/src/ai/image-model-capabilities", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../packages/api/src/ai/image-model-capabilities")>()),
+  ...await importOriginal<typeof import("../../packages/api/src/ai/image-model-capabilities")>(),
   loadAiImageModelCapabilities,
 }));
-vi.mock("../../packages/api/src/ai/video-model-capabilities", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../packages/api/src/ai/video-model-capabilities")>()),
+
+vi.mock("@beutl/api/ai/video-model-capabilities", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@beutl/api/ai/video-model-capabilities")>(),
   loadAiVideoModelCapabilities,
 }));
-vi.mock("../../packages/api/src/ai/video-jobs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../packages/api/src/ai/video-jobs")>()),
+vi.mock("@beutl/api/ai/video-jobs", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@beutl/api/ai/video-jobs")>(),
   createAndAttachVideoJob,
+  synchronizeAiVideoJob,
 }));
 
 vi.mock("@beutl/db", async (importOriginal) => {
@@ -1235,5 +1225,324 @@ describe("dashboard AI actions", () => {
       });
       expect(createReservedAiJob).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("shared AI workflows across entry points", () => {
+  const modelId = "openai/gpt-image-1";
+  const jwtSecret = "shared-image-generation-contract";
+  const idempotencyKey = "3f1a0d0e-0000-4000-8000-000000000020";
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  let memory: ReturnType<typeof createInMemoryPrisma>;
+
+  async function registerModel(enabled: boolean) {
+    await upsertAiOperationModel({
+      operation: "image.generate", modelId, provider: "openrouter",
+      usagePercent: 100, priceUnits: 5, displayName: null,
+      sortOrder: 0, enabled, updatedBy: "admin-1",
+    });
+  }
+
+  beforeEach(async () => {
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    memory = createInMemoryPrisma();
+    setDbProvider(async () => memory.prisma as never);
+    const objects = new Map<string, ArrayBuffer>();
+    setR2BucketProvider(() => ({
+      put: vi.fn(async (key, bytes) => { objects.set(key, bytes as ArrayBuffer); }),
+      get: vi.fn(async (key) => {
+        const bytes = objects.get(key);
+        return bytes ? { size: bytes.byteLength, arrayBuffer: async () => bytes } : null;
+      }),
+      delete: vi.fn(async (key) => { objects.delete(key); }),
+    }));
+    vi.stubEnv("JWT_SECRET", jwtSecret);
+    vi.stubEnv("PUBLIC_ORIGIN", "https://beutl.example");
+    loadAiImageModelCapabilities.mockReset().mockResolvedValue(new Map());
+    generateImage.mockReset().mockResolvedValue({ b64Json: png.toString("base64"), mediaType: "image/png" });
+    // Exercise the shared reservation, persistence and ledger; only the remote
+    // quote/provider and storage bucket are replaced for these entry-point tests.
+    const credits = await vi.importActual<typeof import("../../packages/api/src/ai/credits")>(
+      "../../packages/api/src/ai/credits",
+    );
+    const storage = await vi.importActual<typeof import("../../packages/api/src/ai/storage")>(
+      "../../packages/api/src/ai/storage",
+    );
+    vi.mocked(createReservedAiJob).mockReset().mockImplementation(credits.createReservedAiJob);
+    vi.mocked(saveAiImage).mockReset().mockImplementation(storage.saveAiImage);
+    vi.mocked(readAiJsonResult).mockReset().mockImplementation(storage.readAiJsonResult);
+    const db = await vi.importActual<typeof import("@beutl/db")>("@beutl/db");
+    vi.mocked(getAiJobResultFile).mockReset().mockImplementation(db.getAiJobResultFile);
+    vi.spyOn(usageCost, "quoteAiUsageReservation").mockImplementation(async ({ kind }) => ({
+      providerCostUsd: 0.1, estimatedProviderCostUsd: 0.1,
+      operation: kind === "stt" ? "audio.transcribe" : kind === "translation" ? "subtitle.translate" : kind === "video" ? "video.generate" : kind === "image_edit" ? "image.edit.remove_background" : "image.generate",
+    }));
+    await upsertSubscription({
+      userId: "user-1", stripeSubscriptionId: "sub_shared_image", status: "active",
+      planId: "pro", billingOfferId: "offer_pro_test",
+      currentPeriodStart: new Date(Date.now() - 86_400_000),
+      currentPeriodEnd: new Date(Date.now() + 30 * 86_400_000),
+    });
+    await registerModel(true);
+  });
+
+  afterEach(() => {
+    setDbProvider(async () => memory.prisma as never);
+    vi.mocked(createReservedAiJob).mockReset();
+    vi.mocked(saveAiImage).mockReset();
+    vi.mocked(readAiJsonResult).mockReset();
+    vi.mocked(getAiJobResultFile).mockReset();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  function form() {
+    const data = new FormData();
+    data.set("idempotencyKey", idempotencyKey);
+    data.set("model", modelId);
+    data.set("prompt", "a lighthouse");
+    data.set("aspectRatio", "16:9");
+    data.set("background", "auto");
+    data.set("seed", "42");
+    data.set("reference", new File([png], "guide.png", { type: "image/png" }));
+    return data;
+  }
+
+  async function submit(entry: "web" | "api") {
+    if (entry === "web") {
+      const result = await generateImageAction({ success: false }, form());
+      expect(result.success).toBe(true);
+      return result;
+    }
+    const token = await sign({
+      "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": "user-1",
+      exp: Math.floor(Date.now() / 1_000) + 300,
+    }, jwtSecret, "HS256");
+    const response = await new Hono().route("/api/v3/ai/images", images).request(
+      "https://beutl.example/api/v3/ai/images",
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Idempotency-Key": idempotencyKey },
+        body: form(),
+      },
+    );
+    expect(response.status).toBe(200);
+    return await response.json();
+  }
+
+  it.each(["web", "api"] as const)("recovers a request first sent through %s after its model is disabled", async (firstEntry) => {
+    const first = await submit(firstEntry);
+    const charged = (await getCreditAccount({ userId: "user-1" })).monthlyUsageUsed;
+    expect(charged).toBeGreaterThan(0);
+    await registerModel(false);
+    loadAiImageModelCapabilities.mockRejectedValue(new Error("Replay must not revalidate the disabled model"));
+
+    const recovered = await submit(firstEntry === "web" ? "api" : "web");
+
+    expect(recovered).toMatchObject({
+      jobId: first.jobId, url: first.url,
+      fileName: first.fileName, contentType: "image/png",
+    });
+    expect(createReservedAiJob).toHaveBeenCalledTimes(1);
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
+      model: modelId, prompt: "a lighthouse", aspectRatio: "16:9", seed: 42,
+      referenceImages: [{ bytes: expect.any(ArrayBuffer), mimeType: "image/png" }],
+    }));
+    expect(saveAiImage).toHaveBeenCalledTimes(1);
+    expect(memory.state.aiJobs.size).toBe(1);
+    expect([...memory.state.aiJobs.values()][0]).toMatchObject({
+      status: "succeeded", model: modelId,
+      inputParams: { prompt: "a lighthouse", aspectRatio: "16:9", seed: 42, references: [{ filename: "guide.png" }] },
+    });
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "usage")).toHaveLength(1);
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "refund")).toHaveLength(0);
+    expect((await getCreditAccount({ userId: "user-1" })).monthlyUsageUsed).toBe(charged);
+  });
+
+  it("refunds a failed Web generation once and retains the public billing error", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    generateImage.mockRejectedValue(new AiProviderError("private provider billing detail", { httpStatus: 402 }));
+
+    const first = await generateImageAction({ success: false }, form());
+    const replay = await generateImageAction({ success: false }, form());
+
+    expect(first).toMatchObject({ success: false, message: "api-errors:aiProviderBillingUnavailable" });
+    expect(replay).toMatchObject(first);
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "refund")).toHaveLength(1);
+    expect((await getCreditAccount({ userId: "user-1" })).monthlyUsageUsed).toBe(0);
+    expect([...memory.state.aiJobs.values()][0].status).toBe("failed");
+    expect(saveAiImage).not.toHaveBeenCalled();
+  });
+
+  it("does not report a terminal Web failure when the refund transaction cannot run", async () => {
+    generateImage.mockImplementationOnce(async () => {
+      setDbProvider(async () => { throw new Error("Database unavailable during refund"); });
+      throw new AiProviderError("Provider response lost");
+    });
+
+    await expect(generateImageAction({ success: false }, form())).rejects.toThrow("Database unavailable during refund");
+
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "usage")).toHaveLength(1);
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "refund")).toHaveLength(0);
+    expect([...memory.state.aiJobs.values()][0].status).toBe("running");
+  });
+
+  async function registerTextModel(operation: string, enabled = true) {
+    await upsertAiOperationModel({
+      operation, modelId: "test/text-model", provider: "openrouter", usagePercent: 100,
+      priceUnits: 5, displayName: null, sortOrder: 0, enabled, updatedBy: "admin-1",
+    });
+  }
+
+  function textForm(kind: "translation" | "transcription") {
+    const data = new FormData();
+    data.set("model", "test/text-model");
+    data.set("idempotencyKey", idempotencyKey);
+    if (kind === "translation") {
+      data.set("targetLanguage", "ja");
+      data.set("segments", JSON.stringify([{ id: "line-1", text: "Hello" }]));
+    } else {
+      // One second of mono PCM: duration and identity use the uploaded bytes.
+      const wav = Buffer.alloc(44 + 8_000, 128);
+      wav.write("RIFF", 0); wav.writeUInt32LE(wav.length - 8, 4);
+      wav.write("WAVEfmt ", 8); wav.writeUInt32LE(16, 16);
+      wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+      wav.writeUInt32LE(8_000, 24); wav.writeUInt32LE(8_000, 28);
+      wav.writeUInt16LE(1, 32); wav.writeUInt16LE(8, 34);
+      wav.write("data", 36); wav.writeUInt32LE(8_000, 40);
+      data.set("file", new File([wav], "speech.wav", { type: "audio/wav" }));
+    }
+    return data;
+  }
+
+  async function submitText(kind: "translation" | "transcription", entry: "web" | "api") {
+    const data = textForm(kind);
+    if (entry === "web") {
+      const action = kind === "translation" ? translateAction : transcribeAction;
+      const result = await action({ success: false }, data);
+      expect(result.success).toBe(true);
+      return result;
+    }
+    const token = await sign({
+      "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": "user-1",
+      exp: Math.floor(Date.now() / 1_000) + 300,
+    }, jwtSecret, "HS256");
+    const response = await new Hono().route("/", kind === "translation" ? translations : transcriptions).request("/", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`, "Idempotency-Key": idempotencyKey,
+        ...(kind === "translation" ? { "content-type": "application/json" } : {}),
+      },
+      body: kind === "translation" ? JSON.stringify({
+        model: data.get("model"), targetLanguage: "ja", segments: JSON.parse(String(data.get("segments"))),
+      }) : data,
+    });
+    expect(response.status).toBe(200);
+    return await response.json();
+  }
+
+  it.each([
+    ["translation", "web"], ["translation", "api"],
+    ["transcription", "web"], ["transcription", "api"],
+  ] as const)("recovers %s started by %s through the other entry point without charging again", async (kind, entry) => {
+    const operation = kind === "translation" ? "subtitle.translate" : "audio.transcribe";
+    await registerTextModel(operation);
+    translateSegments.mockReset().mockResolvedValue([{ id: "line-1", text: "こんにちは" }]);
+    transcribeAudio.mockReset().mockResolvedValue({
+      segments: [{ start: 0, end: 1, text: "Hello" }], language: "en",
+      words: [{ start: 0, end: 1, word: "Hello" }],
+    });
+    const first = await submitText(kind, entry);
+    await registerTextModel(operation, false);
+
+    const replay = await submitText(kind, entry === "web" ? "api" : "web");
+
+    expect(replay).toMatchObject({ jobId: first.jobId, segments: first.segments });
+    if (kind === "transcription") expect(replay).toMatchObject({ language: "en", words: first.words });
+    expect(kind === "translation" ? translateSegments : transcribeAudio).toHaveBeenCalledTimes(1);
+    expect(memory.state.aiJobs.size).toBe(1);
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "usage")).toHaveLength(1);
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "refund")).toHaveLength(0);
+  });
+
+  it.each(["translation", "transcription"] as const)("propagates an unresolved %s refund to preserve recovery", async (kind) => {
+    await registerTextModel(kind === "translation" ? "subtitle.translate" : "audio.transcribe");
+    const provider = kind === "translation" ? translateSegments : transcribeAudio;
+    provider.mockReset().mockImplementationOnce(async () => {
+      setDbProvider(async () => { throw new Error("Database unavailable during refund"); });
+      throw new AiProviderError("Provider response lost");
+    });
+    const action = kind === "translation" ? translateAction : transcribeAction;
+
+    await expect(action({ success: false }, textForm(kind))).rejects.toThrow("Database unavailable during refund");
+
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "refund")).toHaveLength(0);
+    expect([...memory.state.aiJobs.values()][0].status).toBe("running");
+  });
+
+  it.each(["web", "api"] as const)("recovers an image edit started by %s without a second provider call", async (entry) => {
+    await upsertAiOperationModel({
+      operation: "image.edit.remove_background", modelId, provider: "openrouter",
+      usagePercent: 100, priceUnits: 5, displayName: null, sortOrder: 0, enabled: true, updatedBy: "admin-1",
+    });
+    editImage.mockReset().mockResolvedValue({ b64Json: png.toString("base64"), mediaType: "image/png" });
+    const send = async (target: "web" | "api") => {
+      const data = new FormData();
+      data.set("model", modelId); data.set("idempotencyKey", idempotencyKey);
+      data.set("task", "remove_background");
+      data.set("file", new File([png], "source.png", { type: "image/png" }));
+      if (target === "web") {
+        const result = await editImageAction({ success: false }, data);
+        expect(result.success).toBe(true);
+        return result;
+      }
+      const token = await sign({
+        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": "user-1",
+        exp: Math.floor(Date.now() / 1_000) + 300,
+      }, jwtSecret, "HS256");
+      const response = await new Hono().route("/", images).request("/edit", {
+        method: "POST", body: data,
+        headers: { Authorization: `Bearer ${token}`, "Idempotency-Key": idempotencyKey },
+      });
+      expect(response.status).toBe(200);
+      return await response.json();
+    };
+
+    const first = await send(entry);
+    const replay = await send(entry === "web" ? "api" : "web");
+
+    expect(replay).toMatchObject({ jobId: first.jobId, url: first.url, contentType: "image/png" });
+    expect(editImage).toHaveBeenCalledTimes(1);
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "usage")).toHaveLength(1);
+    expect([...memory.state.aiJobs.values()][0]).toMatchObject({ kind: "image_edit", status: "succeeded" });
+  });
+
+  it.each([402, undefined])("keeps video retry accounting consistent for provider status %s", async (httpStatus) => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await upsertAiOperationModel({
+      operation: "video.generate", modelId: "test/video", provider: "openrouter",
+      usagePercent: 100, priceUnits: 5, displayName: null, sortOrder: 0, enabled: true, updatedBy: "admin-1",
+    });
+    loadAiVideoModelCapabilities.mockReset().mockResolvedValue(new Map());
+    const original = await createAiJob({
+      userId: "user-1", kind: "video", provider: "openrouter", status: "failed", usageUnits: 1,
+      model: "test/video", inputParams: { prompt: "a lighthouse", durationSeconds: 4, resolution: "720p" },
+    });
+    createAndAttachVideoJob.mockRejectedValue(new AiProviderError("Provider outcome", { httpStatus }));
+
+    const result = await retryJobAction(original.id, idempotencyKey);
+
+    expect(result.success).toBe(httpStatus === undefined);
+    const retried = [...memory.state.aiJobs.values()].find((job) => job.id !== original.id)!;
+    expect(retried.status).toBe(httpStatus === 402 ? "failed" : "queued");
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "refund")).toHaveLength(httpStatus === 402 ? 1 : 0);
+    if (httpStatus === 402) expect(result.message).toBe("api-errors:aiProviderBillingUnavailable");
+    else expect(result.jobId).toBe(retried.id);
   });
 });

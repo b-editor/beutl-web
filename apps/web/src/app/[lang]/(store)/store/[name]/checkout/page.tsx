@@ -1,5 +1,5 @@
 import { authOrSignIn } from "@/lib/auth-guard";
-import { createOrRetrieveOwnedCustomerId } from "@/lib/customer";
+import { createOrRetrieveOwnedCustomerId } from "@/lib/stripe/customer";
 import {
   bindPackageCheckoutSession,
   bindDiscoveredPackageCheckoutSession,
@@ -28,13 +28,14 @@ import {
 import { notFound, redirect } from "next/navigation";
 import { guessCurrency } from "@/lib/currency";
 import { createHash, selectPricing } from "@beutl/core";
+import { discoverPackageCheckoutAttempt } from "@beutl/api/package-checkout-discovery";
+import { PACKAGE_CHECKOUT_CREATE_TIMEOUT_MS } from "@beutl/api/ai/stripe-checkout-cleanups";
 import {
   packageOwned,
   retrievePackage,
   retrievePrices,
 } from "@/lib/store-utils";
-import { discoverPackageCheckoutAttempt } from "@beutl/api";
-import { PACKAGE_CHECKOUT_CREATE_TIMEOUT_MS } from "@beutl/api";
+
 import type Stripe from "stripe";
 
 // Stripe が 1 ページで返す上限。1 顧客の未払いセッションがこれを超えることは
@@ -67,7 +68,7 @@ export default async function Page(props: {
   const { name, lang } = await props.params;
 
   const session = await authOrSignIn();
-  const pkg = await retrievePackage(name);
+  const pkg = await retrievePackage(name, lang);
   if (!pkg) {
     notFound();
   }

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sign } from "hono/jwt";
 import { runWithDbProvider, type PrismaClient } from "@beutl/db";
-import { api } from "@beutl/api";
+import { api } from "@beutl/api/app";
 import type { GitEnvironment } from "@beutl/api/git/environment";
 
 const id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";

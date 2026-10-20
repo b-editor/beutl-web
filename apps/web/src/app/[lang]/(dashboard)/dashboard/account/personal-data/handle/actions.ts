@@ -9,7 +9,7 @@ import {
 } from "@beutl/db";
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { authorizeAccountDeletion } from "@/lib/confirmation-token-flow";
-import { closeStripeCustomerForAccountDeletion } from "@/lib/customer";
+import { closeStripeCustomerForAccountDeletion } from "@/lib/stripe/customer-closure";
 
 export async function deleteUser(token: string, identifier: string) {
   const authorization = await authorizeAccountDeletion({ token, identifier });

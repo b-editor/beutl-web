@@ -15,7 +15,7 @@ Cloudflare Workers.
 | `apps/admin` | `@beutl/admin` | Administrative console |
 | `apps/nuget-server` | `@beutl/nuget-server` | NuGet protocol and package distribution at nuget.beditor.net |
 | `apps/image-worker` | `@beutl/image-worker` | Private Cloudflare Worker for AI image editing |
-| `packages/api` | `@beutl/api` | Hono APIs for desktop clients (`v1`, `v2`, and `v3`) |
+| `packages/api` | `@beutl/api` | Shared server services and desktop HTTP APIs (`@beutl/api/app`) |
 | `packages/core` | `@beutl/core` | Framework-independent domain logic |
 | `packages/db` | `@beutl/db` | Prisma client and data-access helpers |
 | `packages/email` | `@beutl/email` | Server-only email delivery |
@@ -24,6 +24,11 @@ Cloudflare Workers.
 | `packages/ui` | `@beutl/ui` | Shared UI components |
 | `tests/contract` | — | Golden and external-contract tests |
 | `tests/integration` | — | Tests that use CockroachDB or live provider data when enabled |
+
+HTTP routes are composed through `@beutl/api/app`; shared services use
+`@beutl/api` or a focused subpath such as `@beutl/api/ai/job-input`.
+See [the module boundary decision](docs/adr/0003-separate-http-composition-from-services.md)
+for dependency direction and the next refactoring priorities.
 
 ## Getting started
 
@@ -74,9 +79,22 @@ commands run from this package and load its `.env`; `migrate:fresh-cockroach` an
 | `pnpm test:watch` | Run Vitest in watch mode |
 | `pnpm preview` | Build and preview the public Cloudflare Worker locally |
 
-CockroachDB integration tests require `TEST_DATABASE_URL`. The live OpenRouter
-pricing test is opt-in through `TEST_OPENROUTER_PRICING=1`; these tests are
-skipped when their respective variables are absent.
+CockroachDB integration tests require `TEST_DATABASE_URL` pointing to a disposable
+local database initialized through the fresh CockroachDB migration command. The
+test user must be able to create and drop databases; migration tests also create
+their own fixtures and apply migration SQL separately. CI uses CockroachDB v26.2.8.
+With a local server running:
+
+```bash
+cockroach sql --insecure --host=127.0.0.1:26257 --execute='CREATE DATABASE beutl_test'
+export TEST_DATABASE_URL='postgresql://root@127.0.0.1:26257/beutl_test?sslmode=disable'
+FRESH_COCKROACH_DATABASE_URL="$TEST_DATABASE_URL" pnpm --filter @beutl/web migrate:fresh-cockroach
+pnpm test tests/integration --maxWorkers=2 --testTimeout=60000 --hookTimeout=120000
+```
+
+Without `TEST_DATABASE_URL`, database tests are skipped. Live provider tests are
+separately opt-in through `TEST_OPENROUTER_PRICING=1` and
+`TEST_VERCEL_GATEWAY_MODELS=1`; CI leaves these disabled.
 
 ## NuGet packages
 
@@ -128,13 +146,15 @@ English/Japanese description in sync with the recording.
 
 ## Continuous integration and deployment
 
-[GitHub Actions](.github/workflows/ci.yml) runs the Vitest suite on pull requests
-and pushes to `main`. After tests pass on `main`, it deploys `beutl-ai-images`,
-`beutl-nuget-server`, `beutl-web` (including desktop APIs), and `beutl-admin` in that order using the
-existing deployment tooling. Web and Admin are built without Cloudflare
+[GitHub Actions](.github/workflows/ci.yml) type-checks the workspaces, runs the Vitest
+suite (including module boundary checks), and runs the CockroachDB integration
+suite against a disposable database on pull requests and pushes to `main`.
+Pull requests also build both Web and Admin with OpenNext without deployment
+secrets. After tests and type checks pass on `main`, it builds and deploys
+`beutl-ai-images`, `beutl-nuget-server`, `beutl-web` (including desktop APIs), and
+`beutl-admin` in that order using the existing deployment tooling. Web and Admin are built without Cloudflare
 credentials. Immediately before each Worker deployment, the run's commit must
 still match the head of `main`. A manual run on `main` also tests and deploys.
-DB and live-provider tests remain opt-in and are skipped in this workflow.
 
 Set these repository secrets under **Settings → Secrets and variables → Actions**:
 

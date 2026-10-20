@@ -16,7 +16,6 @@ vi.mock("@beutl/next/audit-log", async () => ({
 vi.mock("next/cache", () => ({ revalidatePath: mocks.revalidatePath }));
 // users/[id]/actions.ts は削除やクレジット調整のために Stripe と課金の依存を持つ。
 // ここで検証するのは付与だけなので、読み込みだけ通す。
-vi.mock("@beutl/api", () => ({}));
 vi.mock("stripe", () => ({ default: class {} }));
 
 import { addUtcMonths } from "@beutl/core";

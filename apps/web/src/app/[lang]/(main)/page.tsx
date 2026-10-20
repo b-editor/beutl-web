@@ -70,7 +70,7 @@ export default async function Home(props: {
   const { lang } = await props.params;
   const [{ t }, packages, release, requestHeaders] = await Promise.all([
     getTranslation(lang),
-    retrieveLatestPackagesForLanding(LANDING_PACKAGE_COUNT),
+    retrieveLatestPackagesForLanding(LANDING_PACKAGE_COUNT, lang),
     retrieveLatestAppReleaseForLanding(),
     headers(),
   ]);

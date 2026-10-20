@@ -1,6 +1,6 @@
-// The persisted input of an AI job: what the history shows and what a retry replays.
 import { z } from "zod";
 import {
+  MAX_AI_PROMPT_LENGTH,
   AI_IMAGE_ASPECT_RATIOS,
   AI_IMAGE_BACKGROUNDS,
   AI_IMAGE_EDIT_TASKS,
@@ -11,7 +11,6 @@ import {
   AI_VIDEO_RESOLUTIONS,
   isAiVideoDurationSeconds,
 } from "@beutl/core";
-import { MAX_AI_PROMPT_LENGTH } from "./upload-limits";
 
 // Jobs created before aspect ratios existed carry `size`; new ones carry
 // `aspectRatio`. Exactly one is required so a retry has an unambiguous shape.

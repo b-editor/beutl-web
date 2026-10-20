@@ -9,20 +9,57 @@ import { MarkdownEditor } from "@beutl/ui/ui/markdown-editor";
 import { useToast } from "@beutl/ui/use-toast";
 import { updateDescription } from "./actions/package";
 import { useTranslation } from "@beutl/ui/i18n-client";
+import { cn, localizedPackageText, pickTranslation } from "@beutl/core";
+import type { LanguageLabel } from "@/lib/language-labels";
+import { useTranslationMode } from "./translation-mode";
+
+function initialDescriptions(
+  pkg: Package,
+  languages: LanguageLabel[],
+): Record<string, string> {
+  const saved = new Map(
+    pkg.PackageTranslation.map((translation) => [
+      translation.lang,
+      translation.description ?? "",
+    ]),
+  );
+  return Object.fromEntries(
+    languages.map((language) => [language.code, saved.get(language.code) ?? ""]),
+  );
+}
 
 export function PackageDescriptionForm({
   pkg,
   lang,
-}: { pkg: Package; lang: string }) {
+  languages,
+}: { pkg: Package; lang: string; languages: LanguageLabel[] }) {
   const [edit, toggleEdit] = useReducer((edit) => !edit, false);
   const [pending, startTransition] = useTransition();
   const [description, setDescription] = useState(pkg.description);
+  const [translations, setTranslations] = useState<Record<string, string>>(
+    () => initialDescriptions(pkg, languages),
+  );
   const { toast } = useToast();
   const { t } = useTranslation(lang);
+  const { language: selectedLanguage } = useTranslationMode();
+  const translationLanguage = languages.find(
+    (language) => language.code === selectedLanguage,
+  );
+  const descriptionIsFallback =
+    Boolean(selectedLanguage) &&
+    !pickTranslation(pkg.PackageTranslation, selectedLanguage ?? "")
+      ?.description?.trim();
 
   const handleSave = useCallback(async () => {
     startTransition(async () => {
-      const res = await updateDescription({ packageId: pkg.id, description });
+      const res = await updateDescription({
+        packageId: pkg.id,
+        description,
+        translations: languages.map((language) => ({
+          lang: language.code,
+          description: translations[language.code] ?? "",
+        })),
+      });
       if (!res.success) {
         toast({
           title: t("developer:common.error"),
@@ -33,7 +70,7 @@ export function PackageDescriptionForm({
         toggleEdit();
       }
     });
-  }, [description, pkg.id, t, toast]);
+  }, [description, translations, languages, pkg.id, t, toast]);
 
   return (
     <div>
@@ -54,8 +91,13 @@ export function PackageDescriptionForm({
         )}
       </div>
       {!edit && (
-        <Markdown className="mt-4">
-          {pkg.description}
+        <Markdown
+          className={cn(
+            "mt-4",
+            descriptionIsFallback && "text-muted-foreground",
+          )}
+        >
+          {localizedPackageText(pkg, selectedLanguage ?? "").description}
         </Markdown>
       )}
       {edit && (
@@ -65,9 +107,24 @@ export function PackageDescriptionForm({
             aria-label={t("developer:description.title")}
             maxLength={1000}
             className="mt-4 mb-2"
-            value={description}
+            placeholder={translationLanguage ? description : undefined}
+            value={
+              translationLanguage
+                ? translations[translationLanguage.code] ?? ""
+                : description
+            }
             disabled={pending}
-            onChange={(e) => setDescription(e.target.value)}
+            onChange={(e) => {
+              if (translationLanguage) {
+                const code = translationLanguage.code;
+                setTranslations((current) => ({
+                  ...current,
+                  [code]: e.target.value,
+                }));
+              } else {
+                setDescription(e.target.value);
+              }
+            }}
             labels={{
               write: t("developer:markdown.write"),
               preview: t("developer:markdown.preview"),
@@ -75,7 +132,7 @@ export function PackageDescriptionForm({
               emptyPreview: t("developer:markdown.emptyPreview"),
             }}
           />
-          <div className="flex gap-2">
+          <div className="flex gap-2 mt-4">
             <Button onClick={handleSave} disabled={pending}>
               {pending ? (
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -90,6 +147,7 @@ export function PackageDescriptionForm({
               onClick={() => {
                 toggleEdit();
                 setDescription(pkg.description);
+                setTranslations(initialDescriptions(pkg, languages));
               }}
             >
               {t("developer:common.cancel")}

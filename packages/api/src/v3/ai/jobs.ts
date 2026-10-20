@@ -11,11 +11,13 @@ import {
 import { Hono } from "hono";
 import { z } from "zod";
 import { deleteAiOutputObject, prepareGatewayVideoUsageForDeletion } from "../../ai/storage";
+import { parseReplayableAiJobInput, sanitizeAiJobInputParams } from "../../ai/job-input";
 import { getUserId } from "../../api/auth";
 import { apiErrorResponse } from "../../api/error";
 import { getContentUrl } from "../../content-url";
 import { publicAiJobError } from "../../ai/job-errors";
-import { parseReplayableAiJobInput, sanitizeAiJobInputParams } from "../../ai/job-inputs";
+import { InvalidGeneratedImageError } from "../../ai/image-validation";
+import { AiProviderError, aiProviderFailureCode } from "../../ai/providers/errors";
 import {
   isTerminalAiJobStatus,
   publicAiJobPayload,
@@ -374,19 +376,25 @@ const app = new Hono()
     const generate = async (
       onPartialImage?: (partial: { index: number; b64Json: string }) => void,
     ) => {
-      const result = await retry.generate({
+      const outcome = await retry.execute({
         signal: request.signal,
         ...(onPartialImage ? { onPartialImage } : {}),
       });
-      if (!result.ok) return result;
+      if (!outcome.ok) {
+        const { error } = outcome;
+        if (!(error instanceof AiProviderError) && !(error instanceof InvalidGeneratedImageError)) {
+          console.error("Failed to retry an AI image", error);
+        }
+        return { ok: false as const, errorCode: aiProviderFailureCode(error), status: 500 as const };
+      }
       return {
         ok: true as const,
         payload: {
-          jobId: result.jobId,
-          fileId: result.file.id,
-          url: await getContentUrl(result.file.id, request),
-          fileName: result.file.name,
-          contentType: result.file.mimeType,
+          jobId: retry.job.id,
+          fileId: outcome.file.id,
+          url: await getContentUrl(outcome.file.id, request),
+          fileName: outcome.file.name,
+          contentType: outcome.file.mimeType,
         },
       };
     };

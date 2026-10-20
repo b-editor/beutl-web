@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { sign } from "hono/jwt";
 import { setDbProvider, upsertAiOperationModel, upsertSubscription } from "@beutl/db";
-import { AiProviderError, v3 } from "@beutl/api";
+import { AiProviderError } from "@beutl/api";
+import { v3 } from "@beutl/api/app";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 const { generateImage, editImage } = vi.hoisted(() => ({ generateImage: vi.fn(), editImage: vi.fn() }));

@@ -6,9 +6,10 @@ import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { packageOwned, packagePaied } from "../store-utils";
 import { guessCurrency } from "../currency";
-import { compareNugetVersions } from "@beutl/core";
+import { compareNugetVersions, localizedDisplayName, localizedReleaseDescription, localizedShortDescription } from "@beutl/core";
 import { getContentUrl } from "../content-url";
 import { selectPricing } from "@beutl/core";
+import { getLanguage } from "../lang-utils";
 import {
   existsPaidPricingForPackage,
   findPackageForLibraryResponse,
@@ -24,13 +25,22 @@ import {
 
 const acquireSchema = z.object({
   packageId: z.string(),
+  // 省略時は Accept-Language から解決する。古いクライアントは送らない。
+  lang: z.string().optional(),
 });
 
-async function createResponse(pkgId: string, userId: string | null, request?: Request) {
+async function createResponse(
+  pkgId: string,
+  userId: string | null,
+  request?: Request,
+  lang?: string,
+) {
   const currency = await guessCurrency(request);
+  const displayLang = lang ?? await getLanguage(request);
   const pkg = await findPackageForLibraryResponse({
     id: pkgId,
     currency,
+    lang: displayLang,
   });
   if (!pkg || !pkg.published) {
     return null;
@@ -43,6 +53,7 @@ async function createResponse(pkgId: string, userId: string | null, request?: Re
   const latestRelease = latestReleaseId
     ? await findReleaseForLibrary({
       id: latestReleaseId,
+      lang: displayLang,
     })
     : null;
 
@@ -59,8 +70,8 @@ async function createResponse(pkgId: string, userId: string | null, request?: Re
     package: {
       id: pkg.id,
       name: pkg.name,
-      displayName: pkg.displayName,
-      shortDescription: pkg.shortDescription,
+      displayName: localizedDisplayName(pkg, displayLang) || null,
+      shortDescription: localizedShortDescription(pkg, displayLang),
       tags: pkg.tags,
       logoId: pkg.iconFileId,
       logoUrl: await getContentUrl(pkg.iconFileId, request),
@@ -82,7 +93,7 @@ async function createResponse(pkgId: string, userId: string | null, request?: Re
         id: latestRelease.id,
         version: latestRelease.version,
         title: latestRelease.title,
-        description: latestRelease.description,
+        description: localizedReleaseDescription(latestRelease, displayLang),
         targetVersion: latestRelease.targetVersion,
         fileId: latestRelease.fileId,
         fileUrl: latestRelease.fileId ? await nugetFileUrl(latestRelease.fileId, userId) : null,
@@ -112,7 +123,7 @@ const app = new Hono()
       return c.json(await apiErrorResponse("userNotFound"), { status: 404 });
     }
 
-    const pkg = await createResponse(req.packageId, userId, c.req.raw);
+    const pkg = await createResponse(req.packageId, userId, c.req.raw, req.lang);
     if (!pkg) {
       return c.json(await apiErrorResponse("packageNotFound"), { status: 404 });
     }
@@ -161,9 +172,10 @@ const app = new Hono()
       userId: userId,
     });
 
+    const lang = c.req.query("lang") ?? await getLanguage(c.req.raw);
     const items = await Promise.all(
       packages.map(
-        async (pkg) => await createResponse(pkg.packageId, userId, c.req.raw),
+        async (pkg) => await createResponse(pkg.packageId, userId, c.req.raw, lang),
       ),
     );
     return c.json(items.filter((item) => item !== null));

@@ -1,5 +1,6 @@
-import { PRO_PLAN } from "@beutl/api";
+import { PRO_PLAN } from "@beutl/api/ai/pricing";
 import { STORAGE_PLAN, isStorageTierId, type StorageTierId } from "@beutl/core";
+
 import type { BillingProduct } from "@/lib/billing-product";
 import { invoiceServicePeriodSeconds } from "./invoice-period";
 import { getExpandableId, hasStripeOwnerMetadata } from "./ownership";

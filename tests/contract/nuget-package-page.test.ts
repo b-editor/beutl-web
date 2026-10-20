@@ -46,7 +46,7 @@ describe("SDK package installation links", () => {
   it("ignores repeated type and page parameters at the store boundary", async () => {
     const params = Promise.resolve({ lang: "en" });
     await StorePage({ params, searchParams: Promise.resolve({ query: ["a", "b"], type: ["development", "extension"] }) });
-    expect(retrievePackages).toHaveBeenCalledExactlyOnceWith("", "all");
+    expect(retrievePackages).toHaveBeenCalledExactlyOnceWith("", "all", "en");
     const element = await StorePage({ params, searchParams: Promise.resolve({ type: "development", page: ["2", "3"] }) });
     await new Response(await renderToReadableStream(element)).text();
     expect(searchNugetPackages).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ query: "", skip: 0 }));

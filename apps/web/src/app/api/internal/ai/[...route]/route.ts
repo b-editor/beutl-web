@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { sign } from "hono/jwt";
-import { v3 } from "@beutl/api";
+import { v3 } from "@beutl/api/app";
 import { auth } from "@/lib/better-auth";
 import { getImageWorkerBinding } from "@/lib/ai-image-worker-binding";
 import { fromThisSite, unauthorizedResponse } from "@/lib/internal-request";

@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { sign } from "hono/jwt";
 import { consumeUsage, setDbProvider, upsertAiOperationModel, upsertSubscription } from "@beutl/db";
-import { aiCapabilityKey, v3 } from "@beutl/api";
+import { aiCapabilityKey } from "@beutl/api";
+import { v3 } from "@beutl/api/app";
 import type { AiVideoModelCapabilities } from "../../packages/api/src/ai/video-model-capabilities";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 

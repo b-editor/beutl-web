@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { handle } from "hono/vercel";
-import { v2 } from "@beutl/api";
+import { v2 } from "@beutl/api/app";
 
 // @deprecated Legacy single-route shim that 307s into the native-auth flow.
 // Kept for old desktop builds; remove once client telemetry confirms it is unused.

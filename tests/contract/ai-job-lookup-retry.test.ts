@@ -9,7 +9,8 @@ import {
   upsertAiOperationModel,
   upsertSubscription,
 } from "@beutl/db";
-import { aiCapabilityKey, setR2BucketProvider, sha256Hex, v3 } from "@beutl/api";
+import { aiCapabilityKey, setR2BucketProvider, sha256Hex } from "@beutl/api";
+import { v3 } from "@beutl/api/app";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 // GET /v3/ai/jobs/by-idempotency-key and POST /v3/ai/jobs/:id/retry, on the v3

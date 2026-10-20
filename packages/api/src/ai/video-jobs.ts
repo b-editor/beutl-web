@@ -10,6 +10,7 @@ import {
   renewAiJobFinalizationLease,
 } from "@beutl/db";
 import {
+  failAiJobAndRefundUsage,
   failFinalizingAiJobAndRefundUsage,
   failPolledAiJobAndRefundUsage,
 } from "./credits";
@@ -18,8 +19,7 @@ import {
   AiVideoSubmissionError,
   InvalidAiProviderOutputError,
   isDefiniteVideoSubmissionFailure,
-  type VideoFrameImage,
-} from "./openrouter";
+} from "./providers/errors";
 import {
   DEFAULT_AI_PROVIDER_ID,
   videoProviderFor,
@@ -27,6 +27,7 @@ import {
 import type {
   AiVideoContent,
   AiVideoJobInfo,
+  VideoFrameImage,
   VideoFrameImage as ProviderVideoFrameImage,
   VideoInputReference,
 } from "./providers/types";
@@ -38,7 +39,7 @@ import {
   AiOutputCommitConflictError,
   saveAiVideo,
 } from "./storage";
-import { AI_JOB_FAILURE_MESSAGES } from "./job-errors";
+import { AI_JOB_FAILURE_MESSAGES, aiJobFailureMessage } from "./job-errors";
 
 const FINALIZATION_LEASE_MILLISECONDS = 10 * 60 * 1000;
 
@@ -401,6 +402,30 @@ export function classifyVideoSubmissionFailure(
     return { action: "keepQueued" };
   }
   return { action: "rethrow" };
+}
+
+// Submission adapters classify failures; this service owns the corresponding
+// ledger transition. Unknown acceptance stays queued for callback/poll recovery.
+export async function settleVideoSubmissionFailure({ userId, jobId, provider, error }: {
+  userId: string;
+  jobId: string;
+  provider: string;
+  error: unknown;
+}): Promise<"refund" | "keepQueued"> {
+  const handling = classifyVideoSubmissionFailure(error);
+  if (handling.action === "refund") {
+    await failAiJobAndRefundUsage({
+      userId, aiJobId: jobId,
+      error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.videoSubmission),
+      ...(handling.detachProviderJob ? { expectedProviderJobId: null } : {}),
+    });
+    return "refund";
+  }
+  if (handling.action === "keepQueued") {
+    console.error(`${provider} video submission outcome is unknown for AI job ${jobId}`, error);
+    return "keepQueued";
+  }
+  throw error;
 }
 
 type AiVideoJobRecord = {

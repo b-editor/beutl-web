@@ -2,7 +2,8 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { sign } from "hono/jwt";
 import { setDbProvider, upsertSubscription } from "@beutl/db";
-import { AiVideoSubmissionError, v3 } from "@beutl/api";
+import { AiVideoSubmissionError } from "@beutl/api";
+import { v3 } from "@beutl/api/app";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 // Nothing here should reach a provider: every case is refused before the usage

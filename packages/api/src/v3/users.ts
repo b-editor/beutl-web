@@ -5,6 +5,7 @@ import { guessCurrency } from "../currency";
 import { getPackages, mapPackage } from "../api/packages-db";
 import { findUserIdByUserName, profileUserNameFilter } from "@beutl/db";
 import { getUserProfile } from "./user";
+import { getLanguage } from "../lang-utils";
 
 const app = new Hono()
   .get("/:name", async (c) => {
@@ -23,6 +24,7 @@ const app = new Hono()
     const name = c.req.param("name");
     const currentUserId = await getUserId(c);
     const currency = await guessCurrency(c.req.raw);
+    const lang = c.req.query("lang") ?? await getLanguage(c.req.raw);
     const userId = (
       await findUserIdByUserName({
         name,
@@ -38,6 +40,7 @@ const app = new Hono()
       },
       userId: currentUserId ?? undefined,
       currency: currency ?? undefined,
+      lang,
     });
 
     return c.json(
@@ -49,6 +52,7 @@ const app = new Hono()
               currency: currency ?? undefined,
               pkg,
               request: c.req.raw,
+              lang,
             }),
         ),
       ),

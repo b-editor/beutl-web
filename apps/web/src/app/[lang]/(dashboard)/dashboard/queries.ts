@@ -12,11 +12,11 @@ import { retrievePackages } from "./library/actions";
 // 概要に出すライブラリのパッケージ数。これを超える分は一覧ページで見てもらう。
 const LIBRARY_PREVIEW_COUNT = 6;
 
-export async function retrieveDashboardOverview(userId: string) {
+export async function retrieveDashboardOverview(userId: string, lang: string) {
   // Explicitly share the render-scoped PrismaClient across all overview reads.
   const prisma = await getDb();
   const [libraryPackages, storageUsedBytes, storageFileCount, storageQuota, entitlements] = await Promise.all([
-    retrievePackages(userId, { prisma, take: LIBRARY_PREVIEW_COUNT }),
+    retrievePackages(userId, lang, { prisma, take: LIBRARY_PREVIEW_COUNT }),
     sumFileSizeByUserId({ userId, prisma }),
     // Uploads are refused on the file limit as well as the byte quota, so the
     // overview's warning has to see both.

@@ -35,17 +35,93 @@ jobs:
           run-install: false
       - name: Install dependencies
         run: vp install --frozen-lockfile
+      - name: Type-check workspaces
+        run: vp run typecheck
       - name: Check NuGet Worker
         run: |
-          vp run --filter @beutl/nuget-server typecheck
           vp run --filter @beutl/nuget-server build
           vp run --filter @beutl/nuget-server check:runtime
       - name: Run tests
         run: vp run test --maxWorkers=2 --testTimeout=60000 --hookTimeout=120000
 
+  database:
+    name: CockroachDB integration tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TEST_DATABASE_URL: postgresql://root@127.0.0.1:26257/beutl_test?sslmode=disable
+      COCKROACH_VERSION: v26.2.8
+      COCKROACH_SHA256: 8f3fa5b5490355ee39121ecdcc82b18d546b77dce180b476a7869b96322da70c
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        with:
+          version: "0.3.2"
+          node-version-file: .nvmrc
+          cache: true
+          run-install: false
+      - name: Install dependencies
+        run: vp install --frozen-lockfile
+      - name: Start disposable CockroachDB
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          archive="cockroach-${COCKROACH_VERSION}.linux-amd64.tgz"
+          curl --fail --silent --show-error --location --retry 3 "https://binaries.cockroachdb.com/$archive" --output "$archive"
+          echo "$COCKROACH_SHA256  $archive" | sha256sum --check
+          tar -xzf "$archive"
+          cockroach="./cockroach-${COCKROACH_VERSION}.linux-amd64/cockroach"
+          "$cockroach" start-single-node --insecure --background \
+            --listen-addr=127.0.0.1:26257 --http-addr=127.0.0.1:8080 \
+            --store="$RUNNER_TEMP/cockroach-data" \
+            --pid-file="$RUNNER_TEMP/cockroach.pid" \
+            --cache=128MiB --max-sql-memory=512MiB
+          "$cockroach" sql --insecure --host=127.0.0.1:26257 --execute='CREATE DATABASE beutl_test'
+      - name: Apply migrations to the empty test database
+        run: FRESH_COCKROACH_DATABASE_URL="$TEST_DATABASE_URL" vp run --filter @beutl/web migrate:fresh-cockroach
+      - name: Run database integration tests
+        run: vp run test tests/integration --maxWorkers=2 --testTimeout=60000 --hookTimeout=120000
+      - name: Stop CockroachDB
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f "$RUNNER_TEMP/cockroach.pid" ]]; then
+            kill "$(cat "$RUNNER_TEMP/cockroach.pid")"
+          fi
+
+  build:
+    name: Build ${{ matrix.app }} Worker
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [web, admin]
+    env:
+      CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_BEUTL_DATABASE_HYPERDRIVE: postgresql://root@127.0.0.1:26257/beutl_ci?sslmode=disable
+      BETTER_AUTH_URL: https://validation.example.com
+      METADATA_BASE_URL: https://validation.example.com
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        with:
+          version: "0.3.2"
+          node-version-file: .nvmrc
+          cache: true
+          run-install: false
+      - name: Install dependencies
+        run: vp install --frozen-lockfile
+      - name: Build Worker
+        run: vp exec --filter @beutl/${{ matrix.app }} opennextjs-cloudflare build
+
   deploy:
     name: Deploy Cloudflare Workers
-    needs: test
+    needs: [test, database]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 45

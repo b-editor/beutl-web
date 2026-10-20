@@ -16,34 +16,23 @@ import {
   type ApiErrorCode,
 } from "@beutl/core";
 import { createReservedAiJob, failAiJobAndRefundUsage } from "./credits";
-import {
-  imageCapabilityOf,
-  loadAiImageModelCapabilities,
-  unsupportedImageRequestReason,
-} from "./image-model-capabilities";
-import { decodeGeneratedImageBase64, inspectGeneratedImage } from "./image-validation";
-import {
-  AI_JOB_FAILURE_MESSAGES,
-  aiJobFailureMessage,
-  reportAiProviderFailure,
-} from "./job-errors";
-import { parseReplayableAiJobInput } from "./job-inputs";
+import { prepareImageGeneration } from "./image-generation";
+import { AI_JOB_FAILURE_MESSAGES } from "./job-errors";
+import { parseReplayableAiJobInput } from "./job-input";
 import { loadAiModelCatalog, type AiModelCatalog } from "./model-catalog";
-import { AiProviderError, aiProviderFailureCode } from "./providers/errors";
-import { DEFAULT_AI_PROVIDER_ID, imageProviderFor } from "./providers/registry";
-import type { PartialImage } from "./providers/types";
+import { aiProviderFailureCode } from "./providers/errors";
+import { DEFAULT_AI_PROVIDER_ID } from "./providers/registry";
 import {
   createCallbackNonce,
   hashAiIdempotencyKey,
   toAiRequestIdentity,
 } from "./request-integrity";
-import { saveAiImage } from "./storage";
 import {
   loadAiVideoModelCapabilities,
   unsupportedVideoRequestReason,
   videoCapabilityOf,
 } from "./video-model-capabilities";
-import { classifyVideoSubmissionFailure, createAndAttachVideoJob } from "./video-jobs";
+import { createAndAttachVideoJob, settleVideoSubmissionFailure } from "./video-jobs";
 
 type AiJobRetryRefusal = {
   ok: false;
@@ -63,9 +52,10 @@ type ReservedAiJob = Extract<Reservation, { outcome: "reserved" }>["job"];
 
 type CatalogEntry = NonNullable<ReturnType<AiModelCatalog["resolve"]>>;
 
-type AiImageRetryResult =
-  | { ok: true; jobId: string; file: { id: string; name: string; mimeType: string } }
-  | AiProviderFailure;
+type ImageGeneration = Extract<
+  Awaited<ReturnType<typeof prepareImageGeneration>>,
+  { outcome: "reserved" }
+>;
 
 /** `submitted: false` means the provider may have taken the job, so it stays queued. */
 type AiVideoRetryResult =
@@ -88,10 +78,7 @@ export type AiJobRetry =
     kind: "image";
     outcome: "reserved";
     job: ReservedAiJob;
-    generate(options?: {
-      signal?: AbortSignal;
-      onPartialImage?: (partial: PartialImage) => void;
-    }): Promise<AiImageRetryResult>;
+    execute: ImageGeneration["execute"];
   }
   | {
     ok: true;
@@ -362,87 +349,21 @@ async function prepareImageRetry({
 }: RetrySource<ImageRetryRequest>): Promise<AiJobRetry> {
   const model = retryEntryFor(catalog, "image.generate", job);
   if (!model) return refuse("aiModelUnavailable", 400);
-  // Capabilities may have narrowed since the original run. Validate the
-  // exact replay before reserving usage so a now-unsupported ratio,
-  // background, or seed never reaches the paid provider/refund path.
-  if (
-    unsupportedImageRequestReason(
-      imageCapabilityOf(await loadAiImageModelCapabilities([model]), model),
-      {
-        aspectRatio: request.aspectRatio,
-        background: request.background ?? "auto",
-        ...(request.seed === undefined ? {} : { seed: request.seed }),
-        referenceImages: 0,
-      },
-    )
-  ) {
-    return refuse("aiModelDoesNotSupportRequest", 400);
-  }
   const identity = await retryIdentity(idempotencyKey, "image", model.modelId, request);
   if (!identity) return refuse("invalidRequestBody", 400);
-  const reservation = await createReservedAiJob({
-    userId,
-    kind: "image",
-    provider: model.provider,
-    status: "running",
-    inputParams: request,
-    usagePercent: model.usagePercent,
-    imageOutputTokenProfile: model.imageOutputTokenProfile,
-    model: model.modelId,
-    ...identity,
-  });
-  if (!reservation.ok) return refuse(reservation.errorCode, reservation.status);
+  // The shared generation checks the model's current capabilities before it reserves.
+  const generation = await prepareImageGeneration({ userId, model, identity, input: request });
+  if (!generation.ok) return refuse(generation.errorCode, generation.status);
   // Two first attempts with one key arriving together; the reservation settles it.
-  if (reservation.outcome === "existing") {
-    return { ok: true, kind: "image", outcome: "existing", job: reservation.job };
+  if (generation.outcome === "existing") {
+    return { ok: true, kind: "image", outcome: "existing", job: generation.job };
   }
-  const retried = reservation.job;
   return {
     ok: true,
     kind: "image",
     outcome: "reserved",
-    job: retried,
-    generate: async ({ signal, onPartialImage } = {}) => {
-      try {
-        const result = await imageProviderFor(model.provider).generate({
-          ...request,
-          imageSizeMode: model.imageSizeMode,
-          model: model.modelId,
-          ...(signal ? { signal } : {}),
-          ...(onPartialImage ? { onPartialImage } : {}),
-        });
-        const bytes = decodeGeneratedImageBase64(result.b64Json);
-        await inspectGeneratedImage(bytes, result.mediaType);
-        const file = await saveAiImage({
-          jobId: retried.id,
-          userId,
-          bytes,
-          mimeType: "image/png",
-          filename: `ai-image-${retried.id}.png`,
-          providerCostUsd: result.providerCostUsd,
-        });
-        return {
-          ok: true,
-          jobId: retried.id,
-          file: { id: file.id, name: file.name, mimeType: file.mimeType },
-        };
-      } catch (error) {
-        await failAiJobAndRefundUsage({
-          userId,
-          aiJobId: retried.id,
-          error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.imageGeneration),
-        });
-        if (error instanceof AiProviderError) {
-          reportAiProviderFailure({
-            operation: "image.generate", jobId: retried.id,
-            provider: model.provider, model: model.modelId, error,
-          });
-        } else {
-          console.error("Failed to retry an AI image", error);
-        }
-        return { ok: false, errorCode: aiProviderFailureCode(error), status: 500 };
-      }
-    },
+    job: generation.job,
+    execute: (options) => generation.execute(options),
   };
 }
 
@@ -542,24 +463,12 @@ async function submitVideoRetry({
     });
     return { ok: true, job, submitted: true };
   } catch (error) {
-    // The provider may have accepted the job; the shared classifier decides whether to refund.
-    const handling = classifyVideoSubmissionFailure(error);
-    if (handling.action === "refund") {
-      await failAiJobAndRefundUsage({
-        userId,
-        aiJobId: job.id,
-        error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.videoSubmission),
-        ...(handling.detachProviderJob ? { expectedProviderJobId: null } : {}),
-      });
-      return { ok: false, errorCode: aiProviderFailureCode(error), status: 500 };
-    }
-    if (handling.action === "keepQueued") {
-      console.error(
-        `${model.provider} video submission outcome is unknown for AI job ${job.id}`,
-        error,
-      );
-      return { ok: true, job, submitted: false };
-    }
-    throw error;
+    // The provider may have accepted the job; the shared settlement decides whether to refund.
+    const handling = await settleVideoSubmissionFailure({
+      userId, jobId: job.id, provider: model.provider, error,
+    });
+    return handling === "refund"
+      ? { ok: false, errorCode: aiProviderFailureCode(error), status: 500 }
+      : { ok: true, job, submitted: false };
   }
 }

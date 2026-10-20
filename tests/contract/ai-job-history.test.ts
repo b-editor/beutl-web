@@ -20,9 +20,9 @@ import {
   reconcileAiJobs,
   parseReplayableAiJobInput,
   setR2BucketProvider,
-  v3,
   videoProviderFor,
 } from "@beutl/api";
+import { v3 } from "@beutl/api/app";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 const USER_ID = "ai-history-user";

@@ -4,50 +4,54 @@ import { throwIfUnauth } from "@/lib/auth-guard";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
 import { headers } from "next/headers";
+import { prepareTranslation } from "@beutl/api/ai/translation";
+import { prepareTranscription, recoverTranscription } from "@beutl/api/ai/transcription";
+import { prepareImageEdit } from "@beutl/api/ai/image-editing";
+import { prepareImageGeneration } from "@beutl/api/ai/image-generation";
+import { parseReplayableAiJobInput, sanitizeAiJobInputParams } from "@beutl/api/ai/job-input";
+import { prepareAiJobRetry } from "@beutl/api/ai/job-retry";
+import { AiProviderError, aiProviderFailureCode } from "@beutl/api/ai/providers/errors";
+import { publicAiJobError } from "@beutl/api/ai/job-errors";
 import {
-  AI_JOB_FAILURE_MESSAGES,
-  AiProviderError,
-  aiProviderFailureCode,
-  aiJobFailureMessage,
-  reportAiProviderFailure,
-  publicAiJobError,
   MAX_AI_IMAGE_REFERENCES_TOTAL_BYTES,
   MAX_AI_IMAGE_UPLOAD_BYTES,
   MAX_AI_PROMPT_LENGTH,
   MAX_AI_TRANSCRIPTION_UPLOAD_BYTES,
-  createReservedAiJob,
-  decodeGeneratedImageBase64,
-  editImage,
-  failAiJobAndRefundUsage,
-  generateImage,
-  inspectGeneratedImage,
   isIso6391LanguageCode,
-  loadAiModelCatalog,
-  parseAudio,
-  prepareAiJobRetry,
-  readAiJsonResult,
-  saveAiImage,
-  saveAiJsonResult,
-  prepareGatewayVideoUsageForDeletion,
-  sha256Hex,
   MAX_TRANSLATION_CHARACTERS,
   MAX_TRANSLATION_SEGMENTS,
   SAFE_SEGMENT_ID_PATTERN,
-  synchronizeAiVideoJob,
-  type AiRequestIdentity,
-  findReplayableAiJob,
-  toAiRequestIdentity,
-  transcribeAudio,
-  translateSegments,
   translationCharacterCount,
+  AI_IMAGE_ASPECT_RATIOS,
+  AI_MAX_IMAGE_REFERENCES,
+  AI_IMAGE_BACKGROUNDS,
+  AI_IMAGE_EDIT_TASKS,
+  aiImageEditTaskRequiresPrompt,
+  isAiSeed,
+  type AiImageEditTask,
+  type AiImageAspectRatio,
+  type AiImageBackground,
+} from "@beutl/core";
+import {
+  sha256Hex,
+  type AiRequestIdentity,
+  toAiRequestIdentity,
+} from "@beutl/api/ai/request-integrity";
+import { findReplayableAiJob } from "@beutl/api/ai/credits";
+import { loadAiModelCatalog } from "@beutl/api/ai/model-catalog";
+import { parseAudio } from "@beutl/api/ai/audio-metadata";
+import {
+  readAiJsonResult,
+  prepareGatewayVideoUsageForDeletion,
+  deleteAiOutputObject,
+} from "@beutl/api/ai/storage";
+import { synchronizeAiVideoJob } from "@beutl/api/ai/video-jobs";
+import {
   validateAiInputImage,
-  parseReplayableAiJobInput,
-  sanitizeAiJobInputParams,
-  type TranslationStyle,
-  validateTranscriptionResult,
   type AiInputImageMimeType,
-  type ImageEditTask,
-} from "@beutl/api";
+} from "@beutl/api/ai/input-image-validation";
+import type { TranslationStyle } from "@beutl/api/ai/providers/types";
+
 import {
   finalizeAiJobDeletionByUserId,
   getAiJobById,
@@ -57,25 +61,7 @@ import {
   findStorageFolderNameByIdAndUserId,
   retrieveStorageFoldersByUserId,
 } from "@beutl/db";
-import {
-  deleteAiOutputObject,
-  imageCapabilityOf,
-  loadAiImageModelCapabilities,
-  imageProviderFor,
-  transcriptionProviderFor,
-  translationProviderFor,
-  unsupportedImageRequestReason,
-} from "@beutl/api";
-import {
-  AI_IMAGE_ASPECT_RATIOS,
-  AI_MAX_IMAGE_REFERENCES,
-  AI_IMAGE_BACKGROUNDS,
-  AI_IMAGE_EDIT_TASKS,
-  aiImageEditTaskRequiresPrompt,
-  isAiSeed,
-  type AiImageAspectRatio,
-  type AiImageBackground,
-} from "@beutl/core";
+
 import { composePrompt } from "@/lib/ai-prompt";
 import { parseGlossary } from "@/lib/subtitle-format";
 import { getContentUrl } from "@/lib/content-url";
@@ -334,41 +320,6 @@ async function answerFromExistingVideoJob(
     message: t(`api-errors:${publicAiJobError(job.error)}`),
     status: job.status,
   };
-}
-
-// A repeated submission has to answer with the result the first one produced,
-// not merely with "already done". Both recoveries re-read the stored JSON and
-// re-validate it, exactly as the v3 endpoints do, so a corrupted or truncated
-// object fails loudly instead of rendering as an empty editor.
-async function recoverTranscription({
-  jobId,
-  userId,
-  durationSeconds,
-}: {
-  jobId: string;
-  userId: string;
-  durationSeconds: number;
-}): Promise<{ segments: unknown; language?: string; words?: unknown } | null> {
-  const fileRecord = await getAiJobResultFile({ jobId, userId });
-  if (!fileRecord) return null;
-  try {
-    const stored = validateTranscriptionResult(
-      (await readAiJsonResult({ objectKey: fileRecord.objectKey })) as {
-        segments?: unknown;
-        language?: unknown;
-        words?: unknown;
-      },
-      durationSeconds,
-    );
-    return {
-      segments: stored.segments,
-      ...(stored.language ? { language: stored.language } : {}),
-      ...(stored.words ? { words: stored.words } : {}),
-    };
-  } catch (error) {
-    console.error("Failed to recover AI transcription result", error);
-    return null;
-  }
 }
 
 async function recoverTranslation({
@@ -649,54 +600,19 @@ export async function generateImageAction(
     return await answerFromExistingFileJob(replay.job, t);
   }
 
-  const selectedModel = await resolveModelOf(formData, "image.generate");
-  if (!selectedModel) {
-    return { success: false, message: t("api-errors:aiModelUnavailable") };
-  }
-
-  // Checked before the reservation: GPT Image-1 renders 1:1, 3:2 and 2:3 and
-  // GPT Image-2 cuts out no background, and a rejection that arrives after the
-  // usage is reserved reads as a provider outage.
-  if (
-    unsupportedImageRequestReason(
-      imageCapabilityOf(
-        await loadAiImageModelCapabilities([selectedModel]),
-        selectedModel,
-      ),
-      {
-        aspectRatio,
-        background,
-        ...(seed === undefined ? {} : { seed }),
-        referenceImages: references.length,
-      },
-    )
-  ) {
-    return {
-      success: false,
-      message: t("api-errors:aiModelDoesNotSupportRequest"),
-    };
-  }
-
-  const reservation = await createReservedAiJob({
+  const reservation = await prepareImageGeneration({
     userId: session.user.id,
-    kind: "image",
-    provider: selectedModel.provider,
-    status: "running",
-    inputParams: {
+    model: await resolveModelOf(formData, "image.generate"),
+    identity,
+    input: {
       prompt,
       aspectRatio,
       ...(background !== "auto" ? { background } : {}),
-      ...(seed === undefined ? {} : { seed }),
-      ...(referenceFiles.length > 0
-        ? {
-            references: referenceFiles.map((file) => ({ filename: file.name })),
-          }
-        : {}),
+      seed,
+      references: references.map((reference, index) => ({
+        ...reference, filename: referenceFiles[index]!.name,
+      })),
     },
-    usagePercent: selectedModel.usagePercent,
-    imageOutputTokenProfile: selectedModel.imageOutputTokenProfile,
-    model: selectedModel.modelId,
-    ...identity,
   });
   if (!reservation.ok) {
     return reservationFailure(reservation.errorCode, t);
@@ -707,33 +623,12 @@ export async function generateImageAction(
     return await answerFromExistingFileJob(job, t);
   }
 
+  const outcome = await reservation.execute();
+  if (!outcome.ok) {
+    return { success: false, message: t(`api-errors:${errorMessage(outcome.error)}`) };
+  }
+  const { file } = outcome;
   try {
-    const result = await imageProviderFor(selectedModel.provider).generate({
-      prompt,
-      aspectRatio,
-      imageSizeMode: selectedModel.imageSizeMode,
-      ...(background !== "auto" ? { background } : {}),
-      ...(references.length > 0
-        ? {
-            referenceImages: references.map((reference) => ({
-              bytes: reference.bytes,
-              mimeType: reference.mimeType,
-            })),
-          }
-        : {}),
-      ...(seed === undefined ? {} : { seed }),
-      model: selectedModel.modelId,
-    });
-    const bytes = decodeGeneratedImageBase64(result.b64Json);
-    await inspectGeneratedImage(bytes, result.mediaType);
-    const file = await saveAiImage({
-      jobId: job.id,
-      userId: session.user.id,
-      bytes,
-      mimeType: "image/png",
-      filename: `ai-image-${job.id}.png`,
-      providerCostUsd: result.providerCostUsd,
-    });
     return {
       success: true,
       jobId: job.id,
@@ -742,17 +637,6 @@ export async function generateImageAction(
       contentType: file.mimeType,
     };
   } catch (error) {
-    await failAiJobAndRefundUsage({
-      userId: session.user.id,
-      aiJobId: job.id,
-      error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.imageGeneration),
-    });
-    if (error instanceof AiProviderError) {
-      reportAiProviderFailure({
-        operation: "image.generate", jobId: job.id,
-        provider: selectedModel.provider, model: selectedModel.modelId, error,
-      });
-    }
     return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
   }
 }
@@ -764,7 +648,7 @@ export async function editImageAction(
   const session = await throwIfUnauth();
   const lang = await getLanguage();
   const { t } = await getTranslation(lang);
-  const task = String(formData.get("task") ?? "") as ImageEditTask;
+  const task = String(formData.get("task") ?? "") as AiImageEditTask;
   const prompt = String(formData.get("prompt") ?? "").trim();
   const outpaintExpansion = Number(formData.get("outpaintExpansion") ?? 25);
   const file = formData.get("file");
@@ -816,53 +700,15 @@ export async function editImageAction(
     return await answerFromExistingFileJob(replay.job, t);
   }
 
-  const selectedModel = await resolveModelOf(formData, `image.edit.${task}`);
-  if (!selectedModel) {
-    return { success: false, message: t("api-errors:aiModelUnavailable") };
-  }
-  // An edit hands the model a picture, cuts out a background or asks for a
-  // size; a model that takes none of those is refused before it is paid for.
-  if (
-    unsupportedImageRequestReason(
-      imageCapabilityOf(
-        await loadAiImageModelCapabilities([selectedModel]),
-        selectedModel,
-      ),
-      {
-        // The picture being edited.
-        referenceImages: 1,
-        // Removing a background is asking for a transparent one.
-        ...(task === "remove_background"
-          ? { background: "transparent" as const }
-          : {}),
-        resolution: task === "upscale",
-      },
-    )
-  ) {
-    return {
-      success: false,
-      message: t("api-errors:aiModelDoesNotSupportRequest"),
-    };
-  }
-
-  const reservation = await createReservedAiJob({
+  const reservation = await prepareImageEdit({
     userId: session.user.id,
-    // The same kind the v3 edit endpoint writes. Tagging an edit as "image"
-    // makes it indistinguishable from a generation, and the retry path then
-    // reruns it as text-to-image: no source picture, and the generation price.
-    kind: "image_edit",
-    provider: selectedModel.provider,
-    status: "running",
-    inputParams: {
-      task,
-      filename: file.name,
+    model: await resolveModelOf(formData, `image.edit.${task}`),
+    identity,
+    input: {
+      task, image: validated.bytes, mimeType: validated.mimeType, filename: file.name,
       ...(editPrompt ? { prompt: editPrompt } : {}),
       ...(task === "outpaint" ? { outpaintExpansion } : {}),
     },
-    usagePercent: selectedModel.usagePercent,
-    imageOutputTokenProfile: selectedModel.imageOutputTokenProfile,
-    model: selectedModel.modelId,
-    ...identity,
   });
   if (!reservation.ok) {
     return reservationFailure(reservation.errorCode, t);
@@ -873,24 +719,12 @@ export async function editImageAction(
     return await answerFromExistingFileJob(job, t);
   }
 
+  const outcome = await reservation.execute();
+  if (!outcome.ok) {
+    return { success: false, message: t(`api-errors:${errorMessage(outcome.error)}`) };
+  }
+  const { file: saved } = outcome;
   try {
-    const result = await imageProviderFor(selectedModel.provider).edit({
-      task,
-      image: validated.bytes,
-      mimeType: validated.mimeType,
-      ...(editPrompt ? { prompt: editPrompt } : {}),
-      model: selectedModel.modelId,
-    });
-    const bytes = decodeGeneratedImageBase64(result.b64Json);
-    await inspectGeneratedImage(bytes, result.mediaType);
-    const saved = await saveAiImage({
-      jobId: job.id,
-      userId: session.user.id,
-      bytes,
-      mimeType: "image/png",
-      filename: `ai-edit-${job.id}.png`,
-      providerCostUsd: result.providerCostUsd,
-    });
     return {
       success: true,
       jobId: job.id,
@@ -899,17 +733,6 @@ export async function editImageAction(
       contentType: saved.mimeType,
     };
   } catch (error) {
-    await failAiJobAndRefundUsage({
-      userId: session.user.id,
-      aiJobId: job.id,
-      error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.imageEdit),
-    });
-    if (error instanceof AiProviderError) {
-      reportAiProviderFailure({
-        operation: `image.edit.${task}`, jobId: job.id,
-        provider: selectedModel.provider, model: selectedModel.modelId, error,
-      });
-    }
     return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
   }
 }
@@ -966,23 +789,15 @@ export async function transcribeAction(
     );
   }
 
-  const selectedModel = await resolveModelOf(formData, "audio.transcribe");
-  if (!selectedModel) {
-    return { success: false, message: t("api-errors:aiModelUnavailable") };
-  }
-  const reservation = await createReservedAiJob({
+  const reservation = await prepareTranscription({
     userId: session.user.id,
-    kind: "stt",
-    provider: selectedModel.provider,
-    status: "running",
-    inputParams: {
-      filename: file.name,
-      durationSeconds: parsedAudio.durationSeconds,
+    model: await resolveModelOf(formData, "audio.transcribe"),
+    identity,
+    input: {
+      audio: parsedAudio.bytes, durationSeconds: parsedAudio.durationSeconds,
+      filename: file.name, mimeType: file.type || "audio/mpeg",
       ...(language ? { language } : {}),
     },
-    usagePercent: selectedModel.usagePercent,
-    model: selectedModel.modelId,
-    ...identity,
   });
   if (!reservation.ok) {
     return reservationFailure(reservation.errorCode, t);
@@ -996,51 +811,11 @@ export async function transcribeAction(
     );
   }
 
-  try {
-    const result = await transcriptionProviderFor(
-      selectedModel.provider,
-    ).transcribe({
-      audio: parsedAudio.bytes,
-      durationSeconds: parsedAudio.durationSeconds,
-      filename: file.name,
-      mimeType: file.type || "audio/mpeg",
-      ...(language ? { language } : {}),
-      model: selectedModel.modelId,
-    });
-    await saveAiJsonResult({
-      jobId: job.id,
-      userId: session.user.id,
-      filename: `transcription-${job.id}.json`,
-      providerCostUsd: result.providerCostUsd,
-      result: {
-        version: 1,
-        kind: "stt",
-        segments: result.segments,
-        ...(result.language ? { language: result.language } : {}),
-        ...(result.words ? { words: result.words } : {}),
-      },
-    });
-    return {
-      success: true,
-      jobId: job.id,
-      segments: result.segments,
-      ...(result.language ? { language: result.language } : {}),
-      ...(result.words ? { words: result.words } : {}),
-    };
-  } catch (error) {
-    await failAiJobAndRefundUsage({
-      userId: session.user.id,
-      aiJobId: job.id,
-      error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.transcription),
-    });
-    if (error instanceof AiProviderError) {
-      reportAiProviderFailure({
-        operation: "audio.transcribe", jobId: job.id,
-        provider: selectedModel.provider, model: selectedModel.modelId, error,
-      });
-    }
-    return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
+  const outcome = await reservation.execute();
+  if (!outcome.ok) {
+    return { success: false, message: t(`api-errors:${errorMessage(outcome.error)}`) };
   }
+  return { success: true, jobId: job.id, ...outcome.transcript };
 }
 
 export async function translateAction(
@@ -1130,25 +905,14 @@ export async function translateAction(
     );
   }
 
-  const selectedModel = await resolveModelOf(formData, "subtitle.translate");
-  if (!selectedModel) {
-    return { success: false, message: t("api-errors:aiModelUnavailable") };
-  }
-
-  const reservation = await createReservedAiJob({
+  const reservation = await prepareTranslation({
     userId: session.user.id,
-    kind: "translation",
-    provider: selectedModel.provider,
-    status: "running",
-    inputParams: {
+    model: await resolveModelOf(formData, "subtitle.translate"),
+    identity,
+    input: {
       ...(sourceLanguage ? { sourceLanguage } : {}),
-      targetLanguage,
-      segmentCount: segments.length,
-      characterCount,
+      targetLanguage, segments, contexts, ...(style ? { style } : {}),
     },
-    usagePercent: selectedModel.usagePercent,
-    model: selectedModel.modelId,
-    ...identity,
   });
   if (!reservation.ok) {
     return reservationFailure(reservation.errorCode, t);
@@ -1162,51 +926,11 @@ export async function translateAction(
     );
   }
 
-  try {
-    const translation = await translationProviderFor(
-      selectedModel.provider,
-    ).translate({
-      ...(sourceLanguage ? { sourceLanguage } : {}),
-      targetLanguage,
-      segments,
-      ...(Object.keys(contexts).length > 0 ? { contexts } : {}),
-      ...(style ? { style } : {}),
-      model: selectedModel.modelId,
-    });
-    const translated = translation;
-    await saveAiJsonResult({
-      jobId: job.id,
-      userId: session.user.id,
-      filename: `translation-${job.id}.json`,
-      providerCostUsd: translation.providerCostUsd,
-      result: {
-        version: 1,
-        kind: "translation",
-        ...(sourceLanguage ? { sourceLanguage } : {}),
-        targetLanguage,
-        // Without the timing a stored translation can only be recovered as
-        // text, so the history cannot re-export it as a subtitle file.
-        segments: translated.map((segment) => {
-          const context = contexts[segment.id];
-          return context ? { ...segment, context } : segment;
-        }),
-      },
-    });
-    return { success: true, jobId: job.id, segments: translated };
-  } catch (error) {
-    await failAiJobAndRefundUsage({
-      userId: session.user.id,
-      aiJobId: job.id,
-      error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.translation),
-    });
-    if (error instanceof AiProviderError) {
-      reportAiProviderFailure({
-        operation: "subtitle.translate", jobId: job.id,
-        provider: selectedModel.provider, model: selectedModel.modelId, error,
-      });
-    }
-    return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
+  const outcome = await reservation.execute();
+  if (!outcome.ok) {
+    return { success: false, message: t(`api-errors:${errorMessage(outcome.error)}`) };
   }
+  return { success: true, jobId: job.id, segments: outcome.segments };
 }
 
 export async function listJobsAction(
@@ -1279,16 +1003,22 @@ export async function retryJobAction(
       // provider failure (which would discard the only idempotency key).
       return await answerFromExistingFileJob(retry.job, t);
     }
-    const result = await retry.generate();
-    return result.ok
-      ? {
-          success: true,
-          jobId: result.jobId,
-          url: await getContentUrl(result.file.id),
-          fileName: result.file.name,
-          contentType: result.file.mimeType,
-        }
-      : { success: false, message: t(`api-errors:${result.errorCode}`) };
+    const outcome = await retry.execute();
+    if (!outcome.ok) {
+      return { success: false, message: t(`api-errors:${errorMessage(outcome.error)}`) };
+    }
+    const { file } = outcome;
+    try {
+      return {
+        success: true,
+        jobId: retry.job.id,
+        url: await getContentUrl(file.id),
+        fileName: file.name,
+        contentType: file.mimeType,
+      };
+    } catch (error) {
+      return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
+    }
   }
 
   if (retry.outcome === "existing") {

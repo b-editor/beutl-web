@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { runWithDbProvider } from "@beutl/db";
-import { api } from "@beutl/api";
+import { api } from "@beutl/api/app";
 import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable-object";
 import { gitRepositoryObject } from "../packages/api/src/git/environment";
 import { appendTusUpload, createTusUpload, downloadLfsObject, readTusUpload, verifyLfsUpload, type LfsObject } from "../packages/api/src/git/media-worker";

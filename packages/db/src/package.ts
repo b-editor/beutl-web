@@ -1,6 +1,7 @@
 import { getDb } from "./provider";
 import { normalizeNugetId } from "@beutl/core";
 import { profileUserNameFilter } from "./profile";
+import { packageTranslationSelect } from "./localization";
 import type { PaymentInterval } from "@prisma/client";
 import type { PrismaTransaction } from "./transaction";
 import { startRetryableTransaction } from "./transaction";
@@ -67,10 +68,12 @@ export async function getPackagePublishedByIdOrThrow({
 export async function findPackageForLibraryResponse({
   id: pkgId,
   currency,
+  lang,
   prisma,
 }: {
   id: string;
   currency: string | null;
+  lang?: string;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
@@ -88,6 +91,7 @@ export async function findPackageForLibraryResponse({
       tags: true,
       iconFileId: true,
       userId: true,
+      ...(lang ? packageTranslationSelect(lang) : {}),
       user: {
         select: {
           Profile: {
@@ -261,10 +265,12 @@ export async function findPackagesForBillingHistory({
 export async function retrievePublishedPackagesByUserName({
   userName,
   currency,
+  lang,
   prisma,
 }: {
   userName: string;
   currency: string | null;
+  lang?: string;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma || await getDb();
@@ -284,6 +290,7 @@ export async function retrievePublishedPackagesByUserName({
       name: true,
       shortDescription: true,
       tags: true,
+      ...(lang ? packageTranslationSelect(lang) : {}),
       iconFile: {
         select: {
           id: true,
@@ -330,9 +337,11 @@ export async function retrievePublishedPackagesByUserName({
 */
 export async function retrieveLatestPublishedPackages({
   take,
+  lang,
   prisma,
 }: {
   take: number;
+  lang?: string;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
@@ -351,6 +360,7 @@ export async function retrieveLatestPublishedPackages({
       displayName: true,
       shortDescription: true,
       iconFileId: true,
+      ...(lang ? packageTranslationSelect(lang) : {}),
       user: {
         select: {
           Profile: {
@@ -391,6 +401,18 @@ export async function retrieveDevPackageByName({
       webSite: true,
       tags: true,
       interval: true,
+      // 編集画面は言語ごとの下書きを復元するため、全言語の翻訳を読む。
+      PackageTranslation: {
+        select: {
+          lang: true,
+          displayName: true,
+          shortDescription: true,
+          description: true,
+        },
+        orderBy: {
+          lang: "asc",
+        },
+      },
       packagePricing: {
         select: {
           id: true,
@@ -437,6 +459,15 @@ export async function retrieveDevPackageByName({
           id: true,
           published: true,
           artifactLocked: true,
+          ReleaseTranslation: {
+            select: {
+              lang: true,
+              description: true,
+            },
+            orderBy: {
+              lang: "asc",
+            },
+          },
           file: {
             select: {
               name: true,

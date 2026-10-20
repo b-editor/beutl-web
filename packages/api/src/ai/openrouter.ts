@@ -1,3 +1,4 @@
+import { readBoundedResponseBytes as readResponseBytes, ResponseBodyError } from "../response-body";
 import { HTTPClient, OpenRouter, type Fetcher } from "@openrouter/sdk";
 import type {
   CreateImagesResponse,
@@ -231,52 +232,17 @@ async function readBoundedResponseBytes(
   createSizeLimitError: (message: string) => AiProviderError = (message) =>
     new AiProviderError(message),
 ): Promise<Uint8Array> {
-  const contentLengthHeader = response.headers.get("content-length");
-  if (contentLengthHeader) {
-    const contentLength = Number(contentLengthHeader);
-    if (
-      Number.isSafeInteger(contentLength) &&
-      contentLength >= 0 &&
-      contentLength > maximumBytes
-    ) {
-      await response.body?.cancel().catch(() => undefined);
-      throw createSizeLimitError(`${description} exceeds the size limit`);
-    }
-  }
-  if (!response.body) return new Uint8Array();
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
   try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      totalBytes += value.byteLength;
-      if (totalBytes > maximumBytes) {
-        const error = createSizeLimitError(
-          `${description} exceeds the size limit`,
-        );
-        await reader.cancel(error).catch(() => undefined);
-        throw error;
-      }
-      chunks.push(value);
-    }
-  } catch (cause) {
-    if (cause instanceof AiProviderError) throw cause;
-    throw new AiProviderError(`${description} could not be read`, {
-      cause,
+    return await readResponseBytes(response, maximumBytes, description);
+  } catch (error) {
+    if (!(error instanceof ResponseBodyError)) throw error;
+    if (error.reason === "size_limit") throw createSizeLimitError(error.message);
+    if (error.cause instanceof AiProviderError) throw error.cause;
+    throw new AiProviderError(error.message, {
+      cause: error.cause,
       execution: "unknown",
     });
   }
-
-  const result = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    result.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return result;
 }
 
 // Exported because every JSON reply this service reads needs the same bound,

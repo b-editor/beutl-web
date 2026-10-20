@@ -14,7 +14,7 @@ const bucketMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@beutl/db", () => dbMocks);
-vi.mock("@beutl/api", () => ({
+vi.mock("@beutl/api/api/auth", () => ({
   tryGetUserIdFromHeaders: authMocks.tryGetUserIdFromHeaders,
 }));
 vi.mock("@/lib/better-auth", () => ({

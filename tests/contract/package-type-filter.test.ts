@@ -4,6 +4,7 @@ const dbMocks = vi.hoisted(() => ({
   getDb: vi.fn(),
   existsUserPaymentHistory: vi.fn(),
   findProfileForDiscover: vi.fn(),
+  packageTranslationSelect: vi.fn(() => ({ PackageTranslation: {} })),
 }));
 const authMocks = vi.hoisted(() => ({
   getUserId: vi.fn(),
@@ -155,7 +156,8 @@ describe("retrievePackages type filtering", () => {
 
     const where = whereOf(0);
     expect(where.tags).toEqual({ has: MATERIAL_TAG });
-    expect(where.OR).toHaveLength(5);
+    // 名前・表示名・説明・短い説明・タグに加えて、翻訳文も検索対象。
+    expect(where.OR).toHaveLength(6);
   });
 });
 

@@ -7,7 +7,7 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
   const { lang } = await props.params;
 
   const session = await authOrSignIn();
-  const packages = await retrievePackages(session.user.id);
+  const packages = await retrievePackages(session.user.id, lang);
   const { t } = await getTranslation(lang);
 
   return (

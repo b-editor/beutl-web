@@ -7,7 +7,7 @@ import {
   upsertAiOperationModel,
   upsertSubscription,
 } from "@beutl/db";
-import { v3 } from "@beutl/api";
+import { v3 } from "@beutl/api/app";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 const USER_ID = "ai-availability-user";

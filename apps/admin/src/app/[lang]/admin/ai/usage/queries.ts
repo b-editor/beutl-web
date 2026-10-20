@@ -11,7 +11,8 @@ import {
   listCreditAccountUsageSnapshot,
   listUserLabels,
 } from "@beutl/db";
-import { loadAiSettings, PRO_PLAN } from "@beutl/api";
+import { loadAiSettings } from "@beutl/api/ai/settings";
+import { PRO_PLAN } from "@beutl/api/ai/pricing";
 import { aiUsageRangeStart, type AiUsageRange } from "@/lib/ai-usage-range";
 import {
   summarizeAiUsageDistribution,

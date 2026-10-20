@@ -1,7 +1,7 @@
 "use server";
 
 import { throwIfUnauth } from "@/lib/auth-guard";
-import { createOrRetrieveOwnedCustomerId } from "@/lib/customer";
+import { createOrRetrieveOwnedCustomerId } from "@/lib/stripe/customer";
 import {
   activateConfiguredTopUpOffer,
   fulfillOrRefundTopUpPayment,
@@ -24,16 +24,15 @@ import {
   subscriptionPlanConfig,
   subscriptionPlanConfigOf,
 } from "@/lib/stripe/subscription-plans";
-import {
-  discoverTopUpCheckoutAttempt,
-  isActiveProSubscription,
-  PRO_PLAN,
-} from "@beutl/api";
+import { discoverTopUpCheckoutAttempt } from "@beutl/api/package-checkout-discovery";
+import { isActiveProSubscription } from "@beutl/api/ai/entitlements";
+import { PRO_PLAN } from "@beutl/api/ai/pricing";
 import {
   allowsStripePromotionCodes,
   isValidStripeCheckoutSessionAmount,
   isZeroCostStripeCheckoutSessionAmount,
 } from "@beutl/core";
+
 import {
   bindTopUpCheckoutCreation,
   claimTopUpCheckoutCreation,
@@ -56,7 +55,6 @@ function expandableId(
   return typeof value === "string" ? value : value?.id ?? null;
 }
 
-
 // 追加クレジットは Pro の権利がある間だけ使えるので、購入もそれを条件にする。
 // 管理者の付与で Pro を使っている人も買える。
 async function hasActiveProSubscription(userId: string): Promise<boolean> {
@@ -75,13 +73,14 @@ export async function createProCheckout(): Promise<void> {
     email: session.user.email as string,
     userId: session.user.id,
   });
-  await createSubscriptionCheckout({
+  const url = await createSubscriptionCheckout({
     stripe: createStripe(),
     plan: subscriptionPlanConfig("pro"),
     tier: null,
     userId: session.user.id,
     customerId,
   });
+  redirect(url);
 }
 
 const TOP_UP_CHECKOUT_RETENTION_MS = 24 * 60 * 60_000;

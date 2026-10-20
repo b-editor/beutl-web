@@ -1,6 +1,7 @@
 import { getDb } from "./provider";
 import { refreshNugetPackageMetadata } from "./nuget-package";
 import { deleteUnreferencedFileWithStorageCleanup } from "./file";
+import { releaseTranslationSelect } from "./localization";
 import { startRetryableTransaction, type PrismaTransaction } from "./transaction";
 import { normalizeNugetId, normalizeNugetVersion, requiresNugetSemVer2, type NugetMetadata } from "@beutl/core";
 
@@ -30,9 +31,11 @@ export type ReleaseNugetData = { metadata: NugetMetadata; nuspec: string; readme
 
 export async function findReleaseForLibrary({
   id: latestReleaseId,
+  lang,
   prisma,
 }: {
   id: string;
+  lang?: string;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
@@ -48,6 +51,7 @@ export async function findReleaseForLibrary({
       description: true,
       targetVersion: true,
       fileId: true,
+      ...(lang ? releaseTranslationSelect(lang) : {}),
     },
   });
 }
@@ -55,10 +59,12 @@ export async function findReleaseForLibrary({
 export async function findReleasesForPackage({
   packageId,
   published,
+  lang,
   prisma,
 }: {
   packageId: string;
   published?: boolean;
+  lang?: string;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
@@ -74,6 +80,7 @@ export async function findReleasesForPackage({
       description: true,
       targetVersion: true,
       fileId: true,
+      ...(lang ? releaseTranslationSelect(lang) : {}),
     },
   });
 }
@@ -81,10 +88,12 @@ export async function findReleasesForPackage({
 export async function findReleaseByPackageAndVersion({
   packageId,
   version,
+  lang,
   prisma,
 }: {
   packageId: string;
   version: string;
+  lang?: string;
   prisma?: PrismaTransaction;
 }) {
   const db = prisma ?? await getDb();
@@ -101,6 +110,7 @@ export async function findReleaseByPackageAndVersion({
       targetVersion: true,
       fileId: true,
       published: true,
+      ...(lang ? releaseTranslationSelect(lang) : {}),
     },
   });
 }

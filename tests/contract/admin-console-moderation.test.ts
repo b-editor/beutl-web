@@ -27,7 +27,6 @@ vi.mock("@beutl/db", () => ({
 }));
 // users/[id]/actions.ts は削除やクレジット調整のために Stripe と課金の依存を持つ。
 // ここで検証するのはセッション失効だけなので、読み込みだけ通す。
-vi.mock("@beutl/api", () => ({}));
 vi.mock("stripe", () => ({ default: class {} }));
 
 import {

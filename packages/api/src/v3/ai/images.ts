@@ -3,18 +3,12 @@ import { z } from "zod";
 import { getUserId } from "../../api/auth";
 import { apiErrorResponse } from "../../api/error";
 import {
-  createReservedAiJob,
   findReplayableAiJob,
   aiJobStateForIdempotencyKey,
-  failAiJobAndRefundUsage,
 } from "../../ai/credits";
+import { prepareImageEdit } from "../../ai/image-editing";
+import { prepareImageGeneration } from "../../ai/image-generation";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
-import { imageProviderFor, providerRequiresPreparedOutpaintCanvas } from "../../ai/providers/registry";
-import {
-  imageCapabilityOf,
-  loadAiImageModelCapabilities,
-  unsupportedImageRequestReason,
-} from "../../ai/image-model-capabilities";
 import { getEntitlements } from "../../ai/entitlements";
 import {
   fileExceedsUploadLimit,
@@ -43,20 +37,16 @@ import {
   aspectRatioOfLegacyImageSize,
   type AiImageAspectRatio,
 } from "@beutl/core";
-import { saveAiImage } from "../../ai/storage";
 import {
-  decodeGeneratedImageBase64,
-  inspectGeneratedImage,
   InvalidGeneratedImageError,
 } from "../../ai/image-validation";
 import {
   validateAiInputImage,
-  inspectGeneratedJpeg,
   type AiInputImageMimeType,
 } from "../../ai/input-image-validation";
 import { getContentUrl } from "../../content-url";
 import { eventStreamRequested, eventStreamResponse } from "../../ai/sse";
-import { AI_JOB_FAILURE_MESSAGES, aiJobFailureMessage, publicAiJobError, reportAiProviderFailure } from "../../ai/job-errors";
+import { publicAiJobError } from "../../ai/job-errors";
 import {
   getAiIdempotencyKeyHash,
   getAiRequestIdentity,
@@ -118,29 +108,6 @@ function optionalMultipartField(
 ): string | undefined {
   const value = body[name];
   return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-async function decodeImageResult(
-  result: { b64Json: string; mediaType: string },
-  allowJpeg = false,
-): Promise<{ bytes: ArrayBuffer; mimeType: string }> {
-  try {
-    const bytes = decodeGeneratedImageBase64(result.b64Json);
-    const metadata = allowJpeg && result.mediaType === "image/jpeg"
-      ? inspectGeneratedJpeg(bytes)
-      : await inspectGeneratedImage(bytes, result.mediaType);
-    return {
-      bytes,
-      mimeType: metadata.mimeType,
-    };
-  } catch (cause) {
-    if (cause instanceof InvalidGeneratedImageError) {
-      throw new AiProviderError("OpenRouter returned invalid image bytes", {
-        cause,
-      });
-    }
-    throw cause;
-  }
 }
 
 const app = new Hono<{ Bindings: { AI_IMAGE_PREPARED_OUTPAINT?: boolean } }>()
@@ -406,52 +373,19 @@ const app = new Hono<{ Bindings: { AI_IMAGE_PREPARED_OUTPAINT?: boolean } }>()
       return c.json(await apiErrorResponse("aiRequestWasDeleted"), { status: 409 });
     }
 
-    // Nothing to recover, so this is a new request and has to be one the model
-    // will take. Refused here rather than by the provider after the usage is
-    // reserved: GPT Image-1 takes only 1:1, 3:2 and 2:3, and a rejection that
-    // arrives after the reservation reads as a provider outage.
-    if (!selectedModel) {
-      return c.json(await apiErrorResponse("aiModelUnavailable"), {
-        status: 400,
-      });
-    }
-    if (
-      unsupportedImageRequestReason(
-        imageCapabilityOf(
-          await loadAiImageModelCapabilities([selectedModel]),
-          selectedModel,
-        ),
-        {
-          aspectRatio,
-          ...(background ? { background } : {}),
-          ...(seed === undefined ? {} : { seed }),
-          referenceImages: references.length,
-        },
-      )
-    ) {
-      return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
-        status: 400,
-      });
-    }
-
-    const reservation = await createReservedAiJob({
+    const reservation = await prepareImageGeneration({
       userId,
-      kind: "image",
-      provider: selectedModel.provider,
-      status: "running",
-      inputParams: {
+      model: selectedModel,
+      identity: requestIdentity,
+      input: {
         prompt,
         aspectRatio,
-        ...(background && background !== "auto" ? { background } : {}),
-        ...(seed === undefined ? {} : { seed }),
-        ...(referenceFiles.length > 0
-          ? { references: referenceFiles.map((file) => ({ filename: file.name })) }
-          : {}),
+        background,
+        seed,
+        references: references.map((reference, index) => ({
+          ...reference, filename: referenceFiles[index]!.name,
+        })),
       },
-      usagePercent: selectedModel.usagePercent,
-      imageOutputTokenProfile: selectedModel.imageOutputTokenProfile,
-      model: selectedModel.modelId,
-      ...requestIdentity,
     });
     if (!reservation.ok) {
       return c.json(await apiErrorResponse(reservation.errorCode), {
@@ -473,34 +407,22 @@ const app = new Hono<{ Bindings: { AI_IMAGE_PREPARED_OUTPAINT?: boolean } }>()
       | { ok: true; payload: unknown }
       | { ok: false; errorCode: "aiProviderError" | "aiProviderBillingUnavailable"; status: 500 }
     > => {
-    try {
-      const result = await imageProviderFor(selectedModel.provider).generate({
-        prompt,
-        aspectRatio,
-        imageSizeMode: selectedModel.imageSizeMode,
-        ...(background ? { background } : {}),
-        ...(references.length > 0
-          ? {
-              referenceImages: references.map((reference) => ({
-                bytes: reference.bytes,
-                mimeType: reference.mimeType,
-              })),
-            }
-          : {}),
-        ...(seed === undefined ? {} : { seed }),
-        model: selectedModel.modelId,
+      const outcome = await reservation.execute({
         signal: c.req.raw.signal,
         ...(onPartialImage ? { onPartialImage } : {}),
       });
-      const { bytes, mimeType } = await decodeImageResult(result);
-      const file = await saveAiImage({
-        jobId: job.id,
-        userId,
-        bytes,
-        mimeType,
-        filename: `ai-image-${job.id}.png`,
-        providerCostUsd: result.providerCostUsd,
-      });
+      if (!outcome.ok) {
+        const { error } = outcome;
+        if (!(error instanceof AiProviderError) && !(error instanceof InvalidGeneratedImageError)) {
+          console.error("Failed to generate an AI image", error);
+        }
+        return {
+          ok: false as const,
+          errorCode: aiProviderFailureCode(error),
+          status: 500 as const,
+        };
+      }
+      const { file } = outcome;
       return {
         ok: true as const,
         payload: {
@@ -511,29 +433,6 @@ const app = new Hono<{ Bindings: { AI_IMAGE_PREPARED_OUTPAINT?: boolean } }>()
           contentType: file.mimeType,
         },
       };
-    } catch (err) {
-      // Synchronous provider calls have no durable handle that can recover an
-      // ambiguous result. Customer usage is therefore refunded on every
-      // unsuccessful response, even if the provider may have accepted work.
-      await failAiJobAndRefundUsage({
-        userId,
-        aiJobId: job.id,
-        error: aiJobFailureMessage(err, AI_JOB_FAILURE_MESSAGES.imageGeneration),
-      });
-      if (err instanceof AiProviderError) {
-        reportAiProviderFailure({
-          operation: "image.generate", jobId: job.id,
-          provider: selectedModel.provider, model: selectedModel.modelId, error: err,
-        });
-      } else {
-        console.error("Failed to generate an AI image", err);
-      }
-      return {
-        ok: false as const,
-        errorCode: aiProviderFailureCode(err),
-        status: 500 as const,
-      };
-    }
     };
 
     if (!eventStreamRequested(c.req.raw)) {
@@ -756,59 +655,14 @@ const app = new Hono<{ Bindings: { AI_IMAGE_PREPARED_OUTPAINT?: boolean } }>()
       return c.json(await apiErrorResponse("aiRequestWasDeleted"), { status: 409 });
     }
 
-    // Nothing to recover, so this is a new request. An edit hands the model a
-    // picture, cutting out a background or asking for a size; a model that takes
-    // none of those is refused before it is paid for.
-    if (!selectedModel) {
-      return c.json(await apiErrorResponse("aiModelUnavailable"), {
-        status: 400,
-      });
-    }
-    // Do not send unchanged raw bytes to a prompt-only outpainting adapter.
-    // Keep this after replay so previously paid outputs remain retrievable.
-    if (providerRequiresPreparedOutpaintCanvas(selectedModel.provider, `image.edit.${editTask}`) &&
-      !preparedOutpaint) {
-      return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
-        status: 400,
-      });
-    }
-    if (
-      unsupportedImageRequestReason(
-        imageCapabilityOf(
-          await loadAiImageModelCapabilities([selectedModel]),
-          selectedModel,
-        ),
-        {
-          // The picture being edited.
-          referenceImages: 1,
-          // Removing a background is asking for a transparent one.
-          ...(editTask === "remove_background"
-            ? { background: "transparent" as const }
-            : {}),
-          resolution: editTask === "upscale",
-        },
-      )
-    ) {
-      return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
-        status: 400,
-      });
-    }
-
-    const reservation = await createReservedAiJob({
-      userId,
-      kind: "image_edit",
-      provider: selectedModel.provider,
-      status: "running",
-      inputParams: {
-        task: editTask,
-        filename: file.name,
+    const reservation = await prepareImageEdit({
+      userId, model: selectedModel, identity: requestIdentity,
+      input: {
+        task: editTask, image: inputImage.bytes, mimeType: inputImage.mimeType, filename: file.name,
         ...(editPrompt ? { prompt: editPrompt } : {}),
-        ...(preparedOutpaint ? { outpaintExpansion } : {}),
+        ...(preparedOutpaint ? { outpaintExpansion: outpaintExpansion! } : {}),
       },
-      usagePercent: selectedModel.usagePercent,
-      imageOutputTokenProfile: selectedModel.imageOutputTokenProfile,
-      model: selectedModel.modelId,
-      ...requestIdentity,
+      allowJpeg: editTask !== "remove_background",
     });
     if (!reservation.ok) {
       return c.json(await apiErrorResponse(reservation.errorCode), {
@@ -821,49 +675,20 @@ const app = new Hono<{ Bindings: { AI_IMAGE_PREPARED_OUTPAINT?: boolean } }>()
       return await answerFromExisting(reservation.job);
     }
 
-    try {
-      const result = await imageProviderFor(selectedModel.provider).edit({
-        task: editTask,
-        image: inputImage.bytes,
-        mimeType: inputImage.mimeType,
-        ...(editPrompt ? { prompt: editPrompt } : {}),
-        model: selectedModel.modelId,
-        signal: c.req.raw.signal,
-      });
-      const { bytes, mimeType: outputMimeType } =
-        await decodeImageResult(result, editTask !== "remove_background");
-      const saved = await saveAiImage({
-        jobId: job.id,
-        userId,
-        bytes,
-        mimeType: outputMimeType,
-        filename: `ai-edit-${job.id}.${outputMimeType === "image/jpeg" ? "jpg" : "png"}`,
-        providerCostUsd: result.providerCostUsd,
-      });
-      return c.json({
-        jobId: job.id,
-        fileId: saved.id,
-        url: await getContentUrl(saved.id, c.req.raw),
-        fileName: saved.name,
-        contentType: saved.mimeType,
-      });
-    } catch (err) {
-      await failAiJobAndRefundUsage({
-        userId,
-        aiJobId: job.id,
-        error: aiJobFailureMessage(err, AI_JOB_FAILURE_MESSAGES.imageEdit),
-      });
-      if (err instanceof AiProviderError) {
-        reportAiProviderFailure({
-          operation: `image.edit.${editTask}`, jobId: job.id,
-          provider: selectedModel.provider, model: selectedModel.modelId, error: err,
-        });
-        return c.json(await apiErrorResponse(aiProviderFailureCode(err)), {
-          status: 500,
-        });
+    const outcome = await reservation.execute({ signal: c.req.raw.signal });
+    if (!outcome.ok) {
+      const { error } = outcome;
+      if (error instanceof AiProviderError || error instanceof InvalidGeneratedImageError) {
+        return c.json(await apiErrorResponse(aiProviderFailureCode(error)), { status: 500 });
       }
-      throw err;
+      throw error;
     }
+    const { file: saved } = outcome;
+    return c.json({
+      jobId: job.id, fileId: saved.id,
+      url: await getContentUrl(saved.id, c.req.raw),
+      fileName: saved.name, contentType: saved.mimeType,
+    });
   });
 
 export default app;
