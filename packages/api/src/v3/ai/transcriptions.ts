@@ -3,10 +3,8 @@ import { z } from "zod";
 import { getUserId } from "../../api/auth";
 import { apiErrorResponse } from "../../api/error";
 import {
-  createReservedAiJob,
   findReplayableAiJob,
   aiJobStateForIdempotencyKey,
-  failAiJobAndRefundUsage,
 } from "../../ai/credits";
 import { getEntitlements } from "../../ai/entitlements";
 import { parseAudio } from "../../ai/audio-metadata";
@@ -20,17 +18,14 @@ import {
   AiProviderError,
   aiProviderFailureCode,
 } from "../../ai/openrouter";
-import { AI_JOB_FAILURE_MESSAGES, aiJobFailureMessage, publicAiJobError, reportAiProviderFailure } from "../../ai/job-errors";
-import { readAiJsonResult, saveAiJsonResult } from "../../ai/storage";
-import { getAiJobResultFile } from "@beutl/db";
+import { publicAiJobError } from "../../ai/job-errors";
 import {
   getAiIdempotencyKeyHash,
   getAiRequestIdentity,
   sha256Hex,
 } from "../../ai/request-integrity";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
-import { transcriptionProviderFor } from "../../ai/providers/registry";
-import { validateTranscriptionResult } from "../../ai/audio-validation";
+import { prepareTranscription, recoverTranscription } from "../../ai/transcription";
 import { isIso6391LanguageCode } from "../../ai/subtitle-validation";
 import { aiApiMultipartBodyLimit } from "@beutl/core";
 
@@ -54,27 +49,8 @@ async function answerFromExistingTranscription(
   { userId, durationSeconds }: { userId: string; durationSeconds: number },
 ) {
   if (job.status === "succeeded" && job.resultFileId) {
-    const fileRecord = await getAiJobResultFile({ jobId: job.id, userId });
-    if (fileRecord) {
-      try {
-        const stored = validateTranscriptionResult(
-          (await readAiJsonResult({ objectKey: fileRecord.objectKey }) as {
-            segments?: unknown;
-            language?: unknown;
-            words?: unknown;
-          }),
-          durationSeconds,
-        );
-        return c.json({
-          jobId: job.id,
-          segments: stored.segments,
-          ...(stored.language ? { language: stored.language } : {}),
-          ...(stored.words ? { words: stored.words } : {}),
-        });
-      } catch (error) {
-        console.error("Failed to recover AI transcription result", error);
-      }
-    }
+    const stored = await recoverTranscription({ jobId: job.id, userId, durationSeconds });
+    if (stored) return c.json({ jobId: job.id, ...stored });
     // 支払い済みの成功ジョブを読み出せなかっただけで、ジョブが失敗したわけでは
     // ない。aiProviderError（＝返金済みの失敗）として返すと、クライアントはこの
     // キーを使い切ったものとして捨て、次の実行が新規課金になってしまう。同じ
@@ -239,26 +215,13 @@ const app = new Hono().post("/", async (c) => {
     return c.json(await apiErrorResponse("aiRequestWasDeleted"), { status: 409 });
   }
 
-  // 回収するものが無かったので、これは新しい依頼。ここで初めて「今そのモデルが
-  // 提供されているか」を問う。
-  if (!selectedModel) {
-    return c.json(await apiErrorResponse("aiModelUnavailable"), {
-      status: 400,
-    });
-  }
-  const reservation = await createReservedAiJob({
-    userId,
-    kind: "stt",
-    provider: selectedModel.provider,
-    status: "running",
-    inputParams: {
-      filename: file.name,
-      durationSeconds: parsedAudio.durationSeconds,
+  const reservation = await prepareTranscription({
+    userId, model: selectedModel, identity: requestIdentity,
+    input: {
+      audio: parsedAudio.bytes, durationSeconds: parsedAudio.durationSeconds,
+      filename: file.name, mimeType: file.type || "audio/mpeg",
       ...(language ? { language } : {}),
     },
-    usagePercent: selectedModel.usagePercent,
-    model: selectedModel.modelId,
-    ...requestIdentity,
   });
   if (!reservation.ok) {
     return c.json(await apiErrorResponse(reservation.errorCode), {
@@ -274,61 +237,14 @@ const app = new Hono().post("/", async (c) => {
     });
   }
 
-  try {
-    const result = await transcriptionProviderFor(
-      selectedModel.provider,
-    ).transcribe({
-      audio: parsedAudio.bytes,
-      durationSeconds: parsedAudio.durationSeconds,
-      filename: file.name,
-      mimeType: file.type || "audio/mpeg",
-      ...(language ? { language } : {}),
-      model: selectedModel.modelId,
-      signal: c.req.raw.signal,
-    });
-    await saveAiJsonResult({
-      jobId: job.id,
-      userId,
-      filename: `transcription-${job.id}.json`,
-      providerCostUsd: result.providerCostUsd,
-      result: {
-        version: 1,
-        kind: "stt",
-        segments: result.segments,
-        ...(result.language ? { language: result.language } : {}),
-        ...(result.words ? { words: result.words } : {}),
-      },
-    });
-
-    return c.json({
-      jobId: job.id,
-      segments: result.segments,
-      ...(result.language ? { language: result.language } : {}),
-      ...(result.words ? { words: result.words } : {}),
-    });
-  } catch (err) {
-    await failAiJobAndRefundUsage({
-      userId,
-      aiJobId: job.id,
-      error: aiJobFailureMessage(err, AI_JOB_FAILURE_MESSAGES.transcription),
-    });
-    if (err instanceof AiProviderError) {
-      reportAiProviderFailure({
-        operation: "audio.transcribe",
-        jobId: job.id,
-        provider: selectedModel.provider,
-        model: selectedModel.modelId,
-        error: err,
-      });
-      return c.json(await apiErrorResponse(aiProviderFailureCode(err)), {
-        status: 500,
-      });
+  const outcome = await reservation.execute({ signal: c.req.raw.signal });
+  if (!outcome.ok) {
+    if (!(outcome.error instanceof AiProviderError)) {
+      console.error("Failed to persist AI transcription result", outcome.error);
     }
-    console.error("Failed to persist AI transcription result", err);
-    return c.json(await apiErrorResponse("aiProviderError"), {
-      status: 500,
-    });
+    return c.json(await apiErrorResponse(aiProviderFailureCode(outcome.error)), { status: 500 });
   }
+  return c.json({ jobId: job.id, ...outcome.transcript });
 });
 
 export default app;

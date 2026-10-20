@@ -32,6 +32,8 @@ describe("Cloudflare Worker memory footprint", () => {
     const { prepareImageGeneration } = await import("@beutl/api/ai/image-generation");
 
     expect(prepareImageGeneration).toBeTypeOf("function");
+    expect((await import("@beutl/api/ai/translation")).prepareTranslation).toBeTypeOf("function");
+    expect((await import("@beutl/api/ai/transcription")).prepareTranscription).toBeTypeOf("function");
 
     expect(services.parseReplayableAiJobInput("image", {
       prompt: "A landscape",
