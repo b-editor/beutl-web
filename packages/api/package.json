@@ -15,6 +15,7 @@
     "./git/repository-browser": "./src/git/repository-browser.ts",
     "./ai/entitlements": "./src/ai/entitlements.ts",
     "./ai/job-input": "./src/ai/job-input.ts",
+    "./ai/job-retry": "./src/ai/job-retry.ts",
     "./ai/translation": "./src/ai/translation.ts",
     "./ai/transcription": "./src/ai/transcription.ts",
     "./ai/image-editing": "./src/ai/image-editing.ts",

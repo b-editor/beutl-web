@@ -5,6 +5,7 @@ export * from "./model-pricing";
 export * from "./job-errors";
 export * from "./job-input";
 export * from "./job-response";
+export * from "./job-retry";
 export * from "./upload-limits";
 export * from "./request-integrity";
 export * from "./image-validation";

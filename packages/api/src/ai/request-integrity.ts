@@ -95,9 +95,11 @@ export async function getAiRequestIdentity({
 export async function getAiIdempotencyKeyHash(
   request: Request,
 ): Promise<string | null> {
-  const key = idempotencyKeySchema.safeParse(
-    request.headers.get(IDEMPOTENCY_KEY_HEADER),
-  );
+  return await hashAiIdempotencyKey(request.headers.get(IDEMPOTENCY_KEY_HEADER));
+}
+
+export async function hashAiIdempotencyKey(value: unknown): Promise<string | null> {
+  const key = idempotencyKeySchema.safeParse(value);
   return key.success ? await sha256Hex(key.data) : null;
 }
 

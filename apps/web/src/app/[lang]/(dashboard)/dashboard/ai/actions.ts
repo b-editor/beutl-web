@@ -9,6 +9,7 @@ import { prepareTranscription, recoverTranscription } from "@beutl/api/ai/transc
 import { prepareImageEdit } from "@beutl/api/ai/image-editing";
 import { prepareImageGeneration } from "@beutl/api/ai/image-generation";
 import { parseReplayableAiJobInput, sanitizeAiJobInputParams } from "@beutl/api/ai/job-input";
+import { prepareAiJobRetry } from "@beutl/api/ai/job-retry";
 import { AiProviderError, aiProviderFailureCode } from "@beutl/api/ai/providers/errors";
 import { publicAiJobError } from "@beutl/api/ai/job-errors";
 import {
@@ -25,26 +26,18 @@ import {
   AI_MAX_IMAGE_REFERENCES,
   AI_IMAGE_BACKGROUNDS,
   AI_IMAGE_EDIT_TASKS,
-  AI_VIDEO_ASPECT_RATIOS,
-  AI_VIDEO_RESOLUTIONS,
   aiImageEditTaskRequiresPrompt,
-  aspectRatioOfLegacyImageSize,
   isAiSeed,
-  isAiVideoDurationSeconds,
   type AiImageEditTask,
   type AiImageAspectRatio,
   type AiImageBackground,
-  type AiVideoAspectRatio,
-  type AiVideoResolution,
 } from "@beutl/core";
 import {
-  createCallbackNonce,
   sha256Hex,
   type AiRequestIdentity,
   toAiRequestIdentity,
 } from "@beutl/api/ai/request-integrity";
-import { createReservedAiJob, findReplayableAiJob } from "@beutl/api/ai/credits";
-import { DEFAULT_AI_PROVIDER_ID } from "@beutl/api/ai/providers/registry";
+import { findReplayableAiJob } from "@beutl/api/ai/credits";
 import { loadAiModelCatalog } from "@beutl/api/ai/model-catalog";
 import { parseAudio } from "@beutl/api/ai/audio-metadata";
 import {
@@ -52,21 +45,12 @@ import {
   prepareGatewayVideoUsageForDeletion,
   deleteAiOutputObject,
 } from "@beutl/api/ai/storage";
-import {
-  synchronizeAiVideoJob,
-  settleVideoSubmissionFailure,
-  createAndAttachVideoJob,
-} from "@beutl/api/ai/video-jobs";
+import { synchronizeAiVideoJob } from "@beutl/api/ai/video-jobs";
 import {
   validateAiInputImage,
   type AiInputImageMimeType,
 } from "@beutl/api/ai/input-image-validation";
 import type { TranslationStyle } from "@beutl/api/ai/providers/types";
-import {
-  loadAiVideoModelCapabilities,
-  videoCapabilityOf,
-  unsupportedVideoRequestReason,
-} from "@beutl/api/ai/video-model-capabilities";
 
 import {
   finalizeAiJobDeletionByUserId,
@@ -984,30 +968,6 @@ export async function listJobsAction(
   };
 }
 
-/**
- * The catalog entry a rerun must use: the same model on the same provider the
- * paid original ran on.
- *
- * Resolving by model id alone takes whichever provider that id currently
- * carries. An administrator who moves an id from OpenRouter to the Gateway
- * would otherwise have a rerun validated against, and dispatched to, a
- * different service than the one the user already paid — for the same job.
- * Nothing left to re-run on the original pair is "unavailable", which is what
- * the caller reports.
- */
-function retryEntryFor(
-  catalog: Awaited<ReturnType<typeof loadAiModelCatalog>>,
-  operation: string,
-  job: { model: string | null; provider?: string | null },
-) {
-  const entry = catalog.resolve(operation, job.model ?? undefined);
-  if (!entry) return null;
-  // A row written before the column existed carries the one provider there
-  // was, which is the same resolution the catalog itself makes.
-  const ranOn = job.provider ?? DEFAULT_AI_PROVIDER_ID;
-  return entry.provider === ranOn ? entry : null;
-}
-
 export async function retryJobAction(
   jobId: string,
   idempotencyKey: string,
@@ -1016,131 +976,34 @@ export async function retryJobAction(
   const session = await throwIfUnauth();
   const lang = await getLanguage();
   const { t } = await getTranslation(lang);
-  const job = await getAiJobById({ jobId });
-  if (!job || job.userId !== session.user.id) {
-    return { success: false, message: t("api-errors:aiJobNotFound") };
-  }
-  if (job.status !== "failed" && job.status !== "succeeded") {
-    return { success: false, message: t("api-errors:aiJobIsActive") };
-  }
-  const replayInput = parseReplayableAiJobInput(job.kind, job.inputParams);
-  if (!replayInput.success) {
-    return { success: false, message: t("api-errors:invalidRequestBody") };
-  }
-  const input = replayInput.data;
-  // A retry confirmation owns an immutable snapshot of the original job. If
-  // the row was edited between opening the dialog and submitting it, refuse
-  // before reservation rather than silently retrying a different model/body.
-  if (expectedFingerprint !== undefined) {
-    const actualFingerprint = await retryJobFingerprint({
-      kind: job.kind,
-      model: job.model,
-      inputParams: replayInput.data,
-    });
-    // Accept the pre-fingerprint JSON token during the short rolling window,
-    // but all new browser confirmations carry only the bounded digest.
-    const legacyMatch = expectedFingerprint.startsWith("{") &&
-      JSON.stringify({
-        kind: job.kind,
-        model: job.model,
-        inputParams: replayInput.data,
-      }) === expectedFingerprint;
-    if (actualFingerprint !== expectedFingerprint && !legacyMatch) {
-      return {
-        success: false,
-        message: t("api-errors:aiRequestChanged"),
-        keepIdempotencyKey: true,
-      };
-    }
-  }
-  // A rerun repeats the request, so it repeats the model too. If that model has
-  // since been disabled the retry is refused rather than moved to the default:
-  // silently running something else and charging the default's price is not a
-  // retry. Jobs from before the column existed carry no model and resolve to
-  // the operation's default, which is what they ran on.
-  const catalog = await loadAiModelCatalog();
+  const retry = await prepareAiJobRetry({
+    userId: session.user.id,
+    jobId,
+    idempotencyKey,
+    // A retry confirmation owns an immutable snapshot of the original job. If
+    // the row was edited between opening the dialog and submitting it, refuse
+    // before reservation rather than silently retrying a different model/body.
+    ...(expectedFingerprint === undefined
+      ? {}
+      : {
+          confirm: async (snapshot) =>
+            (await retryJobFingerprint(snapshot)) === expectedFingerprint ||
+            // Accept the pre-fingerprint JSON token during the short rolling
+            // window; new browser confirmations carry only the bounded digest.
+            (expectedFingerprint.startsWith("{") &&
+              JSON.stringify(snapshot) === expectedFingerprint),
+        }),
+  });
+  if (!retry.ok) return aiFailureResult(retry.errorCode, t);
 
-  if (job.kind === "image") {
-    // The reference image was never stored, so this would generate something
-    // else and charge for it.
-    // Both spellings have existed in persisted jobs. Neither can be replayed
-    // because the uploaded bytes were never retained; accepting either would
-    // charge for a different, reference-free generation.
-    if (input.reference !== undefined || input.references !== undefined) {
-      return { success: false, message: t("api-errors:invalidRequestBody") };
-    }
-    // Required rather than defaulted: a generation always recorded its shape, so
-    // a job without one is not a generation and must not be rerun as one. Jobs
-    // predating aspect ratios carry the fixed size they were asked for.
-    const aspectRatio =
-      input.aspectRatio !== undefined
-        ? typeof input.aspectRatio === "string"
-          ? (input.aspectRatio as AiImageAspectRatio)
-          : null
-        : typeof input.size === "string"
-          ? aspectRatioOfLegacyImageSize(input.size)
-          : null;
-    if (aspectRatio === null || !AI_IMAGE_ASPECT_RATIOS.includes(aspectRatio)) {
-      return { success: false, message: t("api-errors:invalidRequestBody") };
-    }
-    // A missing background is the legacy "auto" request. A value that was
-    // persisted but is no longer recognized cannot be silently changed to
-    // auto: that would charge for a different request body.
-    let background: AiImageBackground | undefined;
-    if (input.background !== undefined) {
-      if (
-        typeof input.background !== "string" ||
-        !AI_IMAGE_BACKGROUNDS.includes(input.background as AiImageBackground)
-      ) {
-        return { success: false, message: t("api-errors:invalidRequestBody") };
-      }
-      background =
-        input.background === "auto"
-          ? undefined
-          : (input.background as AiImageBackground);
-    }
-    let seed: number | undefined;
-    if (input.seed !== undefined) {
-      if (!isAiSeed(input.seed)) {
-        return { success: false, message: t("api-errors:invalidRequestBody") };
-      }
-      seed = input.seed;
-    }
-    const retryModel = retryEntryFor(catalog, "image.generate", job);
-    if (!retryModel) {
-      return { success: false, message: t("api-errors:aiModelUnavailable") };
-    }
-    const identity = await toAiRequestIdentity({
-      idempotencyKey,
-      operation: "image.generate",
-      input: {
-        model: retryModel.modelId,
-        prompt: input.prompt,
-        aspectRatio,
-        ...(background ? { background } : {}),
-        ...(seed === undefined ? {} : { seed }),
-      },
-    });
-    if (!identity) {
-      return { success: false, message: t("api-errors:invalidRequestBody") };
-    }
-    const reservation = await prepareImageGeneration({
-      userId: session.user.id,
-      model: retryModel,
-      identity,
-      input: { prompt: input.prompt, aspectRatio, background, seed },
-    });
-    if (!reservation.ok) {
-      return reservationFailure(reservation.errorCode, t);
-    }
-    const { job: retried } = reservation;
-    if (reservation.outcome === "existing") {
+  if (retry.kind === "image") {
+    if (retry.outcome === "existing") {
       // A lost response can arrive after the provider already finished the
       // reserved retry. Recover its file instead of treating it as a generic
       // provider failure (which would discard the only idempotency key).
-      return await answerFromExistingFileJob(retried, t);
+      return await answerFromExistingFileJob(retry.job, t);
     }
-    const outcome = await reservation.execute();
+    const outcome = await retry.execute();
     if (!outcome.ok) {
       return { success: false, message: t(`api-errors:${errorMessage(outcome.error)}`) };
     }
@@ -1148,7 +1011,7 @@ export async function retryJobAction(
     try {
       return {
         success: true,
-        jobId: retried.id,
+        jobId: retry.job.id,
         url: await getContentUrl(file.id),
         fileName: file.name,
         contentType: file.mimeType,
@@ -1158,145 +1021,16 @@ export async function retryJobAction(
     }
   }
 
-  if (job.kind === "video") {
-    // The frames are not stored, so this would submit a different video and
-    // charge for it. The button is hidden for these, but the rule belongs here.
-    if (input.firstFrame !== undefined || input.lastFrame !== undefined) {
-      return { success: false, message: t("api-errors:invalidRequestBody") };
-    }
-    const durationSeconds = input.durationSeconds === undefined
-      ? 4
-      : input.durationSeconds;
-    const resolution = input.resolution === undefined
-      ? "720p"
-      : input.resolution;
-    // Jobs created before these existed carry neither; the defaults reproduce
-    // what they were actually submitted with.
-    const retryAspectRatio = input.aspectRatio === undefined
-      ? "16:9"
-      : input.aspectRatio;
-    const retryGenerateAudio = input.generateAudio === undefined
-      ? true
-      : input.generateAudio;
-    let retrySeed: number | undefined;
-    if (input.seed !== undefined) {
-      if (!isAiSeed(input.seed)) {
-        return { success: false, message: t("api-errors:invalidRequestBody") };
-      }
-      retrySeed = input.seed;
-    }
-    if (typeof durationSeconds !== "number" || !isAiVideoDurationSeconds(durationSeconds)) {
-      return { success: false, message: t("api-errors:invalidRequestBody") };
-    }
-    if (typeof resolution !== "string" || !AI_VIDEO_RESOLUTIONS.includes(resolution as AiVideoResolution)) {
-      return { success: false, message: t("api-errors:invalidRequestBody") };
-    }
-    if (typeof retryAspectRatio !== "string" || !AI_VIDEO_ASPECT_RATIOS.includes(retryAspectRatio as AiVideoAspectRatio)) {
-      return { success: false, message: t("api-errors:invalidRequestBody") };
-    }
-    const retryModel = retryEntryFor(catalog, "video.generate", job);
-    if (!retryModel) {
-      return { success: false, message: t("api-errors:aiModelUnavailable") };
-    }
-    // What the model accepts can have changed since the original run, and a
-    // rerun that the provider now refuses would be charged for first.
-    if (typeof retryGenerateAudio !== "boolean") {
-      return { success: false, message: t("api-errors:invalidRequestBody") };
-    }
-    const validatedResolution = resolution as AiVideoResolution;
-    const validatedAspectRatio = retryAspectRatio as AiVideoAspectRatio;
-    const retryUnsupported = unsupportedVideoRequestReason(
-      videoCapabilityOf(await loadAiVideoModelCapabilities(), retryModel),
-      {
-        resolution: validatedResolution,
-        durationSeconds,
-        aspectRatio: validatedAspectRatio,
-        generateAudio: retryGenerateAudio,
-        ...(retrySeed === undefined ? {} : { seed: retrySeed }),
-      },
-    );
-    if (retryUnsupported) {
-      return {
-        success: false,
-        message: t("api-errors:aiModelDoesNotSupportRequest"),
-      };
-    }
-    const identity = await toAiRequestIdentity({
-      idempotencyKey,
-      operation: "video.generate",
-      input: {
-        model: retryModel.modelId,
-        prompt: input.prompt,
-        durationSeconds,
-        resolution: validatedResolution,
-        aspectRatio: validatedAspectRatio,
-        generateAudio: retryGenerateAudio,
-        ...(retrySeed === undefined ? {} : { seed: retrySeed }),
-      },
-    });
-    if (!identity) {
-      return { success: false, message: t("api-errors:invalidRequestBody") };
-    }
-    const callbackNonce = await createCallbackNonce();
-    const reservation = await createReservedAiJob({
-      userId: session.user.id,
-      kind: "video",
-      provider: retryModel.provider,
-      status: "queued",
-      inputParams: {
-        prompt: input.prompt,
-        durationSeconds,
-        resolution: validatedResolution,
-        aspectRatio: validatedAspectRatio,
-        generateAudio: retryGenerateAudio,
-        ...(retrySeed === undefined ? {} : { seed: retrySeed }),
-      },
-      usagePercent: retryModel.usagePercent,
-      model: retryModel.modelId,
-      callbackNonceHash: callbackNonce.hash,
-      ...identity,
-    });
-    if (!reservation.ok) {
-      return reservationFailure(reservation.errorCode, t);
-    }
-    const { job: retried } = reservation;
-    if (reservation.outcome === "existing") {
-      return await answerFromExistingVideoJob(retried, t);
-    }
-    const mediaOrigin = await resolveMediaOrigin();
-    const callbackUrl = await resolveVideoCallbackUrl(
-      retried.id,
-      callbackNonce.nonce,
-      retryModel.provider,
-    );
-    try {
-      await createAndAttachVideoJob({
-        jobId: retried.id,
-        prompt: input.prompt,
-        durationSeconds,
-        resolution: validatedResolution,
-        aspectRatio: validatedAspectRatio,
-        generateAudio: retryGenerateAudio,
-        ...(retrySeed === undefined ? {} : { seed: retrySeed }),
-        ...(callbackUrl === undefined ? {} : { callbackUrl }),
-        callbackNonce: callbackNonce.nonce,
-        callbackNonceHash: callbackNonce.hash,
-        model: retryModel.modelId,
-        provider: retryModel.provider,
-        ...(mediaOrigin === undefined ? {} : { mediaOrigin }),
-      });
-      return { success: true, jobId: retried.id };
-    } catch (error) {
-      const handling = await settleVideoSubmissionFailure({
-        userId: session.user.id, jobId: retried.id, provider: retryModel.provider, error,
-      });
-      return handling === "refund"
-        ? { success: false, message: t(`api-errors:${aiProviderFailureCode(error)}`) }
-        : { success: true, jobId: retried.id };
-    }
+  if (retry.outcome === "existing") {
+    return await answerFromExistingVideoJob(retry.job, t);
   }
-
-  return { success: false, message: t("api-errors:invalidRequestBody") };
+  const result = await retry.submit({
+    mediaOrigin: resolveMediaOrigin,
+    callbackUrl: resolveVideoCallbackUrl,
+  });
+  return result.ok
+    ? { success: true, jobId: result.job.id }
+    : { success: false, message: t(`api-errors:${result.errorCode}`) };
 }
 
 export async function refreshVideoJobAction(jobId: string): Promise<AiActionResult> {
