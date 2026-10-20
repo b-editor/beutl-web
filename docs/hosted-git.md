@@ -106,8 +106,12 @@ remotes for additional destinations. External Git remotes retain their existing
 behavior. Git and Git LFS must be installed on the client.
 
 Git smart HTTP supports small project history: an 8 MiB push, 16 MiB of current
-repository objects, 128 refs and 9,000 history objects. Fetches negotiate with
-`multi_ack_detailed`, so a client receives only the objects its common history
+repository objects, 128 refs and 9,000 history objects.
+Each incoming pack is also limited to 16 MiB of expanded data, counting delta
+instructions, reconstructed objects and referenced stored bases. Oversized or
+malformed packs are rejected before indexing or storing the pack.
+
+Fetches negotiate with `multi_ack_detailed`, so a client receives only the objects its common history
 with the server lacks. Track videos and other large media with Git LFS. An LFS
 object can hold up to 312.5 GiB (10,000 tus parts of 32 MiB). A repository's
 LFS data is bounded only by the account's plan quota and 10,000 objects.

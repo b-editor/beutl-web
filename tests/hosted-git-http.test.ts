@@ -6,7 +6,11 @@ import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
+import { createHash } from "node:crypto";
+import { deflateSync } from "node:zlib";
 import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable-object";
+import { receiveGitPack } from "../packages/api/src/git/git-http";
+import { packEntryHeader } from "../packages/api/src/git/pack-writer";
 
 const execute = promisify(execFile);
 const repoId = "12345678-1234-1234-1234-123456789abc";
@@ -29,6 +33,89 @@ class Bucket {
     return { objects, delimitedPrefixes: [...prefixes], truncated: false };
   }
 }
+
+function blobOid(data: Uint8Array) {
+  return createHash("sha1").update(`blob ${data.length}\0`).update(data).digest("hex");
+}
+function unsigned(value: number): Buffer {
+  const bytes = [];
+  do { bytes.push((value & 127) | (value >= 128 ? 128 : 0)); value = Math.floor(value / 128); } while (value);
+  return Buffer.from(bytes);
+}
+function pushBody(entries: { data: Uint8Array; type?: number; size?: number; base?: Uint8Array }[], oid = "1".repeat(40)) {
+  const header = Buffer.alloc(12); header.write("PACK"); header.writeUInt32BE(2, 4); header.writeUInt32BE(entries.length, 8);
+  const pack = Buffer.concat([header, ...entries.flatMap(({ data, type = 3, size = data.length, base }) => [
+    packEntryHeader(type, size), ...(base ? [base] : []), deflateSync(data),
+  ])]);
+  const update = `${"0".repeat(40)} ${oid} refs/tags/test-${oid}\0report-status\n`;
+  return Buffer.concat([Buffer.from(`${(Buffer.byteLength(update) + 4).toString(16).padStart(4, "0")}${update}0000`),
+    pack, createHash("sha1").update(pack).digest()]);
+}
+async function receive(bucket: Bucket, body: Uint8Array, reserve = vi.fn(async (_bytes: number) => true)) {
+  return receiveGitPack(new Request("https://git.example.test/git-receive-pack", { method: "POST", body }),
+    bucket as never, repoId, reserve);
+}
+
+it.each([false, true])("rejects the compressed 24 MiB blob before pack storage (forged size=%s)", async (forged) => {
+  const bucket = new Bucket(), reserve = vi.fn(async () => true);
+  const body = pushBody([{ data: Buffer.alloc(24 * 1024 * 1024), ...(forged ? { size: 1 } : {}) }]);
+  expect(body.byteLength).toBeLessThan(32 * 1024);
+  expect((await receive(bucket, body, reserve)).status).toBe(413);
+  expect(reserve).not.toHaveBeenCalled();
+  expect([...bucket.objects.keys()].some((key) => key.endsWith(".pack"))).toBe(false);
+});
+
+it("bounds the aggregate expanded pack size", async () => {
+  const body = pushBody([{ data: Buffer.alloc(9 * 1024 * 1024) }, { data: Buffer.alloc(9 * 1024 * 1024, 1) }]);
+  expect((await receive(new Bucket(), body)).status).toBe(413);
+});
+
+it.each([6, 7])("rejects oversized delta output for pack type %s", async (type) => {
+  const data = Buffer.from("a"), header = packEntryHeader(3, data.length), compressed = deflateSync(data);
+  const base = type === 7 ? Buffer.from(blobOid(data), "hex") : Buffer.from([header.length + compressed.length]);
+  const delta = Buffer.concat([unsigned(1), unsigned(24 * 1024 * 1024), Buffer.from([1, 97])]);
+  expect((await receive(new Bucket(), pushBody([{ data }, { type, base, data: delta }]))).status).toBe(413);
+});
+
+it("rejects delta instructions that exceed the declared output and truncated streams", async () => {
+  const data = Buffer.from("a"), base = Buffer.from(blobOid(data), "hex");
+  const delta = Buffer.from([1, 1, 2, 97, 98]);
+  expect((await receive(new Bucket(), pushBody([{ data }, { type: 7, base, data: delta }]))).status).toBe(400);
+  const body = pushBody([{ data }]);
+  expect((await receive(new Bucket(), body.subarray(0, body.length - 24))).status).toBe(400);
+  body[body.indexOf("PACK") + 13] = 0;
+  expect((await receive(new Bucket(), body)).status).toBe(400);
+});
+
+it("rejects a thin delta referencing an oversized legacy blob", async () => {
+  const bucket = new Bucket(), oid = "a".repeat(40);
+  const legacy = Buffer.alloc(24 * 1024 * 1024);
+  await bucket.put(`git/repos/${repoId}/repo.git/objects/${oid.slice(0, 2)}/${oid.slice(2)}`,
+    deflateSync(Buffer.concat([Buffer.from(`blob ${legacy.length}\0`), legacy])));
+  const delta = Buffer.from([1, 1, 1, 97]);
+  expect((await receive(bucket, pushBody([{ data: delta, type: 7, base: Buffer.from(oid, "hex") }]))).status).toBe(413);
+});
+
+it("preserves storage failures while inspecting a thin pack base", async () => {
+  const bucket = new Bucket();
+  vi.spyOn(bucket, "get").mockImplementation(async (key) => {
+    if (key.includes("/objects/")) throw new Error("storage unavailable");
+    return null;
+  });
+  const delta = Buffer.from([1, 1, 1, 97]);
+  await expect(receive(bucket, pushBody([{ data: delta, type: 7, base: Buffer.alloc(20, 1) }])))
+    .rejects.toThrow("storage unavailable");
+});
+
+it("accepts ordinary objects and a thin delta referencing stored history", async () => {
+  const bucket = new Bucket(), data = Buffer.from("base"), target = Buffer.from("base!");
+  let response = await receive(bucket, pushBody([{ data }], blobOid(data)));
+  expect(await response.text()).toContain("unpack ok");
+  const delta = Buffer.from([4, 5, 0x90, 4, 1, 33]);
+  response = await receive(bucket, pushBody([{ data: delta, type: 7, base: Buffer.from(blobOid(data), "hex") }], blobOid(target)));
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain(`ok refs/tags/test-${blobOid(target)}`);
+});
 function memoryStorage() {
   const values = new Map<string, unknown>();
   return { values, get: async (key: string) => values.get(key), put: async (key: string, value: unknown) => { values.set(key, value); },

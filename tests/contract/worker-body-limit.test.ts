@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { fetchWithBodyLimit } from "../../apps/web/src/lib/worker-body-limit";
+import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { fetchWithBodyLimit } from "@beutl/api/worker-body-limit";
 import { refuseOversizedAiUpload } from "../../apps/web/src/lib/ai-upload-guard";
 import {
   aiScreenUploadLimit,
@@ -8,6 +9,46 @@ import {
   MAX_STRIPE_WEBHOOK_BODY_BYTES,
   STORAGE_UPLOAD_PART_BYTES,
 } from "@beutl/core";
+
+const next = vi.hoisted(() => vi.fn(async (request: Request) => {
+  await request.arrayBuffer();
+  return new Response("ok");
+}));
+vi.mock("../../apps/admin/.open-next/worker.js", () => ({
+  default: { fetch: next },
+  DOQueueHandler: class {}, DOShardedTagCache: class {}, BucketCachePurge: class {},
+}));
+import admin from "../../apps/admin/worker.js";
+
+describe("Admin Worker body admission", () => {
+  it("deploys the guarded entrypoint", () => {
+    const config = readFileSync(new URL("../../apps/admin/wrangler.jsonc", import.meta.url), "utf8");
+    expect(config).toContain('"main": "worker.js"');
+  });
+
+  it.each(["/ja/admin/users", "/api/auth/sign-in/magic-link", "/ja/dashboard/developer/packages"])(
+    "refuses declared oversized input before OpenNext: %s", async (path) => {
+      next.mockClear();
+      await expectFileTooLarge(await admin.fetch(new Request(`https://admin.example.test${path}`, {
+        method: "POST", headers: { "content-length": String(8 * 1024 * 1024) }, body: "x",
+      }), {}, {}));
+      expect(next).not.toHaveBeenCalled();
+    });
+
+  it.each([undefined, "1"])("bounds the actual bytes with Content-Length %s", async (length) => {
+    await expectFileTooLarge(await admin.fetch(new Request("https://admin.example.test/ja/admin/users", {
+      method: "POST", headers: length ? { "content-length": length } : {},
+      body: chunked(1024 * 1024 + 1), duplex: "half",
+    } as RequestInit & { duplex: "half" }), {}, {}));
+  });
+
+  it("preserves ordinary form submissions", async () => {
+    const response = await admin.fetch(new Request("https://admin.example.test/ja/admin/users", {
+      method: "POST", body: new URLSearchParams({ userId: "test" }),
+    }), {}, {});
+    expect(response.status).toBe(200);
+  });
+});
 
 function chunked(size: number): ReadableStream<Uint8Array> {
   return new ReadableStream({

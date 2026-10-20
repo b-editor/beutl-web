@@ -7,6 +7,7 @@
     ".": "./src/index.ts",
     "./app": "./src/app.ts",
     "./error": "./src/error.ts",
+    "./worker-body-limit": "./src/worker-body-limit.ts",
     "./api/auth": "./src/api/auth.ts",
     "./api/error": "./src/api/error.ts",
     "./git/access-tokens": "./src/git/access-tokens.ts",
