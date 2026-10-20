@@ -11,7 +11,7 @@ import type { SubscriptionGrant } from "@prisma/client";
 import { getDb } from "./provider";
 import { getSubscription } from "./subscription";
 import type { PrismaTransaction } from "./transaction";
-import { existsUserById } from "./user";
+import { existsUserById } from "./user-lookup";
 
 // 管理画面の一覧に出す件数の上限。
 export const SUBSCRIPTION_GRANT_LIST_LIMIT = 20;

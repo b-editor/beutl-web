@@ -48,6 +48,9 @@ flowchart TD
 - 保存済み入力、課金単位、冪等性キー、外部向け URL・応答の互換性を維持する。
 - `@beutl/core` はフレームワーク非依存、`@beutl/db` は永続化を担当する。
   `@beutl/api` の共有処理は DB や外部サービスを利用できるため、純粋関数の層とは異なる。
+- `core` と `db` の内部モジュールは循環させない。単純な照会が、アカウント削除のような
+  複数領域にまたがる操作を import しないよう、`user-lookup.ts` に存在確認を分離する。
+  公開する `@beutl/db` の関数と、呼び出し元のトランザクションを使う契約は維持する。
 
 Web と公開 API を同じ Worker で配信する決定、および NuGet・画像処理 Worker の
 用途は [ADR 0002](0002-api-worker-split.md) に従う。
@@ -59,6 +62,12 @@ v1 の認証契約は [ADR 0001](0001-v1-account-is-the-auth-backbone.md) に従
 条件で実際に共有入口を import する。共有処理からルートへの依存が復活すると失敗する。
 `routing-parity.test.ts` と Web 入口の契約テストは、HTTP 側の同じルート登録と応答を検証する。
 ジョブ入力の移動は既存の AI 履歴・ダッシュボードテストで検証する。
+
+`module-dependencies.test.ts` は TypeScript の依存解決を使い、`core` / `db` 内の循環、
+上位の workspace、Next.js・React・Hono への依存を検出する。型だけの参照も対象とし、
+`db` から他の workspace への依存は `core` に限定する。
+PR の CI では workspace の型チェック、Web / Admin の OpenNext ビルド、および一時的な
+CockroachDB を使った既存の整合性・マイグレーションテストも実行する。
 
 ## 次の改善候補
 
