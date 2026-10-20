@@ -8,6 +8,7 @@ import {
   aiJobStateForIdempotencyKey,
   failAiJobAndRefundUsage,
 } from "../../ai/credits";
+import { prepareImageGeneration } from "../../ai/image-generation";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
 import { imageProviderFor, providerRequiresPreparedOutpaintCanvas } from "../../ai/providers/registry";
 import {
@@ -406,52 +407,19 @@ const app = new Hono<{ Bindings: { AI_IMAGE_PREPARED_OUTPAINT?: boolean } }>()
       return c.json(await apiErrorResponse("aiRequestWasDeleted"), { status: 409 });
     }
 
-    // Nothing to recover, so this is a new request and has to be one the model
-    // will take. Refused here rather than by the provider after the usage is
-    // reserved: GPT Image-1 takes only 1:1, 3:2 and 2:3, and a rejection that
-    // arrives after the reservation reads as a provider outage.
-    if (!selectedModel) {
-      return c.json(await apiErrorResponse("aiModelUnavailable"), {
-        status: 400,
-      });
-    }
-    if (
-      unsupportedImageRequestReason(
-        imageCapabilityOf(
-          await loadAiImageModelCapabilities([selectedModel]),
-          selectedModel,
-        ),
-        {
-          aspectRatio,
-          ...(background ? { background } : {}),
-          ...(seed === undefined ? {} : { seed }),
-          referenceImages: references.length,
-        },
-      )
-    ) {
-      return c.json(await apiErrorResponse("aiModelDoesNotSupportRequest"), {
-        status: 400,
-      });
-    }
-
-    const reservation = await createReservedAiJob({
+    const reservation = await prepareImageGeneration({
       userId,
-      kind: "image",
-      provider: selectedModel.provider,
-      status: "running",
-      inputParams: {
+      model: selectedModel,
+      identity: requestIdentity,
+      input: {
         prompt,
         aspectRatio,
-        ...(background && background !== "auto" ? { background } : {}),
-        ...(seed === undefined ? {} : { seed }),
-        ...(referenceFiles.length > 0
-          ? { references: referenceFiles.map((file) => ({ filename: file.name })) }
-          : {}),
+        background,
+        seed,
+        references: references.map((reference, index) => ({
+          ...reference, filename: referenceFiles[index]!.name,
+        })),
       },
-      usagePercent: selectedModel.usagePercent,
-      imageOutputTokenProfile: selectedModel.imageOutputTokenProfile,
-      model: selectedModel.modelId,
-      ...requestIdentity,
     });
     if (!reservation.ok) {
       return c.json(await apiErrorResponse(reservation.errorCode), {
@@ -473,34 +441,22 @@ const app = new Hono<{ Bindings: { AI_IMAGE_PREPARED_OUTPAINT?: boolean } }>()
       | { ok: true; payload: unknown }
       | { ok: false; errorCode: "aiProviderError" | "aiProviderBillingUnavailable"; status: 500 }
     > => {
-    try {
-      const result = await imageProviderFor(selectedModel.provider).generate({
-        prompt,
-        aspectRatio,
-        imageSizeMode: selectedModel.imageSizeMode,
-        ...(background ? { background } : {}),
-        ...(references.length > 0
-          ? {
-              referenceImages: references.map((reference) => ({
-                bytes: reference.bytes,
-                mimeType: reference.mimeType,
-              })),
-            }
-          : {}),
-        ...(seed === undefined ? {} : { seed }),
-        model: selectedModel.modelId,
+      const outcome = await reservation.execute({
         signal: c.req.raw.signal,
         ...(onPartialImage ? { onPartialImage } : {}),
       });
-      const { bytes, mimeType } = await decodeImageResult(result);
-      const file = await saveAiImage({
-        jobId: job.id,
-        userId,
-        bytes,
-        mimeType,
-        filename: `ai-image-${job.id}.png`,
-        providerCostUsd: result.providerCostUsd,
-      });
+      if (!outcome.ok) {
+        const { error } = outcome;
+        if (!(error instanceof AiProviderError) && !(error instanceof InvalidGeneratedImageError)) {
+          console.error("Failed to generate an AI image", error);
+        }
+        return {
+          ok: false as const,
+          errorCode: aiProviderFailureCode(error),
+          status: 500 as const,
+        };
+      }
+      const { file } = outcome;
       return {
         ok: true as const,
         payload: {
@@ -511,29 +467,6 @@ const app = new Hono<{ Bindings: { AI_IMAGE_PREPARED_OUTPAINT?: boolean } }>()
           contentType: file.mimeType,
         },
       };
-    } catch (err) {
-      // Synchronous provider calls have no durable handle that can recover an
-      // ambiguous result. Customer usage is therefore refunded on every
-      // unsuccessful response, even if the provider may have accepted work.
-      await failAiJobAndRefundUsage({
-        userId,
-        aiJobId: job.id,
-        error: aiJobFailureMessage(err, AI_JOB_FAILURE_MESSAGES.imageGeneration),
-      });
-      if (err instanceof AiProviderError) {
-        reportAiProviderFailure({
-          operation: "image.generate", jobId: job.id,
-          provider: selectedModel.provider, model: selectedModel.modelId, error: err,
-        });
-      } else {
-        console.error("Failed to generate an AI image", err);
-      }
-      return {
-        ok: false as const,
-        errorCode: aiProviderFailureCode(err),
-        status: 500 as const,
-      };
-    }
     };
 
     if (!eventStreamRequested(c.req.raw)) {

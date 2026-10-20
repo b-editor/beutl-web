@@ -29,6 +29,9 @@ function sourceFiles(directory: string): string[] {
 describe("Cloudflare Worker memory footprint", () => {
   it("loads shared API services without constructing HTTP routers", async () => {
     const services = await import("@beutl/api");
+    const { prepareImageGeneration } = await import("@beutl/api/ai/image-generation");
+
+    expect(prepareImageGeneration).toBeTypeOf("function");
 
     expect(services.parseReplayableAiJobInput("image", {
       prompt: "A landscape",

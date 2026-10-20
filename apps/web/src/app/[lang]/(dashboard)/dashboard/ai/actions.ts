@@ -4,6 +4,7 @@ import { throwIfUnauth } from "@/lib/auth-guard";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
 import { headers } from "next/headers";
+import { prepareImageGeneration } from "@beutl/api/ai/image-generation";
 import { parseReplayableAiJobInput, sanitizeAiJobInputParams } from "@beutl/api/ai/job-input";
 import {
   AI_JOB_FAILURE_MESSAGES,
@@ -19,9 +20,7 @@ import {
   createCallbackNonce,
   createReservedAiJob,
   decodeGeneratedImageBase64,
-  editImage,
   failAiJobAndRefundUsage,
-  generateImage,
   inspectGeneratedImage,
   isIso6391LanguageCode,
   DEFAULT_AI_PROVIDER_ID,
@@ -696,54 +695,19 @@ export async function generateImageAction(
     return await answerFromExistingFileJob(replay.job, t);
   }
 
-  const selectedModel = await resolveModelOf(formData, "image.generate");
-  if (!selectedModel) {
-    return { success: false, message: t("api-errors:aiModelUnavailable") };
-  }
-
-  // Checked before the reservation: GPT Image-1 renders 1:1, 3:2 and 2:3 and
-  // GPT Image-2 cuts out no background, and a rejection that arrives after the
-  // usage is reserved reads as a provider outage.
-  if (
-    unsupportedImageRequestReason(
-      imageCapabilityOf(
-        await loadAiImageModelCapabilities([selectedModel]),
-        selectedModel,
-      ),
-      {
-        aspectRatio,
-        background,
-        ...(seed === undefined ? {} : { seed }),
-        referenceImages: references.length,
-      },
-    )
-  ) {
-    return {
-      success: false,
-      message: t("api-errors:aiModelDoesNotSupportRequest"),
-    };
-  }
-
-  const reservation = await createReservedAiJob({
+  const reservation = await prepareImageGeneration({
     userId: session.user.id,
-    kind: "image",
-    provider: selectedModel.provider,
-    status: "running",
-    inputParams: {
+    model: await resolveModelOf(formData, "image.generate"),
+    identity,
+    input: {
       prompt,
       aspectRatio,
       ...(background !== "auto" ? { background } : {}),
-      ...(seed === undefined ? {} : { seed }),
-      ...(referenceFiles.length > 0
-        ? {
-            references: referenceFiles.map((file) => ({ filename: file.name })),
-          }
-        : {}),
+      seed,
+      references: references.map((reference, index) => ({
+        ...reference, filename: referenceFiles[index]!.name,
+      })),
     },
-    usagePercent: selectedModel.usagePercent,
-    imageOutputTokenProfile: selectedModel.imageOutputTokenProfile,
-    model: selectedModel.modelId,
-    ...identity,
   });
   if (!reservation.ok) {
     return reservationFailure(reservation.errorCode, t);
@@ -754,33 +718,12 @@ export async function generateImageAction(
     return await answerFromExistingFileJob(job, t);
   }
 
+  const outcome = await reservation.execute();
+  if (!outcome.ok) {
+    return { success: false, message: t(`api-errors:${errorMessage(outcome.error)}`) };
+  }
+  const { file } = outcome;
   try {
-    const result = await imageProviderFor(selectedModel.provider).generate({
-      prompt,
-      aspectRatio,
-      imageSizeMode: selectedModel.imageSizeMode,
-      ...(background !== "auto" ? { background } : {}),
-      ...(references.length > 0
-        ? {
-            referenceImages: references.map((reference) => ({
-              bytes: reference.bytes,
-              mimeType: reference.mimeType,
-            })),
-          }
-        : {}),
-      ...(seed === undefined ? {} : { seed }),
-      model: selectedModel.modelId,
-    });
-    const bytes = decodeGeneratedImageBase64(result.b64Json);
-    await inspectGeneratedImage(bytes, result.mediaType);
-    const file = await saveAiImage({
-      jobId: job.id,
-      userId: session.user.id,
-      bytes,
-      mimeType: "image/png",
-      filename: `ai-image-${job.id}.png`,
-      providerCostUsd: result.providerCostUsd,
-    });
     return {
       success: true,
       jobId: job.id,
@@ -789,17 +732,6 @@ export async function generateImageAction(
       contentType: file.mimeType,
     };
   } catch (error) {
-    await failAiJobAndRefundUsage({
-      userId: session.user.id,
-      aiJobId: job.id,
-      error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.imageGeneration),
-    });
-    if (error instanceof AiProviderError) {
-      reportAiProviderFailure({
-        operation: "image.generate", jobId: job.id,
-        provider: selectedModel.provider, model: selectedModel.modelId, error,
-      });
-    }
     return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
   }
 }
@@ -1417,28 +1349,6 @@ export async function retryJobAction(
     if (!retryModel) {
       return { success: false, message: t("api-errors:aiModelUnavailable") };
     }
-    // Capabilities may have narrowed since the original run. Validate the
-    // exact replay before reserving usage so a now-unsupported ratio,
-    // background, or seed never reaches the paid provider/refund path.
-    if (
-      unsupportedImageRequestReason(
-        imageCapabilityOf(
-          await loadAiImageModelCapabilities([retryModel]),
-          retryModel,
-        ),
-        {
-          aspectRatio,
-          background: background ?? "auto",
-          ...(seed === undefined ? {} : { seed }),
-          referenceImages: 0,
-        },
-      )
-    ) {
-      return {
-        success: false,
-        message: t("api-errors:aiModelDoesNotSupportRequest"),
-      };
-    }
     const identity = await toAiRequestIdentity({
       idempotencyKey,
       operation: "image.generate",
@@ -1453,21 +1363,11 @@ export async function retryJobAction(
     if (!identity) {
       return { success: false, message: t("api-errors:invalidRequestBody") };
     }
-    const reservation = await createReservedAiJob({
+    const reservation = await prepareImageGeneration({
       userId: session.user.id,
-      kind: "image",
-      provider: retryModel.provider,
-      status: "running",
-      inputParams: {
-        prompt: input.prompt,
-        aspectRatio,
-        ...(background ? { background } : {}),
-        ...(seed === undefined ? {} : { seed }),
-      },
-      usagePercent: retryModel.usagePercent,
-      imageOutputTokenProfile: retryModel.imageOutputTokenProfile,
-      model: retryModel.modelId,
-      ...identity,
+      model: retryModel,
+      identity,
+      input: { prompt: input.prompt, aspectRatio, background, seed },
     });
     if (!reservation.ok) {
       return reservationFailure(reservation.errorCode, t);
@@ -1479,25 +1379,12 @@ export async function retryJobAction(
       // provider failure (which would discard the only idempotency key).
       return await answerFromExistingFileJob(retried, t);
     }
+    const outcome = await reservation.execute();
+    if (!outcome.ok) {
+      return { success: false, message: t(`api-errors:${errorMessage(outcome.error)}`) };
+    }
+    const { file } = outcome;
     try {
-      const result = await imageProviderFor(retryModel.provider).generate({
-        prompt: input.prompt,
-        aspectRatio,
-        imageSizeMode: retryModel.imageSizeMode,
-        ...(background ? { background } : {}),
-        ...(seed === undefined ? {} : { seed }),
-        model: retryModel.modelId,
-      });
-      const bytes = decodeGeneratedImageBase64(result.b64Json);
-      await inspectGeneratedImage(bytes, result.mediaType);
-      const file = await saveAiImage({
-        jobId: retried.id,
-        userId: session.user.id,
-        bytes,
-        mimeType: "image/png",
-        filename: `ai-image-${retried.id}.png`,
-        providerCostUsd: result.providerCostUsd,
-      });
       return {
         success: true,
         jobId: retried.id,
@@ -1506,11 +1393,6 @@ export async function retryJobAction(
         contentType: file.mimeType,
       };
     } catch (error) {
-      await failAiJobAndRefundUsage({
-        userId: session.user.id,
-        aiJobId: retried.id,
-        error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.imageGeneration),
-      });
       return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
     }
   }
