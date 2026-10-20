@@ -118,6 +118,9 @@ jobs:
         run: vp install --frozen-lockfile
       - name: Build Worker
         run: vp exec --filter @beutl/${{ matrix.app }} opennextjs-cloudflare build
+      - name: Check Worker rendering
+        timeout-minutes: 5
+        run: vp run --filter @beutl/${{ matrix.app }} check:runtime
 
   deploy:
     name: Deploy Cloudflare Workers
@@ -168,6 +171,11 @@ jobs:
         env:
           BETTER_AUTH_URL: https://admin.beutl.beditor.net
           NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${{ secrets.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY }}
+      - name: Check Web and Admin Worker rendering
+        timeout-minutes: 5
+        run: |
+          vp run --filter @beutl/web check:runtime
+          vp run --filter @beutl/admin check:runtime
       - name: Verify current main revision
         shell: bash
         run: |
