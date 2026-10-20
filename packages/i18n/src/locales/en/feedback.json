@@ -19,5 +19,6 @@
   "messageDescription": "Maximum 2000 characters",
   "submit": "Submit Feedback",
   "successMessage": "Thank you for your feedback! We will review it as soon as possible.",
-  "errorMessage": "Failed to submit feedback. Please try again."
+  "errorMessage": "Failed to submit feedback. Please try again.",
+  "rateLimited": "Too many submissions. Please wait before trying again."
 }

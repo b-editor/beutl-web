@@ -106,8 +106,27 @@ remotes for additional destinations. External Git remotes retain their existing
 behavior. Git and Git LFS must be installed on the client.
 
 Git smart HTTP supports small project history: an 8 MiB push, 16 MiB of current
-repository objects, 128 refs and 9,000 history objects. Fetches negotiate with
-`multi_ack_detailed`, so a client receives only the objects its common history
+repository objects, 128 refs and 9,000 history objects.
+Each incoming pack is also limited to 16 MiB of expanded data, counting delta
+instructions, reconstructed objects and referenced stored base chains. Stored
+ancestors also obey the 16 MiB per-object limit. Oversized or
+malformed packs are rejected before indexing or storing the pack.
+Delta reconstruction has a shared processing budget of 262,144 insert/copy
+instructions across an incoming pack and its referenced stored chains. Each
+dependent counts the cumulative cost of replaying its local or stored ancestors,
+even when validation reuses cached objects. This is a hosted-service
+compatibility limit, independent of Git's format and the byte limits: it bounds
+validation work and per-instruction allocations during indexing. A pack that
+exceeds the budget is rejected with HTTP 413.
+Thin-pack base validation also shares a budget of 65,536 object-entry visits and
+pack-index probes, including cached entries/indexes and stored delta chains.
+This bounds searches across fragmented history; exceeding it returns HTTP 413
+before quota reservation or pack storage. Bases supplied in the same pack,
+including resolved delta results, are resolved locally before consulting stored
+history. Missing bases and pack SHA-1 checksum mismatches return HTTP 400 before
+indexing, quota reservation or pack storage.
+
+Fetches negotiate with `multi_ack_detailed`, so a client receives only the objects its common history
 with the server lacks. Track videos and other large media with Git LFS. An LFS
 object can hold up to 312.5 GiB (10,000 tus parts of 32 MiB). A repository's
 LFS data is bounded only by the account's plan quota and 10,000 objects.
