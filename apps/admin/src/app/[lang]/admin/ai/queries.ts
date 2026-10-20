@@ -4,13 +4,16 @@ import { getDb, listAiOperationModels, listPackagePaymentRefundInterventions, li
 import {
   imageCapabilityOf,
   isImageModelUsable,
-  unusableVideoModelsFor,
   loadAiImageModelCapabilities,
-  loadAiModelCatalog,
-  loadAiSettings,
+} from "@beutl/api/ai/image-model-capabilities";
+import {
+  unusableVideoModelsFor,
   loadAiVideoModelCapabilities,
-} from "@beutl/api";
+} from "@beutl/api/ai/video-model-capabilities";
+import { loadAiModelCatalog } from "@beutl/api/ai/model-catalog";
+import { loadAiSettings } from "@beutl/api/ai/settings";
 import { deriveTopUpUnitValue } from "@beutl/core";
+
 import { resolveOfferPricing } from "@/lib/stripe-pricing";
 
 export const getAiSettings = cache(async () => await loadAiSettings());

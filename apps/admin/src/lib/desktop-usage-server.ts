@@ -1,5 +1,5 @@
 import "server-only";
-import { readBoundedResponseText } from "@beutl/api";
+import { readBoundedResponseText } from "@beutl/api/response-body";
 import {
   buildUsageReport,
   mergeUsageReports,

@@ -1,14 +1,16 @@
 import "server-only";
 import {
   locateStorageObject,
-  resolveStorageStores,
-  STORAGE_PROVIDERS,
   type ObjectLocation,
   type StorageMoveLease,
+} from "@beutl/api/storage/move-object";
+import {
+  resolveStorageStores,
+  STORAGE_PROVIDERS,
   type StorageProvider,
   type StorageStore,
   type StorageStores,
-} from "@beutl/api";
+} from "@beutl/api/storage/bucket-from-env";
 import {
   acquireFileStorageMoveLease,
   existsFileById,

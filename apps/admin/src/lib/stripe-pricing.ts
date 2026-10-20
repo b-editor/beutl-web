@@ -4,7 +4,8 @@ import {
   type BillingOfferKind,
   type PrismaTransaction,
 } from "@beutl/db";
-import { AI_TOP_UP, readBoundedResponseText } from "@beutl/api";
+import { AI_TOP_UP } from "@beutl/api/ai/pricing";
+import { readBoundedResponseText } from "@beutl/api/response-body";
 
 // Where the money side of the settings page gets its prices.
 //

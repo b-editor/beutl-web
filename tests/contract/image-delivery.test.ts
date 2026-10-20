@@ -21,7 +21,7 @@ vi.mock("@beutl/db", () => ({
   findFileForContentAccess: mocks.findFileForContentAccess,
   existsUserPaymentHistory: mocks.existsUserPaymentHistory,
 }));
-vi.mock("@beutl/api", () => ({ tryGetUserIdFromHeaders: mocks.tryGetUserIdFromHeaders }));
+vi.mock("@beutl/api/api/auth", () => ({ tryGetUserIdFromHeaders: mocks.tryGetUserIdFromHeaders }));
 vi.mock("@/lib/better-auth", () => ({ auth: { api: { getSession: mocks.getSession } } }));
 // This dependency belongs to apps/web; mocking a bare import from the root
 // tests would register a different module ID from the route's resolved import.

@@ -5,7 +5,7 @@ import {
   listDueAiRemoteJobCleanups,
   rescheduleAiRemoteJobCleanup,
 } from "@beutl/db";
-import { AiProviderError } from "./openrouter";
+import { AiProviderError } from "./providers/errors";
 import { videoProviderFor } from "./providers/registry";
 import type { AiVideoJobInfo } from "./providers/types";
 

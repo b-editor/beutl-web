@@ -107,20 +107,15 @@ vi.mock("../../packages/api/src/ai/image-model-capabilities", async (importOrigi
   loadAiImageModelCapabilities,
 }));
 
-vi.mock("@beutl/api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@beutl/api")>();
-  return {
-    ...actual,
-    generateImage,
-    editImage,
-    translateSegments,
-    transcribeAudio,
-    listAiJobsByUserId: vi.fn(),
-    loadAiVideoModelCapabilities,
-    createAndAttachVideoJob,
-    synchronizeAiVideoJob,
-  };
-});
+vi.mock("@beutl/api/ai/video-model-capabilities", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@beutl/api/ai/video-model-capabilities")>(),
+  loadAiVideoModelCapabilities,
+}));
+vi.mock("@beutl/api/ai/video-jobs", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@beutl/api/ai/video-jobs")>(),
+  createAndAttachVideoJob,
+  synchronizeAiVideoJob,
+}));
 
 vi.mock("@beutl/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@beutl/db")>();

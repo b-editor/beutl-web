@@ -1,7 +1,7 @@
 // Plan-agnostic pieces of the Stripe subscription webhook, shared by the AI
 // Pro handler (the webhook route) and the storage plan handler. Moved here
 // verbatim from the route module, which may export only HTTP handlers.
-import { getCanonicalPaymentRefundState } from "@beutl/api";
+import { getCanonicalPaymentRefundState } from "@beutl/api/ai/refund-state";
 import { findCustomerByStripeId } from "@beutl/db";
 import type Stripe from "stripe";
 import type { createStripe } from "./config";
@@ -392,7 +392,6 @@ export async function resolveCanonicalInvoiceReversalTotals({
 
   return { paymentAmount, reversalAmount, currency };
 }
-
 
 export type OwnedSubscriptionInvoicePayment = {
   invoice: Stripe.Invoice;
