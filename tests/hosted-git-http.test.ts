@@ -70,6 +70,33 @@ it("bounds the aggregate expanded pack size", async () => {
   expect((await receive(new Bucket(), body)).status).toBe(413);
 });
 
+function literalDelta(operations: number) {
+  return Buffer.concat([unsigned(1), unsigned(operations),
+    Buffer.alloc(operations * 2).fill(Buffer.from([1, 97]))]);
+}
+
+it.each([65_537, 262_144])("accepts a valid delta with %s insert operations", async (operations) => {
+  const data = Buffer.from("x"), target = Buffer.alloc(operations, 97);
+  const body = pushBody([{ data }, {
+    type: 7, base: Buffer.from(blobOid(data), "hex"), data: literalDelta(operations),
+  }], blobOid(target));
+  const response = await receive(new Bucket(), body);
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain(`ok refs/tags/test-${blobOid(target)}`);
+});
+
+it.each([{ counts: [262_145] }, { counts: [131_072, 131_073] }])("bounds delta operations across the pack: $counts", async ({ counts }) => {
+  const bucket = new Bucket(), reserve = vi.fn(async () => true), data = Buffer.from("x");
+  const body = pushBody([{ data }, ...counts.map((operations) => ({
+    type: 7, base: Buffer.from(blobOid(data), "hex"), data: literalDelta(operations),
+  }))]);
+  const response = await receive(bucket, body, reserve);
+  expect(response.status).toBe(413);
+  expect(await response.text()).toContain("delta operation budget");
+  expect(reserve).not.toHaveBeenCalled();
+  expect([...bucket.objects.keys()].some((key) => key.endsWith(".pack"))).toBe(false);
+});
+
 it.each([6, 7])("rejects oversized delta output for pack type %s", async (type) => {
   const data = Buffer.from("a"), header = packEntryHeader(3, data.length), compressed = deflateSync(data);
   const base = type === 7 ? Buffer.from(blobOid(data), "hex") : Buffer.from([header.length + compressed.length]);

@@ -110,6 +110,11 @@ repository objects, 128 refs and 9,000 history objects.
 Each incoming pack is also limited to 16 MiB of expanded data, counting delta
 instructions, reconstructed objects and referenced stored bases. Oversized or
 malformed packs are rejected before indexing or storing the pack.
+Delta reconstruction has a shared processing budget of 262,144 insert/copy
+instructions across all objects in an incoming pack. This is a hosted-service
+compatibility limit, independent of Git's format and the byte limits: it bounds
+validation work and per-instruction allocations during indexing. A pack that
+exceeds the budget is rejected with HTTP 413.
 
 Fetches negotiate with `multi_ack_detailed`, so a client receives only the objects its common history
 with the server lacks. Track videos and other large media with Git LFS. An LFS

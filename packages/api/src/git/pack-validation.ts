@@ -2,6 +2,10 @@ import { inflateSync } from "node:zlib";
 import { MAX_GIT_OBJECT_BYTES } from "./git-object-store";
 import type { GitObjectReader } from "./object-reader";
 
+// Bound validation work and isomorphic-git's per-command chunk allocations.
+// Share the budget across the pack rather than resetting it for each delta.
+const MAX_GIT_PACK_DELTA_OPERATIONS = 262_144;
+
 export class GitPackValidationError extends Error {}
 export class GitPackLimitError extends GitPackValidationError {}
 
@@ -28,12 +32,12 @@ function checkSize(size: number, maximum: number): void {
 }
 
 /** Check delta output without allocating it, including forged output lengths. */
-function deltaSize(data: Uint8Array): { source: number; target: number } {
+function deltaSize(data: Uint8Array, budget: { remaining: number }): { source: number; target: number } {
   const cursor = new Cursor(data), source = cursor.unsigned(), target = cursor.unsigned();
   checkSize(Math.max(source, target), MAX_GIT_OBJECT_BYTES);
-  let written = 0, operations = 0;
+  let written = 0;
   while (cursor.position < data.length) {
-    if (++operations > 65_536) throw new GitPackLimitError("Git delta has too many operations");
+    if (--budget.remaining < 0) throw new GitPackLimitError("Git pack exceeds its delta operation budget");
     const command = cursor.byte();
     let length = 0;
     if (command & 128) {
@@ -60,6 +64,7 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
   cursor.position = 12;
   const count = new DataView(pack.buffer, pack.byteOffset).getUint32(8);
   const offsets = new Set<number>(), bases = new Map<string, number>();
+  const deltaBudget = { remaining: MAX_GIT_PACK_DELTA_OPERATIONS };
   let expanded = 0;
   for (let index = 0; index < count; index++) {
     const start = cursor.position;
@@ -101,7 +106,7 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
     cursor.position += inflated.engine.bytesWritten;
     expanded += size;
     if (type === 6 || type === 7) {
-      const delta = deltaSize(inflated.buffer);
+      const delta = deltaSize(inflated.buffer, deltaBudget);
       expanded += delta.target;
       if (base) bases.set(base, delta.source);
     }
