@@ -3,9 +3,7 @@ import { z } from "zod";
 import { getUserId } from "../../api/auth";
 import { apiErrorResponse } from "../../api/error";
 import {
-  createReservedAiJob,
   findReplayableAiJob,
-  failAiJobAndRefundUsage,
 } from "../../ai/credits";
 import {
   AiProviderError,
@@ -17,13 +15,13 @@ import {
   MAX_AI_TRANSLATION_JSON_REQUEST_BYTES,
   parseJsonWithBodyLimit,
 } from "../../ai/upload-limits";
-import { AI_JOB_FAILURE_MESSAGES, aiJobFailureMessage, publicAiJobError, reportAiProviderFailure } from "../../ai/job-errors";
-import { readAiJsonResult, saveAiJsonResult } from "../../ai/storage";
+import { publicAiJobError } from "../../ai/job-errors";
+import { readAiJsonResult } from "../../ai/storage";
 import { getAiJobResultFile } from "@beutl/db";
 import { getAiRequestIdentity } from "../../ai/request-integrity";
 import { eventStreamRequested, eventStreamResponse } from "../../ai/sse";
 import { loadAiModelCatalog } from "../../ai/model-catalog";
-import { translationProviderFor } from "../../ai/providers/registry";
+import { prepareTranslation } from "../../ai/translation";
 import {
   isIso6391LanguageCode,
   translationCharacterCount,
@@ -259,27 +257,16 @@ const app = new Hono().post("/", async (c) => {
     return c.json(await apiErrorResponse("aiRequestWasDeleted"), { status: 409 });
   }
 
-  // 回収するものが無かったので、これは新しい依頼。
-  if (!selectedModel) {
-    return c.json(await apiErrorResponse("aiModelUnavailable"), {
-      status: 400,
-    });
-  }
-  const characterCount = translationCharacterCount({ segments, style });
-  const reservation = await createReservedAiJob({
-    userId,
-    kind: "translation",
-    provider: selectedModel.provider,
-    status: "running",
-    inputParams: {
+  const reservation = await prepareTranslation({
+    userId, model: selectedModel, identity: requestIdentity,
+    input: {
       ...(sourceLanguage ? { sourceLanguage } : {}),
-      targetLanguage,
-      segmentCount: segments.length,
-      characterCount,
+      targetLanguage, segments,
+      contexts: Object.fromEntries(segments.flatMap((segment) =>
+        segment.context ? [[segment.id, segment.context]] : [],
+      )),
+      ...(style ? { style } : {}),
     },
-    usagePercent: selectedModel.usagePercent,
-    model: selectedModel.modelId,
-    ...requestIdentity,
   });
   if (!reservation.ok) {
     return c.json(await apiErrorResponse(reservation.errorCode), {
@@ -301,75 +288,16 @@ const app = new Hono().post("/", async (c) => {
     | { ok: true; payload: unknown }
     | { ok: false; errorCode: "aiProviderError" | "aiProviderBillingUnavailable"; status: 500 }
   > => {
-  try {
-    const contextById = new Map(
-      segments.flatMap((segment) =>
-        segment.context ? [[segment.id, segment.context] as const] : [],
-      ),
-    );
-    // The provider is told only when a cue starts and ends; the stored result
-    // keeps the whole context, because that is what re-times the translation.
-    const contexts = Object.fromEntries(
-      [...contextById].map(([id, context]) => [
-        id,
-        { start: context.start, end: context.end },
-      ]),
-    );
-    const translated = await translationProviderFor(
-      selectedModel.provider,
-    ).translate({
-      ...(sourceLanguage ? { sourceLanguage } : {}),
-      targetLanguage,
-      segments: segments.map(({ id, text }) => ({ id, text })),
-      // The timings the caller sent are what let the model keep a line short
-      // enough to read in the time it is on screen.
-      ...(Object.keys(contexts).length > 0 ? { contexts } : {}),
-      ...(style ? { style } : {}),
-      model: selectedModel.modelId,
-      signal: c.req.raw.signal,
-      ...(onSegment ? { onSegment } : {}),
+    const outcome = await reservation.execute({
+      signal: c.req.raw.signal, ...(onSegment ? { onSegment } : {}),
     });
-    const translatedSegments = translated;
-    await saveAiJsonResult({
-      jobId: job.id,
-      userId,
-      filename: `translation-${job.id}.json`,
-      providerCostUsd: translated.providerCostUsd,
-      result: {
-        version: 1,
-        kind: "translation",
-        ...(sourceLanguage ? { sourceLanguage } : {}),
-        targetLanguage,
-        segments: translatedSegments.map((segment) => {
-          const context = contextById.get(segment.id);
-          return context ? { ...segment, context } : segment;
-        }),
-      },
-    });
-
-    return {
-      ok: true as const,
-      payload: {
-        jobId: job.id,
-        segments: translatedSegments,
-      },
-    };
-  } catch (error) {
-    await failAiJobAndRefundUsage({
-      userId,
-      aiJobId: job.id,
-      error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.translation),
-    });
-    if (error instanceof AiProviderError) {
-      reportAiProviderFailure({
-        operation: "subtitle.translate", jobId: job.id,
-        provider: selectedModel.provider, model: selectedModel.modelId, error,
-      });
-    } else {
-      console.error("Failed to persist AI translation result", error);
+    if (!outcome.ok) {
+      if (!(outcome.error instanceof AiProviderError)) {
+        console.error("Failed to persist AI translation result", outcome.error);
+      }
+      return { ok: false as const, errorCode: aiProviderFailureCode(outcome.error), status: 500 as const };
     }
-    return { ok: false as const, errorCode: aiProviderFailureCode(error), status: 500 as const };
-  }
+    return { ok: true as const, payload: { jobId: job.id, segments: outcome.segments } };
   };
 
   if (!eventStreamRequested(c.req.raw)) {

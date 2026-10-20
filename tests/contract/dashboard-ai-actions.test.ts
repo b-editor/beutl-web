@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { sign } from "hono/jwt";
+import translations from "../../packages/api/src/v3/ai/translations";
+import transcriptions from "../../packages/api/src/v3/ai/transcriptions";
 import images from "../../packages/api/src/v3/ai/images";
 import * as usageCost from "../../packages/api/src/ai/usage-cost";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
@@ -40,6 +42,7 @@ import {
   refreshVideoJobAction,
   retryJobAction,
   translateAction,
+  transcribeAction,
 } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/ai/actions";
 import { aiFailureResult } from "../../apps/web/src/lib/ai-screen";
 import {
@@ -90,10 +93,13 @@ vi.mock("../../packages/api/src/ai/credits", async (importOriginal) => ({
 vi.mock("../../packages/api/src/ai/storage", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../packages/api/src/ai/storage")>(),
   saveAiImage: vi.fn(),
+  readAiJsonResult: vi.fn(),
 }));
 vi.mock("../../packages/api/src/ai/providers/registry", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../packages/api/src/ai/providers/registry")>(),
   imageProviderFor: () => ({ generate: generateImage, edit: editImage }),
+  translationProviderFor: () => ({ translate: translateSegments }),
+  transcriptionProviderFor: () => ({ transcribe: transcribeAudio }),
 }));
 vi.mock("../../packages/api/src/ai/image-model-capabilities", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../packages/api/src/ai/image-model-capabilities")>(),
@@ -108,10 +114,7 @@ vi.mock("@beutl/api", async (importOriginal) => {
     editImage,
     translateSegments,
     transcribeAudio,
-    translationProviderFor: () => ({ translate: translateSegments }),
-    transcriptionProviderFor: () => ({ transcribe: transcribeAudio }),
     listAiJobsByUserId: vi.fn(),
-    readAiJsonResult: vi.fn(),
     loadAiVideoModelCapabilities,
     createAndAttachVideoJob,
     synchronizeAiVideoJob,
@@ -1229,7 +1232,7 @@ describe("dashboard AI actions", () => {
   });
 });
 
-describe("shared image generation across entry points", () => {
+describe("shared AI workflows across entry points", () => {
   const modelId = "openai/gpt-image-1";
   const jwtSecret = "shared-image-generation-contract";
   const idempotencyKey = "3f1a0d0e-0000-4000-8000-000000000020";
@@ -1252,9 +1255,14 @@ describe("shared image generation across entry points", () => {
     vi.clearAllMocks();
     memory = createInMemoryPrisma();
     setDbProvider(async () => memory.prisma as never);
+    const objects = new Map<string, ArrayBuffer>();
     setR2BucketProvider(() => ({
-      put: vi.fn(async () => ({})),
-      delete: vi.fn(async () => undefined),
+      put: vi.fn(async (key, bytes) => { objects.set(key, bytes as ArrayBuffer); }),
+      get: vi.fn(async (key) => {
+        const bytes = objects.get(key);
+        return bytes ? { size: bytes.byteLength, arrayBuffer: async () => bytes } : null;
+      }),
+      delete: vi.fn(async (key) => { objects.delete(key); }),
     }));
     vi.stubEnv("JWT_SECRET", jwtSecret);
     vi.stubEnv("PUBLIC_ORIGIN", "https://beutl.example");
@@ -1270,9 +1278,13 @@ describe("shared image generation across entry points", () => {
     );
     vi.mocked(createReservedAiJob).mockReset().mockImplementation(credits.createReservedAiJob);
     vi.mocked(saveAiImage).mockReset().mockImplementation(storage.saveAiImage);
-    vi.spyOn(usageCost, "quoteAiUsageReservation").mockResolvedValue({
-      providerCostUsd: 0.1, estimatedProviderCostUsd: 0.1, operation: "image.generate",
-    });
+    vi.mocked(readAiJsonResult).mockReset().mockImplementation(storage.readAiJsonResult);
+    const db = await vi.importActual<typeof import("@beutl/db")>("@beutl/db");
+    vi.mocked(getAiJobResultFile).mockReset().mockImplementation(db.getAiJobResultFile);
+    vi.spyOn(usageCost, "quoteAiUsageReservation").mockImplementation(async ({ kind }) => ({
+      providerCostUsd: 0.1, estimatedProviderCostUsd: 0.1,
+      operation: kind === "stt" ? "audio.transcribe" : kind === "translation" ? "subtitle.translate" : "image.generate",
+    }));
     await upsertSubscription({
       userId: "user-1", stripeSubscriptionId: "sub_shared_image", status: "active",
       planId: "pro", billingOfferId: "offer_pro_test",
@@ -1286,6 +1298,8 @@ describe("shared image generation across entry points", () => {
     setDbProvider(async () => memory.prisma as never);
     vi.mocked(createReservedAiJob).mockReset();
     vi.mocked(saveAiImage).mockReset();
+    vi.mocked(readAiJsonResult).mockReset();
+    vi.mocked(getAiJobResultFile).mockReset();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -1379,6 +1393,99 @@ describe("shared image generation across entry points", () => {
     await expect(generateImageAction({ success: false }, form())).rejects.toThrow("Database unavailable during refund");
 
     expect(memory.state.creditTransactions.filter((item) => item.kind === "usage")).toHaveLength(1);
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "refund")).toHaveLength(0);
+    expect([...memory.state.aiJobs.values()][0].status).toBe("running");
+  });
+
+  async function registerTextModel(operation: string, enabled = true) {
+    await upsertAiOperationModel({
+      operation, modelId: "test/text-model", provider: "openrouter", usagePercent: 100,
+      priceUnits: 5, displayName: null, sortOrder: 0, enabled, updatedBy: "admin-1",
+    });
+  }
+
+  function textForm(kind: "translation" | "transcription") {
+    const data = new FormData();
+    data.set("model", "test/text-model");
+    data.set("idempotencyKey", idempotencyKey);
+    if (kind === "translation") {
+      data.set("targetLanguage", "ja");
+      data.set("segments", JSON.stringify([{ id: "line-1", text: "Hello" }]));
+    } else {
+      // One second of mono PCM: duration and identity use the uploaded bytes.
+      const wav = Buffer.alloc(44 + 8_000, 128);
+      wav.write("RIFF", 0); wav.writeUInt32LE(wav.length - 8, 4);
+      wav.write("WAVEfmt ", 8); wav.writeUInt32LE(16, 16);
+      wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+      wav.writeUInt32LE(8_000, 24); wav.writeUInt32LE(8_000, 28);
+      wav.writeUInt16LE(1, 32); wav.writeUInt16LE(8, 34);
+      wav.write("data", 36); wav.writeUInt32LE(8_000, 40);
+      data.set("file", new File([wav], "speech.wav", { type: "audio/wav" }));
+    }
+    return data;
+  }
+
+  async function submitText(kind: "translation" | "transcription", entry: "web" | "api") {
+    const data = textForm(kind);
+    if (entry === "web") {
+      const action = kind === "translation" ? translateAction : transcribeAction;
+      const result = await action({ success: false }, data);
+      expect(result.success).toBe(true);
+      return result;
+    }
+    const token = await sign({
+      "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": "user-1",
+      exp: Math.floor(Date.now() / 1_000) + 300,
+    }, jwtSecret, "HS256");
+    const response = await new Hono().route("/", kind === "translation" ? translations : transcriptions).request("/", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`, "Idempotency-Key": idempotencyKey,
+        ...(kind === "translation" ? { "content-type": "application/json" } : {}),
+      },
+      body: kind === "translation" ? JSON.stringify({
+        model: data.get("model"), targetLanguage: "ja", segments: JSON.parse(String(data.get("segments"))),
+      }) : data,
+    });
+    expect(response.status).toBe(200);
+    return await response.json();
+  }
+
+  it.each([
+    ["translation", "web"], ["translation", "api"],
+    ["transcription", "web"], ["transcription", "api"],
+  ] as const)("recovers %s started by %s through the other entry point without charging again", async (kind, entry) => {
+    const operation = kind === "translation" ? "subtitle.translate" : "audio.transcribe";
+    await registerTextModel(operation);
+    translateSegments.mockReset().mockResolvedValue([{ id: "line-1", text: "こんにちは" }]);
+    transcribeAudio.mockReset().mockResolvedValue({
+      segments: [{ start: 0, end: 1, text: "Hello" }], language: "en",
+      words: [{ start: 0, end: 1, word: "Hello" }],
+    });
+    const first = await submitText(kind, entry);
+    await registerTextModel(operation, false);
+
+    const replay = await submitText(kind, entry === "web" ? "api" : "web");
+
+    expect(replay).toMatchObject({ jobId: first.jobId, segments: first.segments });
+    if (kind === "transcription") expect(replay).toMatchObject({ language: "en", words: first.words });
+    expect(kind === "translation" ? translateSegments : transcribeAudio).toHaveBeenCalledTimes(1);
+    expect(memory.state.aiJobs.size).toBe(1);
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "usage")).toHaveLength(1);
+    expect(memory.state.creditTransactions.filter((item) => item.kind === "refund")).toHaveLength(0);
+  });
+
+  it.each(["translation", "transcription"] as const)("propagates an unresolved %s refund to preserve recovery", async (kind) => {
+    await registerTextModel(kind === "translation" ? "subtitle.translate" : "audio.transcribe");
+    const provider = kind === "translation" ? translateSegments : transcribeAudio;
+    provider.mockReset().mockImplementationOnce(async () => {
+      setDbProvider(async () => { throw new Error("Database unavailable during refund"); });
+      throw new AiProviderError("Provider response lost");
+    });
+    const action = kind === "translation" ? translateAction : transcribeAction;
+
+    await expect(action({ success: false }, textForm(kind))).rejects.toThrow("Database unavailable during refund");
+
     expect(memory.state.creditTransactions.filter((item) => item.kind === "refund")).toHaveLength(0);
     expect([...memory.state.aiJobs.values()][0].status).toBe("running");
   });

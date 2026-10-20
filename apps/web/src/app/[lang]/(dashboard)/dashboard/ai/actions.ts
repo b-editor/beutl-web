@@ -4,6 +4,8 @@ import { throwIfUnauth } from "@/lib/auth-guard";
 import { getLanguage } from "@beutl/next/language";
 import { getTranslation } from "@beutl/i18n";
 import { headers } from "next/headers";
+import { prepareTranslation } from "@beutl/api/ai/translation";
+import { prepareTranscription, recoverTranscription } from "@beutl/api/ai/transcription";
 import { prepareImageGeneration } from "@beutl/api/ai/image-generation";
 import { parseReplayableAiJobInput, sanitizeAiJobInputParams } from "@beutl/api/ai/job-input";
 import {
@@ -28,7 +30,6 @@ import {
   parseAudio,
   readAiJsonResult,
   saveAiImage,
-  saveAiJsonResult,
   prepareGatewayVideoUsageForDeletion,
   sha256Hex,
   MAX_TRANSLATION_CHARACTERS,
@@ -38,12 +39,9 @@ import {
   type AiRequestIdentity,
   findReplayableAiJob,
   toAiRequestIdentity,
-  transcribeAudio,
-  translateSegments,
   translationCharacterCount,
   validateAiInputImage,
   type TranslationStyle,
-  validateTranscriptionResult,
   type AiInputImageMimeType,
   type ImageEditTask,
 } from "@beutl/api";
@@ -65,8 +63,6 @@ import {
   imageProviderFor,
   loadAiVideoModelCapabilities,
   videoCapabilityOf,
-  transcriptionProviderFor,
-  translationProviderFor,
   unsupportedImageRequestReason,
   unsupportedVideoRequestReason,
 } from "@beutl/api";
@@ -380,41 +376,6 @@ async function handleVideoSubmissionFailure({
     return { success: true, jobId };
   }
   throw error;
-}
-
-// A repeated submission has to answer with the result the first one produced,
-// not merely with "already done". Both recoveries re-read the stored JSON and
-// re-validate it, exactly as the v3 endpoints do, so a corrupted or truncated
-// object fails loudly instead of rendering as an empty editor.
-async function recoverTranscription({
-  jobId,
-  userId,
-  durationSeconds,
-}: {
-  jobId: string;
-  userId: string;
-  durationSeconds: number;
-}): Promise<{ segments: unknown; language?: string; words?: unknown } | null> {
-  const fileRecord = await getAiJobResultFile({ jobId, userId });
-  if (!fileRecord) return null;
-  try {
-    const stored = validateTranscriptionResult(
-      (await readAiJsonResult({ objectKey: fileRecord.objectKey })) as {
-        segments?: unknown;
-        language?: unknown;
-        words?: unknown;
-      },
-      durationSeconds,
-    );
-    return {
-      segments: stored.segments,
-      ...(stored.language ? { language: stored.language } : {}),
-      ...(stored.words ? { words: stored.words } : {}),
-    };
-  } catch (error) {
-    console.error("Failed to recover AI transcription result", error);
-    return null;
-  }
 }
 
 async function recoverTranslation({
@@ -945,23 +906,15 @@ export async function transcribeAction(
     );
   }
 
-  const selectedModel = await resolveModelOf(formData, "audio.transcribe");
-  if (!selectedModel) {
-    return { success: false, message: t("api-errors:aiModelUnavailable") };
-  }
-  const reservation = await createReservedAiJob({
+  const reservation = await prepareTranscription({
     userId: session.user.id,
-    kind: "stt",
-    provider: selectedModel.provider,
-    status: "running",
-    inputParams: {
-      filename: file.name,
-      durationSeconds: parsedAudio.durationSeconds,
+    model: await resolveModelOf(formData, "audio.transcribe"),
+    identity,
+    input: {
+      audio: parsedAudio.bytes, durationSeconds: parsedAudio.durationSeconds,
+      filename: file.name, mimeType: file.type || "audio/mpeg",
       ...(language ? { language } : {}),
     },
-    usagePercent: selectedModel.usagePercent,
-    model: selectedModel.modelId,
-    ...identity,
   });
   if (!reservation.ok) {
     return reservationFailure(reservation.errorCode, t);
@@ -975,51 +928,11 @@ export async function transcribeAction(
     );
   }
 
-  try {
-    const result = await transcriptionProviderFor(
-      selectedModel.provider,
-    ).transcribe({
-      audio: parsedAudio.bytes,
-      durationSeconds: parsedAudio.durationSeconds,
-      filename: file.name,
-      mimeType: file.type || "audio/mpeg",
-      ...(language ? { language } : {}),
-      model: selectedModel.modelId,
-    });
-    await saveAiJsonResult({
-      jobId: job.id,
-      userId: session.user.id,
-      filename: `transcription-${job.id}.json`,
-      providerCostUsd: result.providerCostUsd,
-      result: {
-        version: 1,
-        kind: "stt",
-        segments: result.segments,
-        ...(result.language ? { language: result.language } : {}),
-        ...(result.words ? { words: result.words } : {}),
-      },
-    });
-    return {
-      success: true,
-      jobId: job.id,
-      segments: result.segments,
-      ...(result.language ? { language: result.language } : {}),
-      ...(result.words ? { words: result.words } : {}),
-    };
-  } catch (error) {
-    await failAiJobAndRefundUsage({
-      userId: session.user.id,
-      aiJobId: job.id,
-      error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.transcription),
-    });
-    if (error instanceof AiProviderError) {
-      reportAiProviderFailure({
-        operation: "audio.transcribe", jobId: job.id,
-        provider: selectedModel.provider, model: selectedModel.modelId, error,
-      });
-    }
-    return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
+  const outcome = await reservation.execute();
+  if (!outcome.ok) {
+    return { success: false, message: t(`api-errors:${errorMessage(outcome.error)}`) };
   }
+  return { success: true, jobId: job.id, ...outcome.transcript };
 }
 
 export async function translateAction(
@@ -1109,25 +1022,14 @@ export async function translateAction(
     );
   }
 
-  const selectedModel = await resolveModelOf(formData, "subtitle.translate");
-  if (!selectedModel) {
-    return { success: false, message: t("api-errors:aiModelUnavailable") };
-  }
-
-  const reservation = await createReservedAiJob({
+  const reservation = await prepareTranslation({
     userId: session.user.id,
-    kind: "translation",
-    provider: selectedModel.provider,
-    status: "running",
-    inputParams: {
+    model: await resolveModelOf(formData, "subtitle.translate"),
+    identity,
+    input: {
       ...(sourceLanguage ? { sourceLanguage } : {}),
-      targetLanguage,
-      segmentCount: segments.length,
-      characterCount,
+      targetLanguage, segments, contexts, ...(style ? { style } : {}),
     },
-    usagePercent: selectedModel.usagePercent,
-    model: selectedModel.modelId,
-    ...identity,
   });
   if (!reservation.ok) {
     return reservationFailure(reservation.errorCode, t);
@@ -1141,51 +1043,11 @@ export async function translateAction(
     );
   }
 
-  try {
-    const translation = await translationProviderFor(
-      selectedModel.provider,
-    ).translate({
-      ...(sourceLanguage ? { sourceLanguage } : {}),
-      targetLanguage,
-      segments,
-      ...(Object.keys(contexts).length > 0 ? { contexts } : {}),
-      ...(style ? { style } : {}),
-      model: selectedModel.modelId,
-    });
-    const translated = translation;
-    await saveAiJsonResult({
-      jobId: job.id,
-      userId: session.user.id,
-      filename: `translation-${job.id}.json`,
-      providerCostUsd: translation.providerCostUsd,
-      result: {
-        version: 1,
-        kind: "translation",
-        ...(sourceLanguage ? { sourceLanguage } : {}),
-        targetLanguage,
-        // Without the timing a stored translation can only be recovered as
-        // text, so the history cannot re-export it as a subtitle file.
-        segments: translated.map((segment) => {
-          const context = contexts[segment.id];
-          return context ? { ...segment, context } : segment;
-        }),
-      },
-    });
-    return { success: true, jobId: job.id, segments: translated };
-  } catch (error) {
-    await failAiJobAndRefundUsage({
-      userId: session.user.id,
-      aiJobId: job.id,
-      error: aiJobFailureMessage(error, AI_JOB_FAILURE_MESSAGES.translation),
-    });
-    if (error instanceof AiProviderError) {
-      reportAiProviderFailure({
-        operation: "subtitle.translate", jobId: job.id,
-        provider: selectedModel.provider, model: selectedModel.modelId, error,
-      });
-    }
-    return { success: false, message: t(`api-errors:${errorMessage(error)}`) };
+  const outcome = await reservation.execute();
+  if (!outcome.ok) {
+    return { success: false, message: t(`api-errors:${errorMessage(outcome.error)}`) };
   }
+  return { success: true, jobId: job.id, segments: outcome.segments };
 }
 
 export async function listJobsAction(
