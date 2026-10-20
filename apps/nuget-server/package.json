@@ -18,13 +18,13 @@
     "@beutl/api": "workspace:*",
     "@beutl/core": "workspace:*",
     "@beutl/db": "workspace:*",
-    "@prisma/adapter-pg": "^7.10.0",
-    "@prisma/client": "^7.10.0",
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1",
     "hono": "^4.13.13"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
     "typescript": "^6.0.3",
-    "wrangler": "^4.149.0"
+    "wrangler": "^4.151.3"
   }
 }

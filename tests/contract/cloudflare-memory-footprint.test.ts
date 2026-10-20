@@ -69,9 +69,9 @@ describe("Cloudflare Worker memory footprint", () => {
       "packages/api/package.json",
       "packages/i18n/package.json",
     ]) {
-      expect(packageJson(path).dependencies?.zod, path).toBe("^4.6.5");
+      expect(packageJson(path).dependencies?.zod, path).toBe("^4.6.7");
     }
-    expect(packageJson("package.json").pnpm?.overrides?.zod).toBe("4.6.5");
+    expect(packageJson("package.json").pnpm?.overrides?.zod).toBe("4.6.7");
     expect(source("pnpm-lock.yaml")).not.toContain("zod@4.3.6");
   });
 
