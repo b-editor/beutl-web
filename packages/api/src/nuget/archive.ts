@@ -1,7 +1,4 @@
-// The ESM build evaluates a bare `module` under Workers' nodejs_compat.
-// Its CommonJS distribution keeps that Node detection inside a module wrapper.
-import { unzipRaw } from "unzipit/dist/unzipit.js";
-import type { Reader, ZipEntry } from "unzipit";
+import { unzipRaw, type Reader, type ZipEntry } from "unzipit";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { normalizeNugetId, normalizeNugetVersion, sanitizePayloadPath, type NugetMetadata } from "@beutl/core";
 import type { ReleaseNugetData } from "@beutl/db";

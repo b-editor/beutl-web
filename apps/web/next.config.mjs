@@ -24,6 +24,8 @@ const nextConfig = {
   serverExternalPackages: [
     "@prisma/client",
     ".prisma/client",
+    // Preserve the parser's dynamic dependency imports for OpenNext to bundle.
+    "music-metadata",
     // pg (pgpass) は Node 組み込みモジュール (path/fs) に依存するため
     // サーバーバンドルから外部化する (instrumentation → prisma.ts 経由でロードされる)。
     "pg",
