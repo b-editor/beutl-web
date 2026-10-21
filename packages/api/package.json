@@ -61,29 +61,29 @@
     "./ai/billing-refunds": "./src/ai/billing-refunds.ts"
   },
   "dependencies": {
-    "@ai-sdk/gateway": "^4.0.119",
+    "@ai-sdk/gateway": "^4.0.121",
     "@beutl/core": "workspace:*",
     "@beutl/db": "workspace:*",
     "@beutl/i18n": "workspace:*",
-    "@hono/zod-validator": "^0.7.6",
+    "@hono/zod-validator": "^0.9.1",
     "@openrouter/sdk": "^1.4.25",
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
-    "ai": "^7.0.146",
+    "ai": "^7.0.148",
     "aws4fetch": "^1.0.20",
     "country-to-currency": "^3.0.1",
     "fast-xml-parser": "5.11.2",
     "git-fs-s3": "0.3.13",
     "hono": "^4.13.13",
     "isomorphic-git": "1.44.3",
-    "music-metadata": "^11.16.1",
+    "music-metadata": "^12.2.3",
     "negotiator": "^1.1.0",
     "semver": "^7.8.5",
     "spdx-exceptions": "2.5.0",
     "spdx-license-ids": "3.0.24",
     "stripe": "^23.0.0",
-    "zod": "^4.6.7",
-    "unzipit": "1.4.3"
+    "unzipit": "2.1.1",
+    "zod": "^4.6.7"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

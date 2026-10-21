@@ -34,7 +34,7 @@
     "@prisma/client": "^7.10.1",
     "@types/node": "^24.19.2",
     "fflate": "^0.8.3",
-    "happy-dom": "20.14.6",
+    "happy-dom": "21.0.4",
     "hono": "^4.13.13",
     "typescript": "^6.0.3",
     "vitest": "^5.0.5"
@@ -71,7 +71,7 @@
       "glob@10": "10.5.0"
     },
     "patchedDependencies": {
-      "@ai-sdk/gateway@4.0.119": "patches/@ai-sdk__gateway@4.0.119.patch",
+      "@ai-sdk/gateway@4.0.121": "patches/@ai-sdk__gateway@4.0.121.patch",
       "next@16.4.2": "patches/next@16.4.2.patch"
     }
   },

@@ -1,6 +1,6 @@
 # Dependency patches
 
-## @ai-sdk/gateway 4.0.119
+## @ai-sdk/gateway 4.0.121
 
 The image and video adapters serialize seeds using a truthiness check, which
 silently omits the valid seed `0`. The patch changes both checks to test for
