@@ -20,6 +20,7 @@ export async function issueNativeAuthCodeForSession({ identifier, userId }: {
     // Validate persisted destinations before writing any code or user binding.
     callbackUrl = nativeAuthCallbackUrl(row.continueUrl, code);
   } catch {
+    // Invalid stored URLs are validation failures; refuse without issuing credentials.
     return { ok: false, reason: "unsafeContinueUrl" };
   }
 
@@ -37,6 +38,7 @@ export function nativeAuthDestinationHost(continueUrl: string): string | null {
     const url = new URL(continueUrl);
     return isAllowedNativeAuthContinueUrl(url) ? url.host : null;
   } catch {
+    // A malformed stored URL has no safe destination to display for consent.
     return null;
   }
 }
