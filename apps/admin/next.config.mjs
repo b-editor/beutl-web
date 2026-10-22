@@ -1,5 +1,24 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // /api (better-auth) は middleware の matcher から除外されているため、
+  // ページ応答に付与される HSTS と Referrer-Policy をここで補う。
+  async headers() {
+    return [
+      {
+        source: "/api/:path*",
+        headers: [
+          {
+            key: "Strict-Transport-Security",
+            value: "max-age=31536000; includeSubDomains",
+          },
+          {
+            key: "Referrer-Policy",
+            value: "strict-origin-when-cross-origin",
+          },
+        ],
+      },
+    ];
+  },
   serverExternalPackages: [
     "@prisma/client",
     ".prisma/client",

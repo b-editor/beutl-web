@@ -11,7 +11,8 @@
     "./language": "./src/language.ts",
     "./magic-link-email": "./src/magic-link-email.ts",
     "./local-redirect": "./src/local-redirect.ts",
-    "./middleware": "./src/middleware.ts"
+    "./middleware": "./src/middleware.ts",
+    "./security-headers": "./src/security-headers.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
