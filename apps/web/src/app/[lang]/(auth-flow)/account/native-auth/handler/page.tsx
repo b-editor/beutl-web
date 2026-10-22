@@ -45,24 +45,11 @@ export default async function Page(
   } = searchParams;
 
   const headersList = await headers();
-  const session = await auth.api.getSession({ headers: headersList });
-  if (!session?.user) {
-    // サインインしていない訪問はコード発行へ進めない。以前と同じく同意
-    // 画面 (continue) を挟んでサインインへ引き渡す。continue が遷移先の
-    // 検証を一手に引き受けるため、このページはリクエストの URL を信用
-    // しない。
-    const continueUrl = `/${lang}/account/native-auth/continue?returnUrl=${encodeURIComponent(selfUrl(lang, identifier ?? ""))}`;
-
-    redirect(
-      `/${lang}/account/sign-in?returnUrl=${encodeURIComponent(continueUrl)}`,
-    )
-  }
-
-  const user = session.user;
   const { t } = await getTranslation(lang);
 
-  // GET の描画では何も発行しない (drive-by code issuance の核となって
-  // いた動作)。発行は consent カードの Server Action でのみ行う。
+  // 行と宛先を先に検証する。無効な identifier や不健全な宛先は、サインイン
+  // へ誘導せず期限切れカードで即座に終わらせる。検証を通った行だけを
+  // サインインの返り先にすることで、continue 画面を挟まずに済む。
   if (!identifier) {
     return <ExpiredCard lang={lang} message={t("auth:nativeAuth.linkExpired")} />;
   }
@@ -78,9 +65,21 @@ export default async function Page(
     return <ExpiredCard lang={lang} message={t("auth:nativeAuth.linkExpired")} />;
   }
 
-  // アカウント切替は continue 画面のサインアウトチェーンと同じ形へ。
-  // 切替後も順路は continue → この handler (consent) となる。
-  const routeBackUrl = `/${lang}/account/native-auth/continue?returnUrl=${encodeURIComponent(selfUrl(lang, identifier))}`;
+  const session = await auth.api.getSession({ headers: headersList });
+  if (!session?.user) {
+    // サインインしていない訪問はコード発行へ進めない。返り先はこの
+    // handler 自身 (同一オリジンのサイト内パス) にして continue を挟まな
+    // い。同意はこのページのカードで 1 度だけ行う。
+    redirect(
+      `/${lang}/account/sign-in?returnUrl=${encodeURIComponent(selfUrl(lang, identifier))}`,
+    )
+  }
+
+  const user = session.user;
+
+  // アカウント切替は返り先この handler 自身を指す。切替後も単一の同意面
+  // (このカード) で完結する。
+  const routeBackUrl = selfUrl(lang, identifier);
 
   return (
     <div className="h-screen flex items-center justify-center">
