@@ -176,6 +176,30 @@ Keep application secrets and runtime variables configured in Cloudflare as
 described in [Deployment configuration](docs/deployment.md). Database migrations
 are separate release steps and are not run by this workflow.
 
+### GitHub Actions dependencies
+
+Action dependencies are pinned in [`.github/workflows/actions.lock`](.github/workflows/actions.lock)
+using GitHub's [`gh actions-lock`](https://github.com/github/gh-actions-lock).
+Workflow `uses` references use version tags; the lockfile records their exact
+commits and repository identities.
+
+With an authenticated GitHub CLI, install the extension, then regenerate and
+verify the lockfile after adding a workflow or changing action dependencies:
+
+```bash
+gh extension install github/gh-actions-lock
+gh actions-lock
+gh actions-lock --verify
+```
+
+Commit workflow changes and the generated lockfile together. Do not edit the
+lockfile by hand. The [CI workflow](.github/workflows/ci.yml) runs
+`gh actions-lock --verify` on pull requests, pushes to `main`, and manual runs.
+Deployment requires the lockfile verification job to pass.
+Existing weekly Dependabot updates for GitHub Actions also update the matching
+lockfile entries. See [GitHub's setup guide](https://docs.github.com/en/actions/how-tos/secure-your-work/lock-workflow-dependencies)
+for updating the extension and re-locking moved references.
+
 ## Deployment
 
 The public Web app and desktop APIs deploy together as `beutl-web`.
