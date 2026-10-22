@@ -5,7 +5,7 @@ import { passkey } from "@better-auth/passkey";
 import { magicLink } from "better-auth/plugins";
 import { getDb } from "@beutl/db";
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
-import { onUserCreated } from "@beutl/next/auth-hooks";
+import { onUserCreated, validateOAuthUserInfo } from "@beutl/next/auth-hooks";
 import { authEmailRateLimitHook } from "@beutl/next/auth-email-rate-limit";
 import { sendMagicLinkEmail } from "@beutl/next/magic-link-email";
 import type { Session, User } from "better-auth";
@@ -69,6 +69,7 @@ async function createAuthWithPrisma() {
       },
     },
     user: {
+      validateUserInfo: validateOAuthUserInfo,
       additionalFields: {
         createdAt: {
           type: "date",
@@ -83,7 +84,8 @@ async function createAuthWithPrisma() {
     account: {
       accountLinking: {
         enabled: true,
-        trustedProviders: ["google", "github"],
+        // GitHub must verify the email before linking a new provider identity.
+        trustedProviders: ["google"],
       },
     },
     advanced: {
