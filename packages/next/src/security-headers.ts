@@ -52,7 +52,9 @@ const DIRECTIVES = [
   // (ai-video-duration.ts / audio-extract.ts が video 要素に createObjectURL を
   // 渡す) 用。無いと有効な入力が「読み取れないもの」として投稿が拒否される。
   "media-src 'self' blob:",
-  "connect-src 'self'",
+  // cloudflareinsights.com は RUM ビーコンが計測値を POST する先
+  // (上の script-src の注記を参照)。
+  "connect-src 'self' https://cloudflareinsights.com",
   "object-src 'none'",
   "frame-ancestors 'none'",
   "base-uri 'self'",
@@ -67,10 +69,13 @@ const DIRECTIVES = [
 export function contentSecurityPolicy({
   NODE_ENV = "production",
 }: SecurityEnvironment = {}): string {
+  // static.cloudflareinsights.com は Cloudflare の Web Analytics (RUM) のビーコン。
+  // ゾーン設定でエッジから HTML に注入されるためコード側では出せない。許可しないと
+  // 計測が死ぬ。
   const scriptSrc =
     NODE_ENV === "development"
       ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
-      : "script-src 'self' 'unsafe-inline'";
+      : "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com";
   return [DIRECTIVES[0], scriptSrc, ...DIRECTIVES.slice(1)].join("; ");
 }
 
