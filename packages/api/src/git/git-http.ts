@@ -123,8 +123,7 @@ export async function advertiseGitRefs(bucket: GitObjectBucket, repoId: string, 
     entries.push([name, oid]);
     if (service === "git-upload-pack" && name.startsWith("refs/tags/")) {
       let peeled = oid;
-      for (let depth = 0; (await reader.info(peeled))?.type === "tag"; depth++) {
-        if (depth >= 16) throw new Error("Git tag chain is too deep");
+      while ((await reader.info(peeled))?.type === "tag") {
         const object = /^object ([0-9a-f]{40})\n/u.exec(Buffer.from(await reader.read(peeled)).toString("utf8"))?.[1];
         if (!object) throw new Error("Invalid Git tag");
         peeled = object;

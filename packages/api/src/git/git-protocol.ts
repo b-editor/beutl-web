@@ -43,7 +43,7 @@ export function parseReceivePackBody(bytes: Uint8Array) {
     const [command, caps, ...extra] = line.replace(/\n$/u, "").split("\0");
     if (extra.length || (caps !== undefined && refUpdates.length)) throw new GitProtocolError("Invalid Git capabilities");
     for (const cap of caps?.split(" ") ?? []) if (cap) capabilities.add(cap);
-    const match = /^([0-9a-f]{40}) ([0-9a-f]{40}) (.+)$/su.exec(command);
+    const match = /^([0-9a-f]{40}) ([0-9a-f]{40}) ([\s\S]+)$/u.exec(command);
     if (!match || !isGitRefName(match[3]) || refs.has(match[3])) throw new GitProtocolError("Invalid Git ref update");
     if (capabilities.has("atomic") || capabilities.has("push-options")) throw new GitProtocolError("Unsupported Git capability");
     refs.add(match[3]); refUpdates.push({ oldOid: match[1], newOid: match[2], refName: match[3] });
