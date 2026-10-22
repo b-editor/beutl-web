@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   events: [] as string[],
@@ -52,6 +52,7 @@ async function runScheduled(tick: number) {
 }
 
 describe("worker scheduled refund/cleanup dependency", () => {
+  afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.events.length = 0;
@@ -112,5 +113,19 @@ describe("worker scheduled refund/cleanup dependency", () => {
     const log = logSpy.mock.calls.at(-1);
     expect(log?.[1]).toMatchObject({ topUpDuplicateRefunds: expect.any(Object), stripeCheckoutCleanups: expect.any(Object) });
     vi.restoreAllMocks();
+  });
+
+  it("passes the resolved Stripe secret to scheduled reconcilers", async () => {
+    vi.stubEnv("STRIPE_SECRET_KEY", "old");
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const pending: Promise<unknown>[] = [];
+    const get = vi.fn(async () => "sk_store_scheduler");
+    await worker.scheduled({ scheduledTime: 0 }, { ...env, STRIPE_SECRET_KEY: { get } },
+      { waitUntil: (task) => { pending.push(task); } });
+    await Promise.all(pending);
+    for (const fn of [mocks.duplicate, mocks.packageRefunds, mocks.topUpRefunds, mocks.customer, mocks.cleanup, mocks.billing]) {
+      expect(fn).toHaveBeenCalledWith(new Date(0), "sk_store_scheduler");
+    }
+    expect(get).toHaveBeenCalledOnce();
   });
 });

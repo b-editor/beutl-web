@@ -28,6 +28,7 @@ import {
 } from "./storage-uploads";
 import { resolveStorageBucket } from "./storage/bucket-from-env";
 import type { GitEnvironment } from "./git/environment";
+import { resolveWorkerSecrets, type WorkerSecretBindings } from "./worker-secrets";
 import {
   reconcileGitHistoryReservations,
   reconcileGitLfsReservations,
@@ -38,7 +39,7 @@ export interface Env extends GitEnvironment {
   BEUTL_DATABASE_HYPERDRIVE: {
     connectionString: string;
   };
-  // vars (wrangler.jsonc) と secrets (wrangler secret put) の文字列バインディング。
+  // Secrets Store は入口で解決し、ここから先は vars/secrets とも文字列で扱う。
   // workerd はこれらを process.env に自動投入しないため、fetch 冒頭でコピーする。
   // ここに列挙したキーは「vars/secrets に設定されていれば」コピーされる。
   // 未設定のキー (例: BEUTL_LATEST_VERSION) は undefined のまま (Web 側と同挙動)。
@@ -202,7 +203,7 @@ export function withBoundedBody(
 }
 
 export default {
-  async fetch(request: Request, env: Env, context?: ApiExecutionContext): Promise<Response> {
+  async fetch(request: Request, bindings: WorkerSecretBindings<Env>, context?: ApiExecutionContext): Promise<Response> {
     // Bound the body before routing. Some v1 handlers parse JSON before auth,
     // so declared and streamed sizes must be rejected at the Worker boundary.
     let bodyLimitExceeded = false;
@@ -211,6 +212,7 @@ export default {
     });
     if (bounded === null) return bodyTooLarge(request);
 
+    const env = await resolveWorkerSecrets<Env>(bindings);
     return withApiBindings(env, async (scopedContext) => {
       try {
         const response = await api.fetch(bounded, env, scopedContext);
@@ -226,9 +228,10 @@ export default {
   },
   async scheduled(
     controller: ScheduledControllerLike,
-    env: Env,
+    bindings: WorkerSecretBindings<Env>,
     context: ExecutionContextLike,
   ): Promise<void> {
+    const env = await resolveWorkerSecrets<Env>(bindings);
     context.waitUntil(withApiBindings(env, async () => {
       const scheduledAt = new Date(controller.scheduledTime);
       // Duplicate top-up and package-payment refunds may be created by checkout

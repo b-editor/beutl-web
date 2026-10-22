@@ -40,7 +40,7 @@ export async function sendEmail(params: SendEmailParams) {
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${options.apiKey}`,
+      Authorization: `Bearer ${process.env.AUTH_RESEND_KEY}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -69,7 +69,6 @@ export async function sendEmail(params: SendEmailParams) {
 
 const options = {
   from: "Beutl <noreply@notifications.beditor.net>",
-  apiKey: process.env.AUTH_RESEND_KEY as string,
 };
 
 function assetContentId(key: EmailAssetKey): string {

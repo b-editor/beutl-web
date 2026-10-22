@@ -9,6 +9,9 @@ import { fileURLToPath } from 'node:url';
 const requireWrangler = createRequire(import.meta.resolve('wrangler/package.json'));
 const { Miniflare, convertV4MiniflareOptions } = requireWrangler('miniflare');
 const { build } = requireWrangler('esbuild');
+const { experimental_readRawConfig } = requireWrangler('wrangler');
+const { rawConfig } = experimental_readRawConfig({ config: fileURLToPath(new URL('../wrangler.jsonc', import.meta.url)) });
+const secrets = rawConfig.secrets_store_secrets;
 const buildDirectory = fileURLToPath(new URL('../.wrangler/build/', import.meta.url));
 const wasmModules = (await readdir(buildDirectory)).filter(name => name.endsWith('.wasm'));
 const runtime = new Miniflare(convertV4MiniflareOptions({
@@ -21,17 +24,25 @@ const runtime = new Miniflare(convertV4MiniflareOptions({
   compatibilityFlags: ['nodejs_compat', 'global_fetch_strictly_public', 'enable_request_signal'],
   hyperdrives: { BEUTL_DATABASE_HYPERDRIVE: 'postgresql://unused:unused@127.0.0.1:1/unused' },
   r2Buckets: ['BEUTL_R2_BUCKET'],
-  bindings: { NUGET_DOWNLOAD_SECRET: 'runtime-check-no-user-data', NUGET_PUBLIC_ORIGIN: 'https://nuget.beditor.net' },
+  bindings: {
+    NUGET_PUBLIC_ORIGIN: 'https://nuget.beditor.net',
+    BEUTL_S3_ENDPOINT: 'https://storage.example.test', BEUTL_S3_BUCKET: 'runtime-check', BEUTL_S3_REGION: 'auto',
+  },
+  secretsStoreSecrets: Object.fromEntries(secrets.map(({ binding, ...secret }) => [binding, secret])),
 }));
 try {
+  for (const { binding } of secrets) {
+    const api = (await runtime.getSecretsStoreSecretAPI(binding))();
+    await api.create(`runtime-check-no-user-data-${binding}`);
+  }
   const response = await runtime.dispatchFetch('https://nuget.beditor.net/v3/index.json');
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 200, response.status === 200 ? undefined : await response.text());
   const index = await response.json();
   assert.equal(index.version, '3.0.0');
   assert.ok(index.resources.some(resource => resource['@type'] === 'PackagePublish/2.0.0'));
   const unauthenticated = await runtime.dispatchFetch('https://nuget.beditor.net/api/v2/package/', { method: 'PUT', body: 'invalid' });
   assert.equal(unauthenticated.status, 401);
-  console.log('NuGet Worker startup, service index and unauthenticated push passed.');
+  console.log('NuGet Worker Secrets Store bindings, service index and unauthenticated push passed.');
 } finally {
   await runtime.dispose();
 }

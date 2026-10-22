@@ -122,6 +122,25 @@ describe("public Web Worker API entrypoint", () => {
     expect(mocks.next).toHaveBeenCalledTimes(3);
   });
 
+  it("passes resolved secrets to OpenNext and refreshes them after initialization", async () => {
+    vi.stubEnv("BETTER_AUTH_SECRET", "old");
+    const get = vi.fn().mockResolvedValueOnce("first").mockResolvedValueOnce("rotated");
+    const bindings = { ...env, BETTER_AUTH_SECRET: { get } };
+    for (const secret of ["first", "rotated"]) {
+      await web.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/auth/session`), bindings, context());
+      expect(mocks.next.mock.calls.at(-1)![1].BETTER_AUTH_SECRET).toBe(secret);
+      expect(process.env.BETTER_AUTH_SECRET).toBe(secret);
+    }
+    expect(bindings.BETTER_AUTH_SECRET.get).toBe(get);
+  });
+
+  it("does not enter Next when a bound secret cannot be read", async () => {
+    const bindings = { ...env, BETTER_AUTH_SECRET: { get: async () => { throw new Error("unavailable"); } } };
+    await expect(web.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/auth/session`), bindings, context()))
+      .rejects.toThrow("Unable to resolve Secrets Store binding BETTER_AUTH_SECRET");
+    expect(mocks.next).not.toHaveBeenCalled();
+  });
+
   it.each(["/api/contents/file-1?image=preview-1024", "/_next/image?url=/img/test.png&w=64&q=75"])(
     "keeps the Images binding disabled by default for %s", async (path) => {
       const images = { input: vi.fn() };

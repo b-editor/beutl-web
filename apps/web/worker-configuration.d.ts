@@ -1,5 +1,5 @@
 /* eslint-disable */
-// Worker bindings are generated from apps/web/wrangler.jsonc by Wrangler.
+// Application bindings after worker.js resolves Secrets Store values to strings.
 // Keep only the bindings consumed by the application here; the full generated
 // runtime declarations are supplied by @cloudflare/workers-types.
 declare namespace Cloudflare {

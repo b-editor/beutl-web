@@ -48,6 +48,17 @@ describe("Admin Worker body admission", () => {
     }), {}, {});
     expect(response.status).toBe(200);
   });
+
+  it("resolves Admin account secrets before invoking OpenNext", async () => {
+    vi.stubEnv("BETTER_AUTH_SECRET", "old");
+    try {
+      const get = vi.fn(async () => "admin-store-secret");
+      await admin.fetch(new Request("https://admin.example.test/api/auth/session"),
+        { BETTER_AUTH_SECRET: { get } }, {});
+      expect(next.mock.calls.at(-1)![1].BETTER_AUTH_SECRET).toBe("admin-store-secret");
+      expect(process.env.BETTER_AUTH_SECRET).toBe("admin-store-secret");
+    } finally { vi.unstubAllEnvs(); }
+  });
 });
 
 function chunked(size: number): ReadableStream<Uint8Array> {

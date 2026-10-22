@@ -16,24 +16,151 @@ Cloudflare bindings are declared alongside each deployable application:
 
 Local environment placeholders are documented in
 [`apps/web/.env.sample`](../apps/web/.env.sample) and
-[`apps/admin/.env.sample`](../apps/admin/.env.sample). Store production secrets
-in Cloudflare and local Worker secrets in ignored `.dev.vars` files; never
-commit secret values.
+[`apps/admin/.env.sample`](../apps/admin/.env.sample). Production secrets use
+Cloudflare Secrets Store. Local Next.js development still reads ignored `.env`
+files; local Worker previews need local Secrets Store entries as described below.
+Never commit secret values.
 
 `JWT_SECRET`, `JWT_ISSUER`, and `JWT_AUDIENCE` belong to the Web Worker, which
 both issues and validates desktop JWTs. Public versioned APIs, Git Durable
 Objects and all scheduled reconcilers use the Web deployment and bindings.
 Desktop APIs remain on Web. NuGet protocol endpoints have their own Worker.
 
-The private image-edit Worker has a separate JWT signing key. Set the same
-new random value as `AI_IMAGE_WORKER_JWT_SECRET` on `beutl-web` and
-`JWT_SECRET` on `beutl-ai-images`; do not reuse the desktop API JWT secret.
+The private image-edit Worker has a separate JWT signing key. The account secret
+`AI_IMAGE_WORKER_JWT_SECRET` binds as `AI_IMAGE_WORKER_JWT_SECRET` on `beutl-web`
+and `JWT_SECRET` on `beutl-ai-images`; do not reuse the desktop API JWT secret.
 The image Worker fixes `JWT_ISSUER=beutl-web-image-edit` and
 `JWT_AUDIENCE=beutl-ai-images` in its Wrangler configuration. It has no
 public route or workers.dev URL. Its database Hyperdrive, R2 binding, storage
 configuration, and `OPENROUTER_API_KEY` / `VERCEL_AI_GATEWAY_API_KEY` secrets
 must address the same production resources as Web before the Web service
 binding is deployed. Other Web/API routes retain their existing behavior.
+
+## Secrets Store
+
+All four Wrangler configurations use store
+`de6d4a1dd7db4471aef97c1e0db1ee05`. **Populate the store before deploying these
+configurations.** Creating bindings does not copy existing Worker secret values.
+
+### Required account secrets
+
+Create these 16 distinct names with scope `workers`. Use the existing production
+values when migrating so sessions, desktop tokens and download tickets continue
+to work. Shared bindings read one account secret rather than separate copies.
+
+| Secret name in the store | Worker bindings |
+| --- | --- |
+| `BETTER_AUTH_SECRET` | Web and Admin: `BETTER_AUTH_SECRET` |
+| `AUTH_GOOGLE_SECRET` | Web and Admin: `AUTH_GOOGLE_SECRET` |
+| `AUTH_GITHUB_SECRET` | Web and Admin: `AUTH_GITHUB_SECRET` |
+| `AUTH_RESEND_KEY` | Web and Admin: `AUTH_RESEND_KEY` |
+| `AUTH_SECRET` | Web: email-change and account-deletion confirmation-token secret |
+| `GITHUB_PAT` | Web: GitHub API credential |
+| `IPINFO_TOKEN` | Web: currency lookup credential |
+| `JWT_SECRET` | Web and NuGet: desktop JWT signing key |
+| `AI_IMAGE_WORKER_JWT_SECRET` | Web: `AI_IMAGE_WORKER_JWT_SECRET`; Image: `JWT_SECRET` |
+| `NUGET_DOWNLOAD_SECRET` | Web and NuGet: browser download signing key |
+| `STRIPE_SECRET_KEY` | Web: Stripe API key |
+| `ADMIN_STRIPE_SECRET_KEY` | Admin: `STRIPE_SECRET_KEY` (keep its existing restricted key) |
+| `STRIPE_ENDPOINT_SECRET` | Web: Stripe webhook signing key |
+| `OPENROUTER_API_KEY` | Web and Image: `OPENROUTER_API_KEY` |
+| `BEUTL_S3_ACCESS_KEY_ID` | All four Workers, including Web's Git Durable Objects |
+| `BEUTL_S3_SECRET_ACCESS_KEY` | All four Workers, including Web's Git Durable Objects |
+
+The private image key must remain different from the desktop `JWT_SECRET`.
+Do not replace Admin's restricted Stripe credential with Web's payment key.
+OAuth client IDs, public URLs, Stripe Price IDs and other non-secret settings
+remain ordinary `vars`. Database runtime access remains through Hyperdrive;
+`DATABASE_URL` for migrations and `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` for
+builds stay in their existing local/CI environments.
+
+These optional bindings are included as commented examples in the corresponding
+Wrangler files. Create the secret and enable its binding only when needed:
+
+| Optional secret | Workers |
+| --- | --- |
+| `OPENROUTER_WEBHOOK_SECRET` | Web (video callbacks) |
+| `VERCEL_AI_GATEWAY_API_KEY` | Web and Image |
+| `BEUTL_S3_SESSION_TOKEN` | All four (temporary S3 credentials only) |
+| `GRAFANA_TEMPO_TOKEN` | Admin (usage report) |
+| `GRAFANA_LOKI_TOKEN` | Admin (error logs) |
+
+### Registration and deployment
+
+Use the Cloudflare dashboard's **Secrets Store** page, or authenticate Wrangler
+and create each required name interactively from the repository root:
+
+```sh
+pnpm --filter @beutl/web exec wrangler login
+pnpm --filter @beutl/web exec wrangler secrets-store secret create de6d4a1dd7db4471aef97c1e0db1ee05 --name BETTER_AUTH_SECRET --scopes workers --remote
+```
+
+Repeat the second command with each name in the table. Enter the value at the
+hidden prompt, not in the command line. Retrieve existing values from the
+original credential source; Worker secret listings expose names, not values.
+Use production values rather than copying development `.env` files blindly.
+
+The CI `CLOUDFLARE_API_TOKEN` needs **Account Secrets Store Edit** in addition
+to its current deployment permissions, even when it only binds existing secrets.
+Every bound secret must have the `workers` scope. See Cloudflare's
+[Workers integration](https://developers.cloudflare.com/secrets-store/integrations/workers/)
+and [access control](https://developers.cloudflare.com/secrets-store/access-control/).
+
+Once all enabled bindings exist, deploy in the existing order: Image, NuGet,
+Web, Admin. `secrets_store_secrets` replaces same-name legacy Worker bindings
+in the deployed version; do not delete live Worker secrets ahead of the cutover.
+Check sign-in/session sharing, desktop JWT validation, image editing, NuGet
+downloads, Stripe webhooks and Git/S3 access after deployment. A build or local
+runtime check does not verify the production store or perform this cutover.
+
+### Rotating application signing secrets
+
+If the existing values cannot be recovered, `BETTER_AUTH_SECRET`, `AUTH_SECRET`
+and `NUGET_DOWNLOAD_SECRET` can each be replaced with a separately generated
+random value (for example, `openssl rand -base64 32`) with these effects:
+
+- `BETTER_AUTH_SECRET`: Web/Admin sessions and in-progress OAuth or passkey
+  operations become invalid. Users must sign in or restart the operation.
+- `AUTH_SECRET`: outstanding email-change and account-deletion confirmation
+  links become invalid. Request a new confirmation email.
+- `NUGET_DOWNLOAD_SECRET`: outstanding 120-second download tickets become
+  invalid. Start the download again from Web.
+
+The current application configuration retains user accounts, purchases and
+registered passkeys. Share the new `BETTER_AUTH_SECRET` between Web and Admin,
+and the new `NUGET_DOWNLOAD_SECRET` between Web and NuGet. Complete the related
+Worker deployments together: mixed old/new keys temporarily break session
+sharing or authenticated downloads. Provider-issued credentials must instead
+be obtained or rotated through the corresponding provider.
+
+### Runtime and local development
+
+Worker fetch handlers and Web cron resolve `binding.get()` before calling the
+existing application. Git Durable Objects resolve S3 credentials for both fetch
+and alarm events, and refresh their S3 client when credentials change. Values
+are passed as strings to existing consumers and refreshed in `process.env`
+for Next.js. Reads are scoped to each invocation; failed reads stop it without
+falling back to an old credential. Plain string secrets remain supported during
+migration and for local tests.
+
+`pnpm dev` and `pnpm dev:admin` retain their `.env` workflow. For `wrangler dev`
+or OpenNext `preview`, create **local** entries for every enabled binding, using
+the same store ID and `secret_name` but omitting `--remote`:
+
+```sh
+pnpm --filter @beutl/web exec wrangler secrets-store secret create de6d4a1dd7db4471aef97c1e0db1ee05 --name BETTER_AUTH_SECRET --scopes workers
+```
+
+Repeat in each application's directory (or with its workspace filter): local
+state defaults to that application's `.wrangler/state`. Use development values;
+production store entries are not available locally. Do not also define the
+same bindings in `.dev.vars`; keep ordinary local settings there instead.
+When using a Next.js `.env` beside the Worker config, disable its Wrangler
+autoload with `CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV=false` for Worker previews.
+Next.js still loads `.env` for its own development/build process.
+
+The CI runtime checks seed disposable local stores with test values, exercise
+the real binding API, and remove their temporary state afterwards.
 
 ## NuGet registry deployment
 
@@ -104,10 +231,10 @@ Once any version has been published, its package ID stays permanently reserved
 even if the project or account is deleted.
 
 Configure `beutl-nuget-server` with the same Hyperdrive and object storage as Web.
-Set an identical, new random `NUGET_DOWNLOAD_SECRET` on Web and NuGet. This signs
-120-second, file-bound browser download tickets. Also copy the Web desktop
-`JWT_SECRET`, `JWT_ISSUER` and `JWT_AUDIENCE` to NuGet for existing desktop clients;
-do not copy the image Worker's separate JWT credentials.
+Web and NuGet bind the same `NUGET_DOWNLOAD_SECRET` account secret. This signs
+120-second, file-bound browser download tickets. They also share the desktop
+`JWT_SECRET` account secret; match `JWT_ISSUER` and `JWT_AUDIENCE` in their vars
+for existing desktop clients. Keep the image Worker's separate JWT credentials.
 
 Deploy NuGet before Web, and switch `nuget.beditor.net` to the new Worker during
 the manually managed cutover. The CI deploy order includes NuGet before Web.
@@ -188,7 +315,7 @@ and private image edit) together with:
 - `BEUTL_S3_BUCKET`: the bucket name.
 - `BEUTL_S3_ACCESS_KEY_ID`, `BEUTL_S3_SECRET_ACCESS_KEY`, and, for temporary
   credentials, `BEUTL_S3_SESSION_TOKEN`: all three are credentials and must be
-  stored with `wrangler secret put`, never as `vars`.
+  stored in Secrets Store, never as `vars`. The session-token binding is optional.
 - `BEUTL_S3_REGION`: the signing region. It defaults to `auto`, which R2 and
   MinIO accept; AWS S3, Backblaze B2, and Wasabi need their real region.
 - `BEUTL_S3_FORCE_PATH_STYLE`: `true` (default) requests
@@ -610,8 +737,8 @@ Grafana Tempo. Set these on **the admin Worker** (or its local server environmen
 | `GRAFANA_TEMPO_USER` | Grafana Cloud Traces tenant/user ID |
 | `GRAFANA_TEMPO_TOKEN` | Secret access-policy token with `traces:read` for that stack |
 
-Store the token with `wrangler secret put GRAFANA_TEMPO_TOKEN`, not in source,
-public variables or a browser bundle. The page checks `requireAdmin` before any
+Create `GRAFANA_TEMPO_TOKEN` in Secrets Store and enable its commented Admin
+binding. Keep it out of source, public variables and browser bundles. The page checks `requireAdmin` before any
 query. No browser calls Grafana directly. Missing configuration, failed/partial
 queries and a valid empty report are displayed as different states.
 
@@ -650,7 +777,8 @@ Loki, independently of the Tempo usage report. Set these on the admin Worker:
 | `GRAFANA_LOKI_USER` | Grafana Cloud Logs tenant/user ID |
 | `GRAFANA_LOKI_TOKEN` | Secret access-policy token with `logs:read` for that stack |
 
-Store `GRAFANA_LOKI_TOKEN` as a Worker secret. The same administrator guard runs
+Create `GRAFANA_LOKI_TOKEN` in Secrets Store and enable its commented Admin
+binding. The same administrator guard runs
 before querying; credentials and raw upstream errors are never sent to the
 browser. No additional desktop collector or database migration is needed.
 

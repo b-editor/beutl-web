@@ -16,6 +16,7 @@ import { collectUnreachableHistory } from "./history-collection";
 import { referencedLfsOids } from "./lfs-references";
 import { ResumableSha256, type Sha256State } from "./resumable-sha256";
 import type { GitScope } from "./tokens";
+import { resolveWorkerSecrets, type WorkerSecretBindings } from "../worker-secrets";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const MEDIA = "/internal/git/media/:oid{[0-9a-f]{64}}";
@@ -29,6 +30,7 @@ const BROWSE_CACHE_TTL_MS = 5 * 60_000;
 const LFS_COLLECTION_GRACE_MS = 7 * 24 * 60 * 60 * 1000 + LFS_TOUCH_PRECISION_MS;
 const LFS_COLLECTION_BATCH = 100;
 type Environment = GitS3Environment & GitDatabaseEnvironment;
+const STORAGE_SECRETS = ["BEUTL_S3_ACCESS_KEY_ID", "BEUTL_S3_SECRET_ACCESS_KEY", "BEUTL_S3_SESSION_TOKEN"] as const;
 type Record = LfsRecord & { gcComplete?: boolean };
 const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 type Routes = { Variables: { repoId: string } };
@@ -53,22 +55,29 @@ const sameHashState = (a: Sha256State | undefined, b: Sha256State | undefined) =
 export class GitRepositoryDurableObject {
   private tail: Promise<unknown> = Promise.resolve();
   private bucket?: GitObjectBucket;
+  private resolvedEnv?: Environment;
   /** What the dashboard's views read, so browsing folder after folder reads the bucket once. */
   private browseCache?: { repoId: string; store: CachedObjectStore };
   private readonly accounting?: GitStorageAccounting;
   private readonly app: Hono<Routes>;
-  constructor(private readonly state: { storage: GitDurableStorage }, private readonly env: Environment,
+  constructor(private readonly state: { storage: GitDurableStorage }, private readonly env: WorkerSecretBindings<Environment>,
     bucket?: GitObjectBucket, accounting?: GitStorageAccounting) {
     this.bucket = bucket;
     this.accounting = accounting ?? (bucket ? undefined : databaseGitStorageAccounting);
     this.app = this.routes();
   }
-  private objectBucket(): GitObjectBucket { return this.bucket ??= new S3GitObjectBucket(this.env); }
+  private objectBucket(): GitObjectBucket { return this.bucket ??= new S3GitObjectBucket(this.resolvedEnv!); }
   private enqueue<T>(work: () => Promise<T>, { browse = false } = {}): Promise<T> {
-    const run = () => {
+    const run = async () => {
+      const env = await resolveWorkerSecrets<Environment>(this.env, STORAGE_SECRETS);
+      if (this.resolvedEnv && STORAGE_SECRETS.some((key) => this.resolvedEnv![key] !== env[key])) {
+        this.bucket = undefined;
+        this.browseCache = undefined;
+      }
+      this.resolvedEnv = env;
       // Anything but a dashboard view may change the stored repository.
       if (!browse) this.browseCache = undefined;
-      return this.accounting === databaseGitStorageAccounting ? withGitDatabase(this.env, work) : work();
+      return this.accounting === databaseGitStorageAccounting ? withGitDatabase(env, work) : work();
     };
     const result = this.tail.then(run);
     this.tail = result.then(() => undefined, () => undefined);
