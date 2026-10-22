@@ -30,12 +30,6 @@ async function createAuthWithPrisma() {
     trustedOrigins: [
       process.env.BETTER_AUTH_URL || "http://localhost:3000",
     ],
-    onAPIError: {
-      // OAuth callback の state 不一致等のリダイレクト先。既定は "/"
-      // (= ランディングページ) で、失敗が何の説明もなく LP に見えるため
-      // 説明的なエラー面 (/{lang}/account/error) へ寄せる。
-      errorURL: "/account/error",
-    },
     emailAndPassword: {
       enabled: false,
     },
