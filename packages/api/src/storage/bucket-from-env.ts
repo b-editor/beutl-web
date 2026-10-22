@@ -79,7 +79,7 @@ function r2Binding(env: object): R2BucketLike | undefined {
 }
 
 function s3Configured(env: object): boolean {
-  return Object.values(S3_KEYS).some((key) => readString(env, key) !== undefined);
+  return [S3_KEYS.endpoint, S3_KEYS.bucket].some((key) => readString(env, key) !== undefined);
 }
 
 export function s3BucketOptionsFromEnv(env: object): S3CompatibleBucketOptions {

@@ -44,7 +44,7 @@ configurations.** Creating bindings does not copy existing Worker secret values.
 
 ### Required account secrets
 
-Create these 14 distinct names with scope `workers`. Use the existing production
+Create these 20 distinct names with scope `workers`. Use the existing production
 values when migrating so sessions, desktop tokens and download tickets continue
 to work. Shared bindings read one account secret rather than separate copies.
 
@@ -64,6 +64,12 @@ to work. Shared bindings read one account secret rather than separate copies.
 | `ADMIN_STRIPE_SECRET_KEY` | Admin: `STRIPE_SECRET_KEY` (keep its existing restricted key) |
 | `STRIPE_ENDPOINT_SECRET` | Web: Stripe webhook signing key |
 | `OPENROUTER_API_KEY` | Web and Image: `OPENROUTER_API_KEY` |
+| `OPENROUTER_WEBHOOK_SECRET` | Web: video callbacks |
+| `VERCEL_AI_GATEWAY_API_KEY` | Web, Admin and Image |
+| `BEUTL_S3_ACCESS_KEY_ID` | All four, including Web's Git Durable Objects |
+| `BEUTL_S3_SECRET_ACCESS_KEY` | All four, including Web's Git Durable Objects |
+| `GRAFANA_TEMPO_TOKEN` | Admin: usage report |
+| `GRAFANA_LOKI_TOKEN` | Admin: error logs |
 
 The private image key must remain different from the desktop `JWT_SECRET`.
 Do not replace Admin's restricted Stripe credential with Web's payment key.
@@ -72,24 +78,15 @@ remain ordinary `vars`. Database runtime access remains through Hyperdrive;
 `DATABASE_URL` for migrations and `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` for
 builds stay in their existing local/CI environments.
 
-These optional bindings are included as commented examples in the corresponding
-Wrangler files. Create the secret and enable its binding only when needed:
+`BEUTL_S3_SESSION_TOKEN` remains a commented binding in all four Wrangler files.
+Create this additional secret and enable its binding only when using temporary
+S3 credentials.
 
-| Optional secret | Workers |
-| --- | --- |
-| `OPENROUTER_WEBHOOK_SECRET` | Web (video callbacks) |
-| `VERCEL_AI_GATEWAY_API_KEY` | Web and Image |
-| `BEUTL_S3_ACCESS_KEY_ID` | Workers using S3 storage, including Web's Git Durable Objects |
-| `BEUTL_S3_SECRET_ACCESS_KEY` | Workers using S3 storage, including Web's Git Durable Objects |
-| `BEUTL_S3_SESSION_TOKEN` | All four (temporary S3 credentials only) |
-| `GRAFANA_TEMPO_TOKEN` | Admin (usage report) |
-| `GRAFANA_LOKI_TOKEN` | Admin (error logs) |
-
-For R2-only storage, leave all `BEUTL_S3_*` bindings and vars unset. When enabling
-S3 as the primary store or a fallback, enable both credential bindings together
-with `BEUTL_S3_ENDPOINT` and `BEUTL_S3_BUCKET` on each Worker using that store.
-[Hosted Git](hosted-git.md#storage-configuration) also requires these S3 bindings
-on Web and its Durable Objects, even when ordinary files use R2.
+For R2-only storage, leave `BEUTL_S3_ENDPOINT` and `BEUTL_S3_BUCKET` unset;
+the bound credentials alone do not enable an S3 fallback. When enabling S3 as
+the primary store or a fallback, set both variables on each Worker using that
+store. [Hosted Git](hosted-git.md#storage-configuration) also requires the S3
+connection settings on Web, even when ordinary files use R2.
 
 ### Registration and deployment
 
@@ -321,9 +318,9 @@ and private image edit) together with:
 - `BEUTL_S3_BUCKET`: the bucket name.
 - `BEUTL_S3_ACCESS_KEY_ID`, `BEUTL_S3_SECRET_ACCESS_KEY`, and, for temporary
   credentials, `BEUTL_S3_SESSION_TOKEN`: all three are credentials and must be
-  stored in Secrets Store, never as `vars`. Enable the corresponding commented
-  bindings in each Wrangler configuration. The session token is only needed
-  for temporary credentials.
+  stored in Secrets Store, never as `vars`. The access key bindings are enabled
+  in all four Wrangler configurations. Enable the commented session token
+  binding only for temporary credentials.
 - `BEUTL_S3_REGION`: the signing region. It defaults to `auto`, which R2 and
   MinIO accept; AWS S3, Backblaze B2, and Wasabi need their real region.
 - `BEUTL_S3_FORCE_PATH_STYLE`: `true` (default) requests
@@ -376,8 +373,10 @@ from the oldest onwards; each bulk run is bounded and resumes from where the
 previous one stopped. A move holds a lease on the File record for its
 duration (the same file cannot be moved from two places at once), copies the
 object, checks the copy's size against the File record, and only then
-deletes the source; each moved file is written to the audit log. A half-configured provider is an error rather than a
-skipped fallback, so a stale `BEUTL_S3_*` value must be removed completely.
+deletes the source; each moved file is written to the audit log. An S3 endpoint
+or bucket enables fallback validation, so incomplete connection settings remain
+an error. Remove both `BEUTL_S3_ENDPOINT` and `BEUTL_S3_BUCKET` when retiring the
+S3 fallback; credentials alone do not enable it.
 
 Multipart uploads in flight at the moment of the switch belong to the old
 store. Their completion and abort are retried against it when the primary
@@ -530,7 +529,7 @@ been registered. Setting it only on Web leaves those modes hidden in the
 admin catalog. Configure secrets separately for each deployed
 Worker/environment; they are not inherited from another Worker.
 
-An OpenRouter-only installation may omit the Gateway key on all three Workers;
+An OpenRouter-only installation may remove the Gateway binding on all three Workers;
 the Gateway-only built-in modes then remain unavailable. Gateway supports
 image, transcription, and translation operations as well as video, so the key
 requirement is not limited to registered video models. There is no
@@ -745,8 +744,8 @@ Grafana Tempo. Set these on **the admin Worker** (or its local server environmen
 | `GRAFANA_TEMPO_USER` | Grafana Cloud Traces tenant/user ID |
 | `GRAFANA_TEMPO_TOKEN` | Secret access-policy token with `traces:read` for that stack |
 
-Create `GRAFANA_TEMPO_TOKEN` in Secrets Store and enable its commented Admin
-binding. Keep it out of source, public variables and browser bundles. The page checks `requireAdmin` before any
+Create `GRAFANA_TEMPO_TOKEN` in Secrets Store; its Admin binding is enabled.
+Keep it out of source, public variables and browser bundles. The page checks `requireAdmin` before any
 query. No browser calls Grafana directly. Missing configuration, failed/partial
 queries and a valid empty report are displayed as different states.
 
@@ -785,8 +784,8 @@ Loki, independently of the Tempo usage report. Set these on the admin Worker:
 | `GRAFANA_LOKI_USER` | Grafana Cloud Logs tenant/user ID |
 | `GRAFANA_LOKI_TOKEN` | Secret access-policy token with `logs:read` for that stack |
 
-Create `GRAFANA_LOKI_TOKEN` in Secrets Store and enable its commented Admin
-binding. The same administrator guard runs
+Create `GRAFANA_LOKI_TOKEN` in Secrets Store; its Admin binding is enabled.
+The same administrator guard runs
 before querying; credentials and raw upstream errors are never sent to the
 browser. No additional desktop collector or database migration is needed.
 
