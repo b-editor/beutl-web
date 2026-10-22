@@ -6,7 +6,6 @@
   "exports": {
     "./audit-log": "./src/audit-log.ts",
     "./auth-hooks": "./src/auth-hooks.ts",
-    "./oauth-email-guard": "./src/oauth-email-guard.ts",
     "./auth-email-rate-limit": "./src/auth-email-rate-limit.ts",
     "./language": "./src/language.ts",
     "./magic-link-email": "./src/magic-link-email.ts",
