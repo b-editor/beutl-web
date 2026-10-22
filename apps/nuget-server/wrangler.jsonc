@@ -11,10 +11,9 @@
   "secrets_store_secrets": [
     { "binding": "JWT_SECRET", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "JWT_SECRET" },
     { "binding": "NUGET_DOWNLOAD_SECRET", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "NUGET_DOWNLOAD_SECRET" },
-    // Optional: create the secret, then uncomment its binding when using this integration.
-    // S3 also requires BEUTL_S3_ENDPOINT and BEUTL_S3_BUCKET; leave disabled for R2-only storage.
-    // { "binding": "BEUTL_S3_ACCESS_KEY_ID", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "BEUTL_S3_ACCESS_KEY_ID" },
-    // { "binding": "BEUTL_S3_SECRET_ACCESS_KEY", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "BEUTL_S3_SECRET_ACCESS_KEY" },
+    { "binding": "BEUTL_S3_ACCESS_KEY_ID", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "BEUTL_S3_ACCESS_KEY_ID" },
+    { "binding": "BEUTL_S3_SECRET_ACCESS_KEY", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "BEUTL_S3_SECRET_ACCESS_KEY" },
+    // Optional: enable only when using temporary S3 credentials.
     // { "binding": "BEUTL_S3_SESSION_TOKEN", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "BEUTL_S3_SESSION_TOKEN" },
   ],
   "observability": { "enabled": true, "head_sampling_rate": 1 },

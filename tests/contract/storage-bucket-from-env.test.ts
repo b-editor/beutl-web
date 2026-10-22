@@ -149,6 +149,10 @@ describe("choosing the storage provider from the environment", () => {
   it("refuses a half-configured fallback rather than skipping it", () => {
     expect(() => createStorageBucket({ BEUTL_R2_BUCKET: binding, BEUTL_S3_ENDPOINT: "https://s3.example.test" }))
       .toThrow(/BEUTL_S3_BUCKET is required/u);
+    expect(() => createStorageBucket({ BEUTL_R2_BUCKET: binding, BEUTL_S3_BUCKET: "beutl" }))
+      .toThrow(/BEUTL_S3_ENDPOINT is required/u);
+    expect(() => createStorageBucket({ ...s3Env, BEUTL_STORAGE_PROVIDER: "r2", BEUTL_R2_BUCKET: binding, BEUTL_S3_SECRET_ACCESS_KEY: "" }))
+      .toThrow(/BEUTL_S3_SECRET_ACCESS_KEY is required/u);
   });
 
   it("builds one bucket per env object", () => {
