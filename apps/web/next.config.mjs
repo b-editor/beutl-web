@@ -5,6 +5,27 @@ const nextConfig = {
   async redirects() {
     return dashboardRedirects();
   },
+  // /api は middleware の matcher から除外されているため、ページ応答に付与される
+  // HSTS と Referrer-Policy をここで補う。X-Content-Type-Options と
+  // X-Frame-Options は /api/contents の応答が自前で付けるため入れない
+  // (重複した値は単一トークンを期待するヘッダーの効力を失わせる)。
+  async headers() {
+    return [
+      {
+        source: "/api/:path*",
+        headers: [
+          {
+            key: "Strict-Transport-Security",
+            value: "max-age=31536000; includeSubDomains",
+          },
+          {
+            key: "Referrer-Policy",
+            value: "strict-origin-when-cross-origin",
+          },
+        ],
+      },
+    ];
+  },
   images: {
     remotePatterns: [
       {

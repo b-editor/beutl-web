@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { localeMiddleware } from "@beutl/next/middleware";
+import { applySecurityHeaders } from "@beutl/next/security-headers";
 import { refuseOversizedAiUpload } from "@/lib/ai-upload-guard";
 
 // matcher は Next.js がこのファイルから静的に読み取るため、共有パッケージへ
@@ -8,9 +9,9 @@ export function middleware(request: NextRequest) {
   // Action が FormData を組み立てる前に。境界ではない——素通りする道は
   // refuseOversizedAiUpload の説明にある。
   const oversized = refuseOversizedAiUpload(request);
-  if (oversized) return oversized;
-
-  return localeMiddleware(request);
+  // 413 の応答にも同じヘッダーを付けるため、localeMiddleware の戻り値だけで
+  // なく置き換わりの応答にも通す。
+  return applySecurityHeaders(oversized ?? localeMiddleware(request));
 }
 
 export const config = {
