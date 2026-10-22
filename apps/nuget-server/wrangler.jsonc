@@ -7,6 +7,16 @@
   "workers_dev": false,
   "preview_urls": false,
   "keep_vars": true,
+  // Create these account secrets before deploying. See docs/deployment.md#secrets-store.
+  "secrets_store_secrets": [
+    { "binding": "JWT_SECRET", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "JWT_SECRET" },
+    { "binding": "NUGET_DOWNLOAD_SECRET", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "NUGET_DOWNLOAD_SECRET" },
+    // Optional: create the secret, then uncomment its binding when using this integration.
+    // S3 also requires BEUTL_S3_ENDPOINT and BEUTL_S3_BUCKET; leave disabled for R2-only storage.
+    // { "binding": "BEUTL_S3_ACCESS_KEY_ID", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "BEUTL_S3_ACCESS_KEY_ID" },
+    // { "binding": "BEUTL_S3_SECRET_ACCESS_KEY", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "BEUTL_S3_SECRET_ACCESS_KEY" },
+    // { "binding": "BEUTL_S3_SESSION_TOKEN", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "BEUTL_S3_SESSION_TOKEN" },
+  ],
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   "hyperdrive": [{ "binding": "BEUTL_DATABASE_HYPERDRIVE", "id": "34ad44345f2f45ea97c3608b0567a878" }],
   "r2_buckets": [{ "binding": "BEUTL_R2_BUCKET", "bucket_name": "beutl-dev" }],

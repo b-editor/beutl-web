@@ -1,4 +1,5 @@
 import { fetchWithBodyLimit } from "@beutl/api/worker-body-limit";
+import { resolveWorkerSecrets } from "@beutl/api/worker-secrets";
 import openNext from "./.open-next/worker.js";
 
 export { DOQueueHandler, DOShardedTagCache, BucketCachePurge } from "./.open-next/worker.js";
@@ -8,7 +9,7 @@ const worker = {
     // Admin actions carry form fields only; keep Next's default 1 MiB cap
     // outside OpenNext as well, before authentication or body buffering.
     return fetchWithBodyLimit(request, env, ctx,
-      (bounded, nextEnv, nextCtx) => openNext.fetch(bounded, nextEnv, nextCtx),
+      async (bounded, nextEnv, nextCtx) => openNext.fetch(bounded, await resolveWorkerSecrets(nextEnv), nextCtx),
       1024 * 1024);
   },
 };

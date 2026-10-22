@@ -10,6 +10,7 @@ import {
   aiScreenUploadLimit,
 } from "@beutl/core";
 import { aiApiMultipartBodyLimit } from "../../packages/api/src/ai/upload-limits";
+import { resolveWorkerSecrets } from "../../packages/api/src/worker-secrets";
 
 // The test must reach the multipart parser through the real Worker route. Keep
 // the pre-parse database lookups local so the body-limit assertion is not tied
@@ -114,6 +115,76 @@ describe("embedded API env → process.env コピー", () => {
     );
 
     expect(process.env.BEUTL_DATABASE_HYPERDRIVE).toBeUndefined();
+  });
+
+  it("resolves account secrets before the API reads its environment", async () => {
+    const get = vi.fn(async () => "store-jwt-secret");
+    const bucket = { get: vi.fn(), put: vi.fn() };
+    const bindings = {
+      BEUTL_DATABASE_HYPERDRIVE: { connectionString: "postgres://test" },
+      BEUTL_R2_BUCKET: bucket,
+      JWT_SECRET: { get },
+    };
+    const response = await worker.fetch(new Request(
+      "https://beutl.beditor.net/api/v2/identity/signInWith?provider=github",
+    ), bindings);
+    expect(response.status).toBe(307);
+    expect(process.env.JWT_SECRET).toBe("store-jwt-secret");
+    expect(get).toHaveBeenCalledOnce();
+    expect(bucket.get).not.toHaveBeenCalled();
+    expect(bindings.JWT_SECRET).toEqual({ get });
+  });
+
+  it("refreshes rotated secrets without mutating the platform bindings", async () => {
+    const get = vi.fn().mockResolvedValueOnce("first").mockResolvedValueOnce("rotated");
+    const bindings = { JWT_SECRET: { get } };
+    const first = await resolveWorkerSecrets(bindings);
+    const second = await resolveWorkerSecrets(bindings);
+    expect(first.JWT_SECRET).toBe("first");
+    expect(second.JWT_SECRET).toBe("rotated");
+    expect(process.env.JWT_SECRET).toBe("rotated");
+    expect(bindings.JWT_SECRET.get).toBe(get);
+  });
+
+  it("preserves a frozen string environment for local development", async () => {
+    const bindings = Object.freeze({ JWT_SECRET: "local-string-secret" });
+    expect(await resolveWorkerSecrets(bindings)).toBe(bindings);
+    expect(process.env.JWT_SECRET).toBe("local-string-secret");
+  });
+
+  it("fails without exposing provider errors or partially updating secrets, then retries", async () => {
+    process.env.JWT_SECRET = "old-jwt";
+    process.env.STRIPE_SECRET_KEY = "old-stripe";
+    const get = vi.fn().mockRejectedValueOnce(new Error("provider included sensitive-value"))
+      .mockResolvedValueOnce("new-stripe");
+    const bindings = { JWT_SECRET: { get: async () => "new-jwt" }, STRIPE_SECRET_KEY: { get } };
+    await expect(resolveWorkerSecrets(bindings)).rejects.toThrow(
+      /^Unable to resolve Secrets Store binding STRIPE_SECRET_KEY$/u,
+    );
+    expect(process.env.JWT_SECRET).toBe("old-jwt");
+    expect(process.env.STRIPE_SECRET_KEY).toBe("old-stripe");
+    await resolveWorkerSecrets(bindings);
+    expect(process.env.JWT_SECRET).toBe("new-jwt");
+    expect(process.env.STRIPE_SECRET_KEY).toBe("new-stripe");
+  });
+
+  it.each(["", undefined, null, {}])("rejects an invalid Secrets Store value: %j", async (value) => {
+    await expect(resolveWorkerSecrets({ JWT_SECRET: { get: async () => value } }))
+      .rejects.toThrow("Unable to resolve Secrets Store binding JWT_SECRET");
+  });
+
+  it("does not share in-flight I/O between concurrent requests", async () => {
+    const gates = [Promise.withResolvers<string>(), Promise.withResolvers<string>()];
+    const get = vi.fn().mockImplementationOnce(() => gates[0].promise)
+      .mockImplementationOnce(() => gates[1].promise);
+    const bindings = { JWT_SECRET: { get } };
+    const first = resolveWorkerSecrets(bindings);
+    const second = resolveWorkerSecrets(bindings);
+    expect(get).toHaveBeenCalledTimes(2);
+    gates[0].resolve("first-request");
+    gates[1].resolve("second-request");
+    expect((await first).JWT_SECRET).toBe("first-request");
+    expect((await second).JWT_SECRET).toBe("second-request");
   });
 });
 

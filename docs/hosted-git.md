@@ -40,8 +40,9 @@ Configure the Web Worker (`apps/web/wrangler.jsonc`) with a private B2 bucket an
 | `BEUTL_S3_SESSION_TOKEN` | Session token for temporary credentials, when required (optional secret) |
 
 The key needs object read, write, list, version deletion and multipart operations
-for `git/` and `git-lfs/`. Keep credentials in Worker secrets and ignored local
-configuration. Presigned LFS upload URLs reveal the key ID and bucket name, not
+for `git/` and `git-lfs/`. Keep credentials in [Secrets Store](deployment.md#secrets-store) and ignored local
+configuration. Enable the corresponding commented S3 Secrets Store bindings in
+Web's Wrangler configuration. Presigned LFS upload URLs reveal the key ID and bucket name, not
 the application key. The checked-in Web Wrangler configuration includes the SQLite Durable
 Object binding/migration and leaves the feature disabled. Use Workers Paid for
 the bundle size and bounded Git pack processing.

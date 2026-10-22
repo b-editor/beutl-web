@@ -10,6 +10,7 @@ import { apiErrorResponse, apiOnErrorHandler, fileTooLargeApiResponse } from "@b
 import { getUserIdFromHeaders } from "@beutl/api/api/auth";
 import { setR2BucketProvider, type R2BucketLike } from "@beutl/api/ai/r2-provider";
 import { resolveStorageBucket } from "@beutl/api/storage/bucket-from-env";
+import { resolveWorkerSecrets, type WorkerSecretBindings } from "@beutl/api/worker-secrets";
 import aiImages from "@beutl/api/v3/ai/images";
 
 export interface ImageWorkerEnv {
@@ -62,7 +63,7 @@ function configureRuntime(env: ImageWorkerEnv): string {
   return connectionString;
 }
 
-export async function fetchImageEdit(request: Request, env: ImageWorkerEnv): Promise<Response> {
+export async function fetchImageEdit(request: Request, bindings: WorkerSecretBindings<ImageWorkerEnv>): Promise<Response> {
   if (request.method !== "POST" || new URL(request.url).pathname !== EDIT_PATH) {
     await request.body?.cancel();
     return new Response(null, { status: 404 });
@@ -80,6 +81,7 @@ export async function fetchImageEdit(request: Request, env: ImageWorkerEnv): Pro
       return await fileTooLargeApiResponse();
     }
   }
+  const env = await resolveWorkerSecrets<ImageWorkerEnv>(bindings);
   const connectionString = configureRuntime(env);
   // Reject unauthenticated requests before locking the body into a stream
   // wrapper. The image endpoint verifies the same token again before billing.

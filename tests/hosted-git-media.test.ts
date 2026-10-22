@@ -23,6 +23,46 @@ class Storage implements GitDurableStorage {
   async getAlarm() { return this.alarm; }
   async setAlarm(time: number) { this.alarm = time; }
 }
+
+it("refreshes Git Durable Object credentials and cached storage across fetch and alarm events", async () => {
+  const storage = new Storage();
+  const key = vi.fn().mockResolvedValue("first-key");
+  const secret = vi.fn().mockResolvedValue("store-secret");
+  const requests: Request[] = [];
+  vi.stubEnv("BEUTL_S3_ACCESS_KEY_ID", undefined);
+  vi.stubEnv("BEUTL_S3_SECRET_ACCESS_KEY", undefined);
+  vi.stubGlobal("fetch", vi.fn(async (request: Request) => {
+    requests.push(request);
+    return new URL(request.url).searchParams.has("list-type")
+      ? new Response("<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>")
+      : new Response(null, { status: 404 });
+  }));
+  try {
+    const durable = new GitRepositoryDurableObject({ storage }, {
+      BEUTL_S3_ENDPOINT: "https://s3.example.test", BEUTL_S3_BUCKET: "test", BEUTL_S3_REGION: "test",
+      BEUTL_S3_ACCESS_KEY_ID: { get: key }, BEUTL_S3_SECRET_ACCESS_KEY: { get: secret },
+    }, undefined, {} as never);
+    const request = () => new Request("https://git.internal/internal/git/browse/refs", {
+      headers: { "x-beutl-repo-id": repoId, "x-beutl-git-scope": "read" },
+    });
+    for (const value of ["first-key", "rotated-key"]) {
+      key.mockResolvedValue(value);
+      requests.length = 0;
+      expect((await durable.fetch(request())).status).toBe(200);
+      expect(requests.length).toBeGreaterThan(0);
+      expect(requests.every((r) => r.headers.get("authorization")?.includes(`Credential=${value}/`))).toBe(true);
+    }
+    secret.mockRejectedValueOnce(new Error("unavailable"));
+    await expect(durable.fetch(request())).rejects.toThrow("Unable to resolve Secrets Store binding BEUTL_S3_SECRET_ACCESS_KEY");
+    // A failed read must not poison the serialized invocation queue.
+    expect((await durable.fetch(request())).status).toBe(200);
+    await storage.delete("repoId");
+    await durable.alarm();
+    expect(key).toHaveBeenCalledTimes(5);
+    expect(secret).toHaveBeenCalledTimes(5);
+  } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
+});
+
 const checksum = (hex: string) => Buffer.from(hex, "hex").toString("base64");
 class Bucket {
   versions = new Map<string, { key: string; bytes: Uint8Array; size: number; checksum?: string }>();

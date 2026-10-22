@@ -36,7 +36,7 @@ describe("isolated image Worker boundary", () => {
     expect(await response.json()).toMatchObject({ error_code: "authenticationIsRequired" });
   });
 
-  it("accepts the dedicated image token and reaches the existing edit contract", async () => {
+  it.each([false, true])("accepts the dedicated image token (Secrets Store: %s)", async (store) => {
     const now = Math.floor(Date.now() / 1000);
     const token = await sign({
       "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": "user-1",
@@ -47,7 +47,7 @@ describe("isolated image Worker boundary", () => {
     }, ENV.JWT_SECRET!, "HS256");
     const response = await fetchImageEdit(request("/api/v3/ai/images/edit", {
       authorization: `Bearer ${token}`,
-    }), ENV);
+    }), { ...ENV, JWT_SECRET: store ? { get: async () => ENV.JWT_SECRET! } : ENV.JWT_SECRET });
 
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ error_code: "invalidRequestBody" });

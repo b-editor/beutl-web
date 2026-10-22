@@ -22,8 +22,17 @@ describe("email template", () => {
     vi.stubGlobal("fetch", fetchMock);
   });
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     fetchMock.mockReset();
+  });
+
+  it("uses the current Resend key after a Secrets Store rotation", async () => {
+    for (const key of ["first-key", "rotated-key"]) {
+      vi.stubEnv("AUTH_RESEND_KEY", key);
+      await capture({ to: "user@example.com", subject: "Hello", body: "<p>Hi</p>" });
+      expect(fetchMock.mock.calls.at(-1)![1].headers.Authorization).toBe(`Bearer ${key}`);
+    }
   });
 
   it("renders the body on the web's dark palette with header and footer", async () => {

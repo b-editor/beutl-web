@@ -1,3 +1,5 @@
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   configuredStorageProviders,
@@ -5,6 +7,9 @@ import {
   resolveStorageBucket,
   storageProviderOf,
 } from "@beutl/api";
+import { resolveWorkerSecrets } from "@beutl/api/worker-secrets";
+
+const { experimental_readRawConfig } = createRequire(new URL("../../apps/web/package.json", import.meta.url))("wrangler");
 
 const binding = { put: vi.fn(), get: vi.fn(), delete: vi.fn(), head: vi.fn() };
 
@@ -32,6 +37,26 @@ describe("choosing the storage provider from the environment", () => {
     expect(storageProviderOf({})).toBe("r2");
     expect(createStorageBucket({ BEUTL_R2_BUCKET: binding })).toBe(binding);
   });
+
+  it.each(["web", "admin", "image-worker", "nuget-server"])(
+    "keeps the checked-in %s Worker configuration usable with R2 alone", async (app) => {
+      const { rawConfig } = experimental_readRawConfig({
+        config: fileURLToPath(new URL(`../../apps/${app}/wrangler.jsonc`, import.meta.url)),
+      });
+      for (const key of Object.keys(process.env).filter((key) => key.startsWith("BEUTL_S3_") || key === "BEUTL_STORAGE_PROVIDER")) {
+        vi.stubEnv(key, undefined);
+      }
+      const secrets = Object.fromEntries(rawConfig.secrets_store_secrets.map(({ binding: name }: { binding: string }) => {
+        vi.stubEnv(name, undefined);
+        return [name, { get: async () => "storage-config-test-secret" }];
+      }));
+      const env = await resolveWorkerSecrets({ ...rawConfig.vars, ...secrets, BEUTL_R2_BUCKET: binding });
+      const bucket = resolveStorageBucket(env);
+      expect(bucket).toBe(binding);
+      await bucket.put("file", "content");
+      expect(binding.put).toHaveBeenCalledWith("file", "content");
+    },
+  );
 
   it("explains a missing R2 binding instead of falling back", () => {
     expect(() => createStorageBucket({})).toThrow(/BEUTL_R2_BUCKET binding not found/u);

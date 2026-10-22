@@ -16,6 +16,7 @@ import { fetchWithBodyLimit } from "./src/lib/worker-body-limit";
 import { keepRenderingAfterDisconnect } from "./src/lib/worker-render-disconnect";
 import { freeImageTransformsEnabled, isContentImageTransformRequest } from "./src/lib/image-transform-policy";
 import apiRuntime, { isApiRequest } from "@beutl/api/runtime";
+import { resolveWorkerSecrets } from "@beutl/api/worker-secrets";
 export { GitRepositoryDurableObject } from "@beutl/api/runtime";
 //@ts-expect-error: Will be resolved by wrangler build
 import openNext from "./.open-next/worker.js";
@@ -39,8 +40,8 @@ export default {
     // 閲覧者が離れても、ページの描画は閉じずに最後まで続ける。
     // 理由は worker-render-disconnect.ts を参照。
     return await keepRenderingAfterDisconnect(request, ctx, (forwarded) =>
-      fetchWithBodyLimit(forwarded, imageEnv, ctx, (bounded, nextEnv, nextCtx) =>
-        openNext.fetch(bounded, nextEnv, nextCtx),
+      fetchWithBodyLimit(forwarded, imageEnv, ctx, async (bounded, nextEnv, nextCtx) =>
+        openNext.fetch(bounded, await resolveWorkerSecrets(nextEnv), nextCtx),
       ),
     );
   },
