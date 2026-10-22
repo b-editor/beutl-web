@@ -7,6 +7,8 @@ import { profileDisplayName } from "@beutl/core";
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import { onUserCreated } from "@beutl/next/auth-hooks";
 import { authEmailRateLimitHook } from "@beutl/next/auth-email-rate-limit";
+import { enforceOAuthEmailOwnership } from "@beutl/next/oauth-email-guard";
+
 import { sendMagicLinkEmail } from "@beutl/next/magic-link-email";
 import type { Session, User } from "better-auth";
 import { nextCookies } from "better-auth/next-js";
@@ -76,6 +78,12 @@ async function createAuthWithPrisma() {
       },
     },
     user: {
+      // GitHub プロバイダの emailVerified を検査するゲート。GitHub は未検証の
+      // メールでも profile.email になり得るため、サインアップ・紐付け・再
+      // サインインの 3 経路すべてで未検証の GitHub email を拒否する。sign-in
+      // 拒否時には旧設定で発行されたセッションも失効させる
+      // (詳細は packages/next/src/oauth-email-guard.ts)。
+      validateUserInfo: enforceOAuthEmailOwnership,
       additionalFields: {
         createdAt: {
           type: "date",
@@ -90,7 +98,14 @@ async function createAuthWithPrisma() {
     account: {
       accountLinking: {
         enabled: true,
-        trustedProviders: ["google", "github"],
+        // GitHub は任意のメールアドレスを未検証のままアカウントに追加できるため、
+        // プロフィール email の所有証明として email を信じられない。implicit
+        // linking の trustedProviders に入れると、被害者のメールアドレスを
+        // 攻撃者の GitHub に追加して OAuth サインインするだけで被害者アカウントに
+        // 紐付けられ、乗っ取りに至る。GitHub の未検証メールでのサインアップ/
+        // 紐付け/再サインインは user.validateUserInfo の enforceOAuthEmailOwnership
+        // が拒否する (詳細は packages/next/src/oauth-email-guard.ts)。
+        trustedProviders: ["google"],
       },
     },
     hooks: { before: authEmailRateLimitHook },
