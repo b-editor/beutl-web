@@ -15,9 +15,10 @@
     { "binding": "AUTH_GITHUB_SECRET", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "AUTH_GITHUB_SECRET" },
     { "binding": "AUTH_RESEND_KEY", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "AUTH_RESEND_KEY" },
     { "binding": "STRIPE_SECRET_KEY", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "ADMIN_STRIPE_SECRET_KEY" },
-    { "binding": "BEUTL_S3_ACCESS_KEY_ID", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "BEUTL_S3_ACCESS_KEY_ID" },
-    { "binding": "BEUTL_S3_SECRET_ACCESS_KEY", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "BEUTL_S3_SECRET_ACCESS_KEY" },
     // Optional: create the secret, then uncomment its binding when using this integration.
+    // S3 also requires BEUTL_S3_ENDPOINT and BEUTL_S3_BUCKET; leave disabled for R2-only storage.
+    // { "binding": "BEUTL_S3_ACCESS_KEY_ID", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "BEUTL_S3_ACCESS_KEY_ID" },
+    // { "binding": "BEUTL_S3_SECRET_ACCESS_KEY", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "BEUTL_S3_SECRET_ACCESS_KEY" },
     // { "binding": "GRAFANA_TEMPO_TOKEN", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "GRAFANA_TEMPO_TOKEN" },
     // { "binding": "GRAFANA_LOKI_TOKEN", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "GRAFANA_LOKI_TOKEN" },
     // { "binding": "BEUTL_S3_SESSION_TOKEN", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "BEUTL_S3_SESSION_TOKEN" },

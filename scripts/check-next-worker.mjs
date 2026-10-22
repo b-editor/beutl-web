@@ -44,9 +44,6 @@ try {
     vars: {
       BETTER_AUTH_URL: "https://validation.example.com",
       METADATA_BASE_URL: "https://validation.example.com",
-      BEUTL_S3_ENDPOINT: "https://storage.example.test",
-      BEUTL_S3_BUCKET: "runtime-check",
-      BEUTL_S3_REGION: "auto",
     },
     experimental: {
       disableExperimentalWarning: true,

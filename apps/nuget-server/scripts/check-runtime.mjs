@@ -24,10 +24,7 @@ const runtime = new Miniflare(convertV4MiniflareOptions({
   compatibilityFlags: ['nodejs_compat', 'global_fetch_strictly_public', 'enable_request_signal'],
   hyperdrives: { BEUTL_DATABASE_HYPERDRIVE: 'postgresql://unused:unused@127.0.0.1:1/unused' },
   r2Buckets: ['BEUTL_R2_BUCKET'],
-  bindings: {
-    NUGET_PUBLIC_ORIGIN: 'https://nuget.beditor.net',
-    BEUTL_S3_ENDPOINT: 'https://storage.example.test', BEUTL_S3_BUCKET: 'runtime-check', BEUTL_S3_REGION: 'auto',
-  },
+  bindings: { NUGET_PUBLIC_ORIGIN: 'https://nuget.beditor.net' },
   secretsStoreSecrets: Object.fromEntries(secrets.map(({ binding, ...secret }) => [binding, secret])),
 }));
 try {

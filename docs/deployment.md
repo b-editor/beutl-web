@@ -44,7 +44,7 @@ configurations.** Creating bindings does not copy existing Worker secret values.
 
 ### Required account secrets
 
-Create these 16 distinct names with scope `workers`. Use the existing production
+Create these 14 distinct names with scope `workers`. Use the existing production
 values when migrating so sessions, desktop tokens and download tickets continue
 to work. Shared bindings read one account secret rather than separate copies.
 
@@ -64,8 +64,6 @@ to work. Shared bindings read one account secret rather than separate copies.
 | `ADMIN_STRIPE_SECRET_KEY` | Admin: `STRIPE_SECRET_KEY` (keep its existing restricted key) |
 | `STRIPE_ENDPOINT_SECRET` | Web: Stripe webhook signing key |
 | `OPENROUTER_API_KEY` | Web and Image: `OPENROUTER_API_KEY` |
-| `BEUTL_S3_ACCESS_KEY_ID` | All four Workers, including Web's Git Durable Objects |
-| `BEUTL_S3_SECRET_ACCESS_KEY` | All four Workers, including Web's Git Durable Objects |
 
 The private image key must remain different from the desktop `JWT_SECRET`.
 Do not replace Admin's restricted Stripe credential with Web's payment key.
@@ -81,9 +79,17 @@ Wrangler files. Create the secret and enable its binding only when needed:
 | --- | --- |
 | `OPENROUTER_WEBHOOK_SECRET` | Web (video callbacks) |
 | `VERCEL_AI_GATEWAY_API_KEY` | Web and Image |
+| `BEUTL_S3_ACCESS_KEY_ID` | Workers using S3 storage, including Web's Git Durable Objects |
+| `BEUTL_S3_SECRET_ACCESS_KEY` | Workers using S3 storage, including Web's Git Durable Objects |
 | `BEUTL_S3_SESSION_TOKEN` | All four (temporary S3 credentials only) |
 | `GRAFANA_TEMPO_TOKEN` | Admin (usage report) |
 | `GRAFANA_LOKI_TOKEN` | Admin (error logs) |
+
+For R2-only storage, leave all `BEUTL_S3_*` bindings and vars unset. When enabling
+S3 as the primary store or a fallback, enable both credential bindings together
+with `BEUTL_S3_ENDPOINT` and `BEUTL_S3_BUCKET` on each Worker using that store.
+[Hosted Git](hosted-git.md#storage-configuration) also requires these S3 bindings
+on Web and its Durable Objects, even when ordinary files use R2.
 
 ### Registration and deployment
 
@@ -315,7 +321,9 @@ and private image edit) together with:
 - `BEUTL_S3_BUCKET`: the bucket name.
 - `BEUTL_S3_ACCESS_KEY_ID`, `BEUTL_S3_SECRET_ACCESS_KEY`, and, for temporary
   credentials, `BEUTL_S3_SESSION_TOKEN`: all three are credentials and must be
-  stored in Secrets Store, never as `vars`. The session-token binding is optional.
+  stored in Secrets Store, never as `vars`. Enable the corresponding commented
+  bindings in each Wrangler configuration. The session token is only needed
+  for temporary credentials.
 - `BEUTL_S3_REGION`: the signing region. It defaults to `auto`, which R2 and
   MinIO accept; AWS S3, Backblaze B2, and Wasabi need their real region.
 - `BEUTL_S3_FORCE_PATH_STYLE`: `true` (default) requests
