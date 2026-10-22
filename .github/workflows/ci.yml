@@ -19,15 +19,30 @@ env:
   WRANGLER_SEND_METRICS: "false"
 
 jobs:
+  actions-lock:
+    name: Verify Actions lockfile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install actions-lock
+        run: gh extension install github/gh-actions-lock --pin v0.2.0
+      - name: Verify workflow dependencies
+        run: gh actions-lock --verify
+
   test:
     name: Tests
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
+      - uses: voidzero-dev/setup-vp@v1.21.2
         with:
           version: "0.3.2"
           node-version-file: .nvmrc
@@ -53,10 +68,10 @@ jobs:
       COCKROACH_VERSION: v26.2.8
       COCKROACH_SHA256: 8f3fa5b5490355ee39121ecdcc82b18d546b77dce180b476a7869b96322da70c
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
+      - uses: voidzero-dev/setup-vp@v1.21.2
         with:
           version: "0.3.2"
           node-version-file: .nvmrc
@@ -105,10 +120,10 @@ jobs:
       BETTER_AUTH_URL: https://validation.example.com
       METADATA_BASE_URL: https://validation.example.com
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
+      - uses: voidzero-dev/setup-vp@v1.21.2
         with:
           version: "0.3.2"
           node-version-file: .nvmrc
@@ -124,7 +139,7 @@ jobs:
 
   deploy:
     name: Deploy Cloudflare Workers
-    needs: [test, database]
+    needs: [actions-lock, test, database]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -132,7 +147,7 @@ jobs:
       # Next loads local Worker bindings during build; no database is started.
       CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_BEUTL_DATABASE_HYPERDRIVE: postgresql://root@127.0.0.1:26257/beutl_ci?sslmode=disable
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Check deployment credentials
@@ -149,7 +164,7 @@ jobs:
             echo "::error::Set the NEXT_SERVER_ACTIONS_ENCRYPTION_KEY repository secret."
             exit 1
           fi
-      - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
+      - uses: voidzero-dev/setup-vp@v1.21.2
         with:
           version: "0.3.2"
           node-version-file: .nvmrc
