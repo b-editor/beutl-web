@@ -49,6 +49,8 @@ export async function issueNativeAuthCodeForSession({
   try {
     callbackUrl = nativeAuthCallbackUrl(row.continueUrl, code);
   } catch {
+    // 保存済み URL が組めない (スキーム・許可リスト外) ことはデスクトップの
+    // 待ち受けが壊れている扱いであり、呼び出し側には再試行を返すだけで十分。
     return { ok: false, reason: "unsafeContinueUrl" };
   }
 
@@ -81,6 +83,8 @@ export function nativeAuthDestinationHost(
   try {
     url = new URL(continueUrl);
   } catch {
+    // 保存値が URL として解決できない場合、宛先として表示も検証もできない。
+    // null は「同意画面を出さない」ことになり、発行側の検証もここで落ちる。
     return null;
   }
   if (!isAllowedNativeAuthContinueUrl(url)) return null;
