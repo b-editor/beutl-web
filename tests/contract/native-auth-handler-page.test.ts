@@ -75,8 +75,8 @@ const consentUser = {
 };
 
 const consentRedirectTarget = (handlerUrl: string): string => {
-  const handlerPath = `/ja/account/native-auth/continue?returnUrl=${encodeURIComponent(handlerUrl)}`;
-  return `/ja/account/sign-in?returnUrl=${encodeURIComponent(handlerPath)}`;
+  // continue 画面は挟まない。返り先は handler 自身に直結する。
+  return `/ja/account/sign-in?returnUrl=${encodeURIComponent(handlerUrl)}`;
 };
 
 // 修正の核は「ハンドラーの GET 描画ではコードを発行しない」。同意カードが
@@ -113,6 +113,18 @@ describe("native-auth handler page", () => {
     const html = await staticMarkup(await Page(langParams("auth-id")));
     expect(html).toContain("auth:nativeAuth.linkExpired");
     expect(store.allNativeAppAuth()).toEqual([]);
+    // 行を先に検証するため、無効な identifier ではセッション照会すら
+    // 行わない (サインインへ誘導しない)。
+    expect(session.getSession).not.toHaveBeenCalled();
+  });
+
+  it("shows the expired card to an anonymous visit with an unknown identifier", async () => {
+    session.getSession.mockResolvedValueOnce(null);
+
+    const html = await staticMarkup(await Page(langParams("auth-id")));
+    expect(html).toContain("auth:nativeAuth.linkExpired");
+    expect(navigation.redirects).toEqual([]);
+    expect(session.getSession).not.toHaveBeenCalled();
   });
 
   it("never shows or mints a code for an unsafe stored callback", async () => {
@@ -122,6 +134,8 @@ describe("native-auth handler page", () => {
     const html = await staticMarkup(await Page(langParams("auth-id")));
     expect(html).toContain("auth:nativeAuth.linkExpired");
     expect(html).not.toContain("attacker.example");
+    // 宛先が検証を通らない行も、セッション照会の前に落ちる。
+    expect(session.getSession).not.toHaveBeenCalled();
     const [unchanged] = store.allNativeAppAuth();
     expect(unchanged).toMatchObject({ userId: null, code: null, codeExpires: null });
   });
@@ -144,6 +158,8 @@ describe("native-auth handler page", () => {
       failureText: "auth:nativeAuth.issueFailed",
     });
     expect(html).toContain("auth:useAnotherAccount");
+    // アカウント切替も continue を挟まず handler 自身へ返す。
+    expect(html).toContain("sign-up?returnUrl=");
     // GET 描画にコードは出ない (ミントもされない)。
     expect(html).not.toContain("code=");
     const [unchanged] = store.allNativeAppAuth();

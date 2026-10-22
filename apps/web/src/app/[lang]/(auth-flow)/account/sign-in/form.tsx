@@ -14,7 +14,7 @@ import { KeyRound } from "lucide-react";
 import Link from "next/link";
 import { signInWithEmailAction } from "./actions";
 import SubmitButton from "@beutl/ui/submit-button";
-import { useState, useActionState } from "react";
+import { useState, useActionState, useEffect, useRef } from "react";
 import { ErrorDisplay } from "@beutl/ui/error-display";
 import { useToast } from "@beutl/ui/use-toast";
 import { authClient } from "@/lib/auth-client";
@@ -27,15 +27,43 @@ import { resolveSafeRedirectPath } from "@beutl/core";
 
 export default function Form({
   returnUrl,
+  provider,
   lang,
   legalLinks,
-}: { returnUrl?: string; lang: string; legalLinks: React.ReactNode }) {
+}: {
+  returnUrl?: string;
+  provider?: "google" | "github";
+  lang: string;
+  legalLinks: React.ReactNode;
+}) {
   const [state, dispatch] = useActionState(signInWithEmailAction, {});
   const { t } = useTranslation(lang);
   const { oauthLoading, handleOAuthSignIn } = useOAuthSignIn({ returnUrl, lang });
   const [passkeyVerifying, setPasskeyVerifying] = useState(false);
   const router = useRouter();
   const { toast } = useToast();
+
+  // デスクトップ (sign-in-with ルート経由) が provider を指定してきた場合
+  // は自動でソーシャルサインインを開始する。同一タブの戻る操作でループし
+  // ないよう、マウントにつき 1 回、さらに sessionStorage のゲートで 1 回
+  // だけ発火させる。ゲートは返り先 (native-auth の試行ごとに identifier が
+  // 変わる) を含むため、同じタブでの新しいサインイン試行は別の試行として
+  // 自動開始され、戻る操作 (URL が同じ) だけが抑止される。自動開始でき
+  // なかった環境ではボタンから手動で開始できる。
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (!provider || autoStarted.current) return;
+    autoStarted.current = true;
+    const gate = `beutl.oauthAutoStart.${provider}.${returnUrl ?? ""}`;
+    try {
+      if (sessionStorage.getItem(gate)) return;
+      sessionStorage.setItem(gate, "1");
+    } catch {
+      // safari プライベートモード等で sessionStorage が拒否されることがある。
+      // ループ防止のゲートが無くなるだけで自動開始は先へ進めてよい。
+    }
+    void handleOAuthSignIn(provider);
+  }, [provider, returnUrl, handleOAuthSignIn]);
 
   const handlePasskeySignIn = async () => {
     setPasskeyVerifying(true);

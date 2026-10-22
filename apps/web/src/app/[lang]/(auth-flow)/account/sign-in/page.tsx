@@ -8,6 +8,7 @@ export default async function Page(
   props: {
     searchParams: Promise<{
       returnUrl?: string;
+      provider?: string;
     }>;
     params: Promise<{
       lang: string;
@@ -24,6 +25,13 @@ export default async function Page(
 
   const returnUrl = await resolveSafeReturnUrl(searchParams.returnUrl);
 
+  // デスクトップのソーシャルサインイン (sign-in-with ルート経由) は、この
+  // ページで OAuth を自動開始させる。値は限定する。
+  const provider =
+    searchParams.provider === "google" || searchParams.provider === "github"
+      ? searchParams.provider
+      : undefined;
+
   const session = await auth.api.getSession({ headers: await headers(), query: { disableCookieCache: true } });
   if (session) {
     await localRedirect(returnUrl || `/${lang}/dashboard`);
@@ -32,6 +40,7 @@ export default async function Page(
   return (
     <Form
       returnUrl={returnUrl}
+      provider={provider}
       lang={lang}
       legalLinks={
         <AuthLegalLinks
