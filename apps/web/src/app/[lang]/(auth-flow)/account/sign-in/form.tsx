@@ -46,13 +46,15 @@ export default function Form({
   // デスクトップ (sign-in-with ルート経由) が provider を指定してきた場合
   // は自動でソーシャルサインインを開始する。同一タブの戻る操作でループし
   // ないよう、マウントにつき 1 回、さらに sessionStorage のゲートで 1 回
-  // だけ発火させる。自動開始できなかった環境ではボタンから手動で開始で
-  // きる。
+  // だけ発火させる。ゲートは返り先 (native-auth の試行ごとに identifier が
+  // 変わる) を含むため、同じタブでの新しいサインイン試行は別の試行として
+  // 自動開始され、戻る操作 (URL が同じ) だけが抑止される。自動開始でき
+  // なかった環境ではボタンから手動で開始できる。
   const autoStarted = useRef(false);
   useEffect(() => {
     if (!provider || autoStarted.current) return;
     autoStarted.current = true;
-    const gate = `beutl.oauthAutoStart.${provider}`;
+    const gate = `beutl.oauthAutoStart.${provider}.${returnUrl ?? ""}`;
     try {
       if (sessionStorage.getItem(gate)) return;
       sessionStorage.setItem(gate, "1");
@@ -61,7 +63,7 @@ export default function Form({
       // ループ防止のゲートが無くなるだけで自動開始は先へ進めてよい。
     }
     void handleOAuthSignIn(provider);
-  }, [provider, handleOAuthSignIn]);
+  }, [provider, returnUrl, handleOAuthSignIn]);
 
   const handlePasskeySignIn = async () => {
     setPasskeyVerifying(true);
