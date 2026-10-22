@@ -25,7 +25,11 @@ describe("contentSecurityPolicy", () => {
     expect(directive(csp, "default-src")).toBe("default-src 'self'");
     // Next.js App Router の inline bootstrap script が走るため unsafe-inline は
     // 許す (nonce は OpenNext の R2 キャッシュ済み HTML を殺すので採用しない)。
-    expect(directive(csp, "script-src")).toBe("script-src 'self' 'unsafe-inline'");
+    // static.cloudflareinsights.com はゾーン設定でエッジから注入される RUM
+    // ビーコンで、コード側では出せないため許す。
+    expect(directive(csp, "script-src")).toBe(
+      "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com",
+    );
     expect(directive(csp, "style-src")).toBe("style-src 'self' 'unsafe-inline'");
     // markdown 本文の任意 img URL とプロバイダのアバターを https: で許容する。
     // blob: は AI 面のローカルファイルのプレビュー (URL.createObjectURL) 用。
@@ -34,7 +38,9 @@ describe("contentSecurityPolicy", () => {
     // blob: は動画/音声のプレビューとメタデータ取得 (ai-video-duration.ts が
     // video 要素に createObjectURL を渡す) 用。
     expect(directive(csp, "media-src")).toBe("media-src 'self' blob:");
-    expect(directive(csp, "connect-src")).toBe("connect-src 'self'");
+    expect(directive(csp, "connect-src")).toBe(
+      "connect-src 'self' https://cloudflareinsights.com",
+    );
     expect(directive(csp, "object-src")).toBe("object-src 'none'");
     expect(directive(csp, "frame-ancestors")).toBe("frame-ancestors 'none'");
     expect(directive(csp, "base-uri")).toBe("base-uri 'self'");
