@@ -12,7 +12,6 @@
     "./magic-link-email": "./src/magic-link-email.ts",
     "./local-redirect": "./src/local-redirect.ts",
     "./middleware": "./src/middleware.ts",
-    "./native-auth-issuance": "./src/native-auth-issuance.ts",
     "./security-headers": "./src/security-headers.ts"
   },
   "scripts": {
