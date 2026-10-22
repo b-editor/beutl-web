@@ -133,6 +133,57 @@ it("still sends a complete pack to a client that shares no history", async () =>
   } finally { await f.close(); }
 }, 60_000);
 
+it("clones and fetches repositories with more than 16 nested annotated tags", async () => {
+  const f = await fixture();
+  try {
+    const origin = join(f.root, "origin"); mkdirSync(origin);
+    await f.git(origin, "init", "-q", "-b", "main");
+    await f.commit(origin, "project.txt", "tagged\n");
+    const taggedCommit = (await f.git(origin, "rev-parse", "HEAD")).stdout.trim();
+    let target = taggedCommit;
+    for (let depth = 0; depth < 20; depth++) {
+      const name = `nested-${depth}`;
+      await f.git(origin, "tag", "-a", name, "-m", "nested tag", target);
+      target = name;
+    }
+    await f.git(origin, "remote", "add", "origin", f.url);
+    await f.git(origin, "push", "-q", "origin", "main", `refs/tags/${target}`);
+    expect((await f.git(origin, "ls-remote", "--tags", "origin")).stdout)
+      .toContain(`${taggedCommit}\trefs/tags/${target}^{}`);
+
+    const copy = join(f.root, "copy");
+    await f.git(f.root, "clone", "-q", f.url, copy);
+    expect((await f.git(copy, "rev-parse", `${target}^{}`)).stdout.trim()).toBe(taggedCommit);
+    expect(readFileSync(join(copy, "project.txt"), "utf8")).toBe("tagged\n");
+    await f.commit(origin, "project.txt", "updated\n");
+    await f.git(origin, "push", "-q", "origin", "main");
+    await f.git(copy, "pull", "-q", "--ff-only");
+    expect(readFileSync(join(copy, "project.txt"), "utf8")).toBe("updated\n");
+    await f.git(copy, "fsck", "--no-progress");
+  } finally { await f.close(); }
+}, 60_000);
+
+it("fetches an unadvertised ancestor by SHA into an empty repository", async () => {
+  const f = await fixture();
+  try {
+    const origin = join(f.root, "origin"); mkdirSync(origin);
+    await f.git(origin, "init", "-q", "-b", "main");
+    await f.commit(origin, "project.txt", "first\n");
+    const ancestor = (await f.git(origin, "rev-parse", "HEAD")).stdout.trim();
+    await f.commit(origin, "project.txt", "second\n");
+    await f.git(origin, "remote", "add", "origin", f.url);
+    await f.git(origin, "push", "-q", "origin", "main");
+
+    const copy = join(f.root, "copy"); mkdirSync(copy);
+    await f.git(copy, "init", "-q", "-b", "main");
+    await f.git(copy, "remote", "add", "origin", f.url);
+    await f.git(copy, "fetch", "-q", "origin", ancestor);
+    expect((await f.git(copy, "rev-parse", "FETCH_HEAD")).stdout.trim()).toBe(ancestor);
+    expect((await f.git(copy, "show", "FETCH_HEAD:project.txt")).stdout).toBe("first\n");
+    await f.git(copy, "fsck", "--no-progress", ancestor);
+  } finally { await f.close(); }
+}, 60_000);
+
 it("follows the capabilities a client requests and bounds the haves it looks up", async () => {
   const f = await fixture();
   try {

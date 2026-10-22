@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { fromHex } from "git-fs-s3";
+import { Buffer } from "node:buffer";
 import type { PackedGitEntry } from "./object-reader";
 import { chunksStream, iteratorStream } from "./streams";
 
@@ -30,7 +30,7 @@ export function createGitPack(entries: { oid: string; entry: PackedGitEntry }[],
   const hash = createHash("sha1"); hash.update(header);
   let position = 12;
   for (const { oid, entry } of entries) {
-    const data = [packEntryHeader(entry.base ? 7 : entry.type, entry.size), ...(entry.base ? [fromHex(entry.base)] : []), entry.data];
+    const data = [packEntryHeader(entry.base ? 7 : entry.type, entry.size), ...(entry.base ? [Buffer.from(entry.base, "hex")] : []), entry.data];
     if (index) records.push({ oid, offset: position, crc: crc32(data) });
     for (const part of data) { chunks.push(part); hash.update(part); position += part.byteLength; }
   }
@@ -45,7 +45,7 @@ export function createGitPack(entries: { oid: string; entry: PackedGitEntry }[],
     for (const record of records) fanout[parseInt(record.oid.slice(0, 2), 16)]++;
     for (let i = 0, total = 0; i < 256; i++) { total += fanout[i]; table.setUint32(8 + i * 4, total); }
     for (let i = 0; i < records.length; i++) {
-      const record = records[i]; indexBytes.set(fromHex(record.oid), 1032 + i * 20);
+      const record = records[i]; indexBytes.set(Buffer.from(record.oid, "hex"), 1032 + i * 20);
       table.setUint32(1032 + records.length * 20 + i * 4, record.crc);
       table.setUint32(1032 + records.length * 24 + i * 4, record.offset);
     }

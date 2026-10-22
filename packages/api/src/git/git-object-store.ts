@@ -1,6 +1,14 @@
-import type { ListOptions, ListResult, ObjectStore } from "git-fs-s3";
+export interface ListOptions { delimiter?: string; limit?: number }
+export interface ListResult { objects: { key: string; size: number }[]; prefixes: string[] }
+export interface ObjectStore {
+  get(key: string): Promise<Uint8Array | null>;
+  put(key: string, data: Uint8Array): Promise<void>;
+  delete(key: string): Promise<void>;
+  head(key: string): Promise<{ size: number } | null>;
+  list(prefix: string, options?: ListOptions): Promise<ListResult>;
+}
 
-// git-fs-s3 reads packs into memory. Keep each stored Git object well below the
+// Pack indexing reads compressed packs into memory. Keep stored objects below the
 // Worker memory limit; media belongs in LFS, not in ordinary Git history.
 export const MAX_GIT_OBJECT_BYTES = 16 * 1024 * 1024;
 const MAX_LIST_ENTRIES = 10_000;

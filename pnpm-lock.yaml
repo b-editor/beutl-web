@@ -386,9 +386,6 @@ importers:
       fast-xml-parser:
         specifier: 5.11.2
         version: 5.11.2
-      git-fs-s3:
-        specifier: 0.3.13
-        version: 0.3.13(@aws-sdk/client-s3@3.984.0)(isomorphic-git@1.44.3)
       hono:
         specifier: ^4.13.13
         version: 4.13.13
@@ -3632,21 +3629,6 @@ packages:
   giget@3.3.1:
     resolution: {integrity: sha512-r+mvuDjrjMpsdw46Kmeydb8bdHm7wOKw8wNBtTndkjbPjgAp5oUJUxRE76wZFknxIPokfWvep2qSXK37aXE6zg==}
     hasBin: true
-
-  git-fs-s3@0.3.13:
-    resolution: {integrity: sha512-4+8T/wEV+YtH3kZ8c5BLrkYuE9CPHcylVVVgByYIcWS6PVBgrpwDqFn/RCZzV/gNc1QCNRcrNSqA6k9bTacnAg==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      '@aws-sdk/client-s3': '>=3.0.0'
-      diff: '>=5.0.0'
-      isomorphic-git: '>=1.24.0'
-    peerDependenciesMeta:
-      '@aws-sdk/client-s3':
-        optional: true
-      diff:
-        optional: true
-      isomorphic-git:
-        optional: true
 
   glob@10.5.0:
     resolution: {integrity: sha512-DfXN8DfhJ7NH3Oe7cFmu3NCu1wKbkReJ8TorzSAFbSKrlNaQSKfIzqYqVY8zlbs2NLBbWpRiU52GX2PbaBVNkg==}
@@ -8450,13 +8432,6 @@ snapshots:
       es-object-atoms: 1.1.1
 
   giget@3.3.1: {}
-
-  git-fs-s3@0.3.13(@aws-sdk/client-s3@3.984.0)(isomorphic-git@1.44.3):
-    dependencies:
-      lru-cache: 11.5.3
-    optionalDependencies:
-      '@aws-sdk/client-s3': 3.984.0
-      isomorphic-git: 1.44.3
 
   glob@10.5.0:
     dependencies:

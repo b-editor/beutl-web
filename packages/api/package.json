@@ -74,7 +74,6 @@
     "aws4fetch": "^1.0.20",
     "country-to-currency": "^3.0.1",
     "fast-xml-parser": "5.11.2",
-    "git-fs-s3": "0.3.13",
     "hono": "^4.13.13",
     "isomorphic-git": "1.44.3",
     "music-metadata": "^12.2.3",
