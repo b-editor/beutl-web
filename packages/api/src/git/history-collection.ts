@@ -6,7 +6,7 @@ import type { GitObjectBucket } from "./git-object-store";
 import { readGitRepository } from "./git-http";
 import { reachableHistory } from "./lfs-references";
 
-// Pushes store their packs as git-fs-s3 receives them; collection writes pack-<time>.
+// Pushes write recv-<time> packs; collection writes pack-<time>.
 const PACK = /^(?:recv|pack)-(\d+)\.pack$/u;
 const LOOSE = /\/objects\/([0-9a-f]{2})\/([0-9a-f]{38})$/u;
 

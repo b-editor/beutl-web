@@ -133,6 +133,27 @@ it("still sends a complete pack to a client that shares no history", async () =>
   } finally { await f.close(); }
 }, 60_000);
 
+it("fetches an unadvertised ancestor by SHA into an empty repository", async () => {
+  const f = await fixture();
+  try {
+    const origin = join(f.root, "origin"); mkdirSync(origin);
+    await f.git(origin, "init", "-q", "-b", "main");
+    await f.commit(origin, "project.txt", "first\n");
+    const ancestor = (await f.git(origin, "rev-parse", "HEAD")).stdout.trim();
+    await f.commit(origin, "project.txt", "second\n");
+    await f.git(origin, "remote", "add", "origin", f.url);
+    await f.git(origin, "push", "-q", "origin", "main");
+
+    const copy = join(f.root, "copy"); mkdirSync(copy);
+    await f.git(copy, "init", "-q", "-b", "main");
+    await f.git(copy, "remote", "add", "origin", f.url);
+    await f.git(copy, "fetch", "-q", "origin", ancestor);
+    expect((await f.git(copy, "rev-parse", "FETCH_HEAD")).stdout.trim()).toBe(ancestor);
+    expect((await f.git(copy, "show", "FETCH_HEAD:project.txt")).stdout).toBe("first\n");
+    await f.git(copy, "fsck", "--no-progress", ancestor);
+  } finally { await f.close(); }
+}, 60_000);
+
 it("follows the capabilities a client requests and bounds the haves it looks up", async () => {
   const f = await fixture();
   try {

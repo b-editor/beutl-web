@@ -1,13 +1,13 @@
 import { Hono, type Context } from "hono";
 import { createMiddleware } from "hono/factory";
-import { createCachedStore, type CachedObjectStore } from "git-fs-s3";
+import { cacheGitObjectStore } from "./cached-object-store";
 import { MAX_GIT_LFS_PART_BYTES } from "@beutl/core";
 import { advertiseGitRefs, initializeGitRepository, isGitService, MAX_GIT_REPOSITORY_BYTES, readGitRepository, receiveGitPack,
   uploadGitPack, type GitService } from "./git-http";
 import { isGitRevision, isGitTreePath } from "@beutl/core";
 import { browseFile, browseLog, browsePath, browseRefs, GitBrowseNotFoundError, MAX_COMMIT_PAGE } from "./browse";
 import { S3GitObjectBucket, sha256Base64, type GitS3Environment } from "./s3-object-store";
-import { GitObjectStore, MAX_GIT_OBJECT_BYTES, type GitObjectBucket } from "./git-object-store";
+import { GitObjectStore, type GitObjectBucket, type ObjectStore } from "./git-object-store";
 import { databaseGitStorageAccounting, withGitDatabase, type GitDatabaseEnvironment, type GitStorageAccounting } from "./accounting";
 import { cleanupLfs, handleLfsBatch, json, lfsKey, LFS_TOUCH_PRECISION_MS, MAX_LFS_PARTS, MIN_TUS_PART_BYTES,
   partKey, partPrefix, readJson, scheduleGitMaintenance, UPLOAD_LIFETIME_MS,
@@ -57,7 +57,7 @@ export class GitRepositoryDurableObject {
   private bucket?: GitObjectBucket;
   private resolvedEnv?: Environment;
   /** What the dashboard's views read, so browsing folder after folder reads the bucket once. */
-  private browseCache?: { repoId: string; store: CachedObjectStore };
+  private browseCache?: { repoId: string; store: ObjectStore };
   private readonly accounting?: GitStorageAccounting;
   private readonly app: Hono<Routes>;
   constructor(private readonly state: { storage: GitDurableStorage }, private readonly env: WorkerSecretBindings<Environment>,
@@ -99,7 +99,7 @@ export class GitRepositoryDurableObject {
       await next();
     });
     // Bare-repository HEAD/config also consume account storage. Reserve the
-    // small initialization before git-fs-s3 creates these metadata objects.
+    // initial allocation before creating these metadata objects.
     const initialized = createMiddleware<Routes>(async (c, next) => {
       const repoId = c.get("repoId");
       if (this.accounting && await this.gitBytes(repoId) === 0) {
@@ -225,10 +225,9 @@ export class GitRepositoryDurableObject {
   /** The stored repository as the dashboard reads it, through the browse cache. */
   private browseRepository(repoId: string) {
     if (this.browseCache?.repoId !== repoId) {
-      this.browseCache = { repoId, store: createCachedStore(new GitObjectStore(this.objectBucket()), {
+      this.browseCache = { repoId, store: cacheGitObjectStore(new GitObjectStore(this.objectBucket()), {
         // The whole history fits, so a later view reads nothing from the bucket.
-        maxBytes: 2 * MAX_GIT_REPOSITORY_BYTES, maxEntryBytes: MAX_GIT_OBJECT_BYTES, ttlMs: BROWSE_CACHE_TTL_MS,
-        cacheLists: true, cacheMisses: true,
+        maxBytes: 2 * MAX_GIT_REPOSITORY_BYTES, ttlMs: BROWSE_CACHE_TTL_MS,
       }) };
     }
     return readGitRepository(this.objectBucket(), repoId, { store: this.browseCache.store, looseObjectHints: true });

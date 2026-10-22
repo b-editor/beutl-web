@@ -1,7 +1,10 @@
-import { sha1, toHex } from "git-fs-s3";
+import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import type { readGitRepository } from "./git-http";
 import { MAX_GIT_OBJECT_BYTES } from "./git-object-store";
 import { ByteReader, inflateStream, iteratorStream, sliceStream, streamBytes, streamPrefix } from "./streams";
+
+const toHex = (bytes: Uint8Array) => Buffer.from(bytes).toString("hex");
 
 type Repository = ReturnType<typeof readGitRepository>;
 export type GitObjectType = "commit" | "tree" | "blob" | "tag";
@@ -57,7 +60,7 @@ export class GitObjectReader {
         if (view.getUint32(0) !== 0xff744f63 || view.getUint32(4) !== 2) throw new Error("Unsupported Git pack index");
         const count = view.getUint32(NAMES - 4);
         if (bytes.byteLength !== NAMES + count * 28 + 40) throw new Error("Invalid Git pack index length");
-        if (await sha1(bytes.subarray(0, -20)) !== toHex(bytes.subarray(-20))) throw new Error("Invalid Git pack index checksum");
+        if (createHash("sha1").update(bytes.subarray(0, -20)).digest("hex") !== toHex(bytes.subarray(-20))) throw new Error("Invalid Git pack index checksum");
         const offsets = new Uint32Array(count), order = new Uint32Array(count);
         for (let i = 0; i < count; i++) {
           offsets[i] = view.getUint32(NAMES + count * 24 + i * 4); order[i] = i;
@@ -80,7 +83,7 @@ export class GitObjectReader {
         if (view.getUint32(0) !== 0x5041434b || ![2, 3].includes(view.getUint32(4)) || view.getUint32(8) !== index.count)
           throw new Error("Git pack does not match its index");
         const expected = toHex(index.bytes.subarray(-40, -20));
-        if (toHex(bytes.subarray(-20)) !== expected || await sha1(bytes.subarray(0, -20)) !== expected)
+        if (toHex(bytes.subarray(-20)) !== expected || createHash("sha1").update(bytes.subarray(0, -20)).digest("hex") !== expected)
           throw new Error("Invalid Git pack checksum");
         for (let i = 0; i < index.count; i++) {
           const offset = index.offsets[index.order[i]];

@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { inflateSync } from "node:zlib";
-import { sha1, toHex } from "git-fs-s3";
+import { Buffer } from "node:buffer";
 import { MAX_GIT_OBJECT_BYTES } from "./git-object-store";
-import type { GitObjectReader, GitObjectType } from "./object-reader";
+import type { GitObjectInfo, GitObjectReader, GitObjectType } from "./object-reader";
 
 // Bound validation work and isomorphic-git's per-command chunk allocations.
 // Share the budget across the pack rather than resetting it for each delta.
@@ -89,11 +89,13 @@ function inflateObject(data: Uint8Array, size: number) {
 
 type GitObject = { type: GitObjectType; data: Uint8Array; operations: number; oid?: string };
 type Delta = { offset: number; data: Uint8Array; operations: number; baseOperations?: number; object?: GitObject };
+export type ValidatedGitObject = GitObjectInfo & { data?: Uint8Array };
 
-/** Bound expansion before isomorphic-git indexes or caches full object buffers. */
-export async function validateGitPack(pack: Uint8Array, maximum: number, reader: GitObjectReader): Promise<void> {
-  if (!pack.length) return;
-  if (await sha1(pack.subarray(0, -20)) !== toHex(pack.subarray(-20)))
+/** Bound expansion before indexing; keep non-blob contents for connectivity checks before storage. */
+export async function validateGitPack(pack: Uint8Array, maximum: number, reader: GitObjectReader): Promise<Map<string, ValidatedGitObject>> {
+  const objects = new Map<string, ValidatedGitObject>();
+  if (!pack.length) return objects;
+  if (createHash("sha1").update(pack.subarray(0, -20)).digest("hex") !== Buffer.from(pack.subarray(-20)).toString("hex"))
     throw new GitPackValidationError("Invalid Git pack checksum");
   const cursor = new Cursor(pack.subarray(0, -20));
   cursor.position = 12;
@@ -225,4 +227,7 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
     resolve();
   }
   if (unresolved) throw new GitPackValidationError("Git delta base is missing");
+  for (const [oid, object] of local) if (typeof oid === "string")
+    objects.set(oid, { type: object.type, size: object.data.byteLength, data: object.type === "blob" ? undefined : object.data });
+  return objects;
 }

@@ -1,7 +1,7 @@
 import git from "isomorphic-git";
 import { byteRangeHeaders, parseByteRange, type GitCommitPage, type GitCommitSummary, type GitPathView, type GitRefList, type GitTreeEntry } from "@beutl/core";
 import { readGitRepository } from "./git-http";
-import { readRefs } from "./lfs-references";
+import { readRefs } from "./git-refs";
 import { GitObjectReader } from "./object-reader";
 import { knownLengthStream } from "./streams";
 
