@@ -44,15 +44,24 @@ const DIRECTIVES = [
   // script-src は contentSecurityPolicy() で差し込む (上の注記を参照)。
   "style-src 'self' 'unsafe-inline'",
   // markdown の img とプロバイダのアバターに https: を残す (理由は冒頭)。
-  "img-src 'self' https: data:",
+  // blob: は AI 面のローカルファイルのプレビュー (URL.createObjectURL) 用。
+  "img-src 'self' https: data: blob:",
   // next/font/google はビルド時にフォントを自己ホストする。
   "font-src 'self'",
-  "media-src 'self'",
+  // blob: は動画/音声のプレビューと、モデルの入力制限を判定するメタデータ取得
+  // (ai-video-duration.ts / audio-extract.ts が video 要素に createObjectURL を
+  // 渡す) 用。無いと有効な入力が「読み取れないもの」として投稿が拒否される。
+  "media-src 'self' blob:",
   "connect-src 'self'",
   "object-src 'none'",
   "frame-ancestors 'none'",
   "base-uri 'self'",
-  "form-action 'self'",
+  // form-action はフォーム送信のリダイレクト先にも適用される (Chromium の
+  // 挙動: ネイティブ送信の 303 に対して再検査される)。ハイドレーション前でも
+  // 送れる課金フォーム (billing/components.tsx の <form action={...}>) は
+  // Stripe Checkout と請求ポータルへ 303 するので、その 2 オリジンを許す。
+  // ストア購入は GET 遷移 (form でない) なので対象外。
+  "form-action 'self' https://checkout.stripe.com https://billing.stripe.com",
 ];
 
 export function contentSecurityPolicy({

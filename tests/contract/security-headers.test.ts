@@ -28,14 +28,21 @@ describe("contentSecurityPolicy", () => {
     expect(directive(csp, "script-src")).toBe("script-src 'self' 'unsafe-inline'");
     expect(directive(csp, "style-src")).toBe("style-src 'self' 'unsafe-inline'");
     // markdown 本文の任意 img URL とプロバイダのアバターを https: で許容する。
-    expect(directive(csp, "img-src")).toBe("img-src 'self' https: data:");
+    // blob: は AI 面のローカルファイルのプレビュー (URL.createObjectURL) 用。
+    expect(directive(csp, "img-src")).toBe("img-src 'self' https: data: blob:");
     expect(directive(csp, "font-src")).toBe("font-src 'self'");
-    expect(directive(csp, "media-src")).toBe("media-src 'self'");
+    // blob: は動画/音声のプレビューとメタデータ取得 (ai-video-duration.ts が
+    // video 要素に createObjectURL を渡す) 用。
+    expect(directive(csp, "media-src")).toBe("media-src 'self' blob:");
     expect(directive(csp, "connect-src")).toBe("connect-src 'self'");
     expect(directive(csp, "object-src")).toBe("object-src 'none'");
     expect(directive(csp, "frame-ancestors")).toBe("frame-ancestors 'none'");
     expect(directive(csp, "base-uri")).toBe("base-uri 'self'");
-    expect(directive(csp, "form-action")).toBe("form-action 'self'");
+    // form-action はフォーム送信のリダイレクト先にも適用されるため、課金
+    // フォームの 303 先 (Stripe Checkout と請求ポータル) を許す。
+    expect(directive(csp, "form-action")).toBe(
+      "form-action 'self' https://checkout.stripe.com https://billing.stripe.com",
+    );
 
     // 本番ビルドで eval は出ない。
     expect(csp).not.toContain("'unsafe-eval'");
