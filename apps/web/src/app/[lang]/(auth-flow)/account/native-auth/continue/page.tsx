@@ -1,4 +1,4 @@
-import { getTranslation } from "@beutl/i18n";
+import { availableLanguages, getTranslation } from "@beutl/i18n";
 import { auth } from "@/lib/better-auth";
 import { Avatar, AvatarFallback, AvatarImage } from "@beutl/ui/ui/avatar";
 import { Button } from "@beutl/ui/ui/button";
@@ -30,6 +30,15 @@ export default async function Page(
 
   const returnUrl =
     (await resolveNativeAuthReturnUrl(searchParams.returnUrl)) ?? `/${lang}`;
+
+  // The handler obtains consent immediately before issuing a code. Keep this
+  // confirmation page for legacy callbacks, but avoid a second consent there.
+  const pathname = returnUrl.split(/[?#]/, 1)[0];
+  if (["", ...availableLanguages].some((language) =>
+    pathname === `${language ? `/${language}` : ""}/account/native-auth/handler`,
+  )) {
+    redirect(returnUrl);
+  }
 
   // 遷移先の検証はこのページが一手に引き受けるため、サインイン/サインアップへは
   // 遷移先そのものではなくこのページの URL を渡す (handler ページと同じ形)。

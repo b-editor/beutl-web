@@ -10,6 +10,7 @@
     "./language": "./src/language.ts",
     "./magic-link-email": "./src/magic-link-email.ts",
     "./local-redirect": "./src/local-redirect.ts",
+    "./native-auth-issuance": "./src/native-auth-issuance.ts",
     "./middleware": "./src/middleware.ts",
     "./security-headers": "./src/security-headers.ts"
   },

@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sign } from "hono/jwt";
+import { sign, verify } from "hono/jwt";
 import { setDbProvider } from "@beutl/db";
 import { createSessionPrisma, type NativeAppAuthRecord } from "../stubs/session-prisma";
 
+const session = vi.hoisted(() => ({ getSession: vi.fn() }));
+vi.mock("@/lib/better-auth", () => ({ auth: { api: { getSession: session.getSession } } }));
+vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
 vi.mock("@beutl/i18n", () => ({ getTranslation: async () => ({ t: (key: string) => key }) }));
 import account from "../../packages/api/src/v1/account";
+import { issueNativeAuthCodeAction } from "../../apps/web/src/app/[lang]/(auth-flow)/account/native-auth/handler/actions";
 
 const authorization = (): NativeAppAuthRecord => ({
   id: "auth-id", sessionId: "native-session", userId: "owner", code: "one-use-code",
@@ -20,6 +24,7 @@ describe("native authorization security", () => {
   beforeEach(() => {
     store = createSessionPrisma();
     setDbProvider(async () => store.prisma as never);
+    session.getSession.mockReset().mockResolvedValue({ user: { id: "owner" } });
     vi.stubEnv("JWT_SECRET", "local-test-secret");
     vi.stubEnv("JWT_ISSUER", "");
     vi.stubEnv("JWT_AUDIENCE", "");
@@ -35,6 +40,35 @@ describe("native authorization security", () => {
   it("accepts the desktop loopback callback", async () => {
     expect((await post("/createAuthUri", { continue_uri: authorization().continueUrl })).status).toBe(200);
     expect(store.allNativeAppAuth()).toHaveLength(1);
+  });
+  it("exchanges the desktop callback code only after consent and only once", async () => {
+    const created = await post("/createAuthUri", { continue_uri: authorization().continueUrl });
+    expect(created.status).toBe(200);
+    const { auth_uri, session_id } = await created.json();
+    const identifier = new URL(auth_uri).searchParams.get("identifier")!;
+    expect(store.allNativeAppAuth()[0]).toMatchObject({ userId: null, code: null });
+    expect((await post("/code2jwt", { session_id, code: "not-issued" })).status).toBe(401);
+
+    const form = new FormData();
+    form.set("identifier", identifier);
+    form.set("userId", "owner");
+    const consent = await issueNativeAuthCodeAction({ status: "idle" }, form);
+    expect(consent.status).toBe("ok");
+    if (consent.status !== "ok") throw new Error("Consent did not issue a callback");
+    const callback = new URL(consent.callbackUrl);
+    expect(`${callback.origin}${callback.pathname}`).toBe(authorization().continueUrl);
+    const code = callback.searchParams.get("code");
+    expect(code).toBeTruthy();
+
+    const exchanged = await post("/code2jwt", { session_id, code });
+    expect(exchanged.status).toBe(200);
+    const credentials = await exchanged.json();
+    const claims = await verify(credentials.token, "local-test-secret", "HS256");
+    expect(claims["http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier"]).toBe("owner");
+    expect(credentials.refresh_token).toEqual(expect.any(String));
+    expect(store.allNativeAppAuth()).toEqual([]);
+    expect(store.allFamilies()).toHaveLength(1);
+    expect((await post("/code2jwt", { session_id, code })).status).toBe(401);
   });
   it.each(["javascript://localhost/%0Aalert(1)//", "http://beutl.beditor.net/callback"])("also refuses unsafe stored callbacks at the legacy handler: %s", async (continueUrl) => {
     store.putNativeAppAuth({ ...authorization(), continueUrl });
