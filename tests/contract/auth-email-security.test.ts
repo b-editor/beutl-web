@@ -13,7 +13,7 @@ import { signInWithEmailAction } from "../../apps/web/src/app/[lang]/(auth-flow)
 import { signInWithEmailAction as adminSignIn } from "../../apps/admin/src/app/[lang]/account/sign-in/actions";
 import { submitFeedback } from "../../apps/web/src/app/[lang]/(main)/feedback/actions";
 import { limitAuthEmailSend, limitFeedbackSend } from "@beutl/next/auth-email-rate-limit";
-import { consumePackageCheckoutLimit } from "../../apps/web/src/lib/stripe/checkout-rate-limit";
+import { consumePackageCheckoutLimit } from "../../apps/web/src/lib/package-checkout-rate-limit";
 
 const external = vi.hoisted(() => ({
   headers: new Headers(),

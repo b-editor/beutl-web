@@ -13,7 +13,7 @@ import {
   resolvePackageCheckoutAttemptIntervention,
 } from "@beutl/db";
 import { createStripe } from "@/lib/stripe/config";
-import { consumePackageCheckoutLimit } from "@/lib/stripe/checkout-rate-limit";
+import { consumePackageCheckoutLimit } from "@/lib/package-checkout-rate-limit";
 import { getTranslation } from "@beutl/i18n";
 import { buttonVariants } from "@beutl/ui/ui/button";
 import { headers } from "next/headers";

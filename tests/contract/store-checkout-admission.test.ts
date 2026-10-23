@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   owned: vi.fn(), package: vi.fn(), currency: vi.fn(), prices: vi.fn(),
 }));
 vi.mock("@/lib/auth-guard", () => ({ authOrSignIn: mocks.auth }));
-vi.mock("@/lib/stripe/checkout-rate-limit", () => ({ consumePackageCheckoutLimit: mocks.limit }));
+vi.mock("@/lib/package-checkout-rate-limit", () => ({ consumePackageCheckoutLimit: mocks.limit }));
 vi.mock("@/lib/stripe/customer", () => ({ createOrRetrieveOwnedCustomerId: mocks.customer }));
 vi.mock("@/lib/stripe/config", () => ({ createStripe: mocks.stripe }));
 vi.mock("@/lib/store-utils", () => ({
