@@ -1,10 +1,12 @@
 // Worker 版通貨推測。Web 版は next/headers に依存するため、
 // リクエストヘッダを直接受け取る形に置換する。
 import countryToCurrency from "country-to-currency";
+import { isIP } from "node:net";
 
 async function getCountry(ipAddress: string) {
   const token = process.env.IPINFO_TOKEN;
-  if (!token || !ipAddress) return null;
+  // Zone identifiers are local interface names, not addresses for geolocation.
+  if (!token || !isIP(ipAddress) || ipAddress.includes("%")) return null;
 
   const res = await fetch(`https://ipinfo.io/${ipAddress}`, {
     headers: {
@@ -20,8 +22,9 @@ export async function guessCurrency(
 ): Promise<string | null> {
   if (process.env.NODE_ENV === "development") return "JPY";
   const ipAddress =
-    request?.headers.get("x-real-ip") ||
-    request?.headers.get("X-Forwarded-For")?.split(",")[0];
+    (request?.headers.get("cf-connecting-ip") ||
+      request?.headers.get("x-real-ip") ||
+      request?.headers.get("X-Forwarded-For")?.split(",")[0])?.trim();
   if (!ipAddress) return null;
   const country =
     request?.headers.get("CF-IPCountry") || (await getCountry(ipAddress));

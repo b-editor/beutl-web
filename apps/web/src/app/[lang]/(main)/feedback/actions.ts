@@ -70,7 +70,7 @@ export async function submitFeedback(
 
     const emailNotification = sendEmail({
       to: "contact@beditor.net",
-      subject: `[Feedback] ${categoryLabels[category]}: from ${name}`,
+      subject: `[Feedback] ${categoryLabels[category]}: from ${name.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, "")}`,
       body: `
         <h2>New Feedback Received</h2>
         <p><strong>Name:</strong> ${escapeHtml(name)}</p>

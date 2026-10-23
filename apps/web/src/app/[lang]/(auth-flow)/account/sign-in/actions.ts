@@ -4,7 +4,6 @@ import { getAuth } from "@/lib/better-auth";
 import { redirect } from "next/navigation";
 import { getTranslation, type Zod } from "@beutl/i18n";
 import { getLanguage } from "@beutl/next/language";
-import { existsUserByEmail } from "@beutl/db";
 import { headers } from "next/headers";
 import { resolveSafeReturnUrl } from "@beutl/next/local-redirect";
 import { isAuthEmailRateLimitError } from "@beutl/next/auth-email-rate-limit";
@@ -40,19 +39,8 @@ export async function signInWithEmailAction(
   // originCheck に弾かれ、サインイン自体が失敗する。
   const safeReturnUrl = await resolveSafeReturnUrl(returnUrl);
 
-  const userResult = await existsUserByEmail({ email });
-
-  if (!userResult) {
-    // アカウント未作成
-    const params = new URLSearchParams();
-    params.append("email", email);
-    if (safeReturnUrl) {
-      params.append("returnUrl", safeReturnUrl);
-    }
-    redirect(`/${lang}/account/sign-up?${params.toString()}`);
-  }
-
-  // Better Auth magic link を送信
+  // Use the same flow for every address. Better Auth creates a new account
+  // only after its owner verifies the magic link, as in the sign-up action.
   const auth = await getAuth();
   // Magic link APIを呼び出す
   try {

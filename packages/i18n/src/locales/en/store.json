@@ -13,6 +13,7 @@
   "paymentFailed": "Payment was unsuccessful. Please try again.",
   "somethingWentWrong": "Something went wrong. Please try again.",
   "returnToProductPage": "Return to product page",
+  "checkoutRateLimited": "Too many checkout requests. Please wait {{seconds}} seconds before trying again.",
   "screenshots": "Screenshots",
   "removedFromLibrary": "Removed from library",
   "owned": "Owned",
