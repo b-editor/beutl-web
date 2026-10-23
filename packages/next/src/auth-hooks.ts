@@ -1,6 +1,23 @@
 import "server-only";
+import type { ValidateUserInfoResult, ValidateUserInfoSource } from "better-auth";
 import { getDb, isUniqueConstraintViolation, profileUserNameFilter } from "@beutl/db";
 import { addAuditLog, auditLogActions } from "./audit-log";
+
+export function validateOAuthUserInfo({ user, source }: {
+  user: { emailVerified?: boolean };
+  source: ValidateUserInfoSource;
+}): ValidateUserInfoResult | undefined {
+  if (source.method !== "oauth" || source.oauth?.providerId !== "github") return;
+  // Returning sign-ins already resolve by providerId + accountId. A changed
+  // provider email must not invalidate that binding or revoke existing sessions.
+  if (source.action === "sign-in" || user.emailVerified === true) return;
+
+  return {
+    error: "githubEmailNotVerified",
+    errorDescription:
+      "A verified GitHub email is required to create or link an account. Check your GitHub email settings and try again.",
+  };
+}
 
 // better-auth の user.create.after は、どの Worker がユーザーを作ったかに関わらず
 // 走る必要がある。Profile はアプリ全体が存在を前提にしており (公開プロフィール、
