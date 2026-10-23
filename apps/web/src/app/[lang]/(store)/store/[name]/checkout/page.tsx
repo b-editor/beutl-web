@@ -13,6 +13,11 @@ import {
   resolvePackageCheckoutAttemptIntervention,
 } from "@beutl/db";
 import { createStripe } from "@/lib/stripe/config";
+import { consumePackageCheckoutLimit } from "@/lib/stripe/checkout-rate-limit";
+import { getTranslation } from "@beutl/i18n";
+import { buttonVariants } from "@beutl/ui/ui/button";
+import { headers } from "next/headers";
+import Link from "next/link";
 import {
   packageCheckoutFingerprintInput,
   shouldReuseBoundPackageCheckoutSession,
@@ -74,6 +79,21 @@ export default async function Page(props: {
   }
   if (await packageOwned(pkg.id, session.user.id)) {
     redirect(`/store/${name}`);
+  }
+  const admission = await consumePackageCheckoutLimit(session.user.id, await headers());
+  if (!admission.allowed) {
+    const { t } = await getTranslation(lang);
+    return (
+      <div className="mx-auto my-10 max-w-lg space-y-6 rounded-lg border bg-card p-6 text-card-foreground">
+        <p role="alert">{t("store:checkoutRateLimited", { seconds: admission.retryAfter })}</p>
+        <Link
+          href={`/${lang}/store/${encodeURIComponent(name)}`}
+          className={buttonVariants({ variant: "outline" })}
+        >
+          {t("store:returnToProductPage")}
+        </Link>
+      </div>
+    );
   }
   const currencyP = guessCurrency();
   const prices = await retrievePrices(pkg.id);

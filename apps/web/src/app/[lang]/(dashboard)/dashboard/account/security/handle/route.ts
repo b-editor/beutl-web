@@ -8,9 +8,19 @@ export async function GET(): Promise<NextResponse> {
   const requestUrl = new URL((await headers()).get("x-url") as string);
   requestUrl.pathname = `/${await getLanguage()}/dashboard/account/security`;
 
-  if (authFlow?.value) {
-    const json = JSON.parse(authFlow?.value);
-    if (json.type === "adding-account" && json.url) {
+  if (authFlow) {
+    let flow: unknown = null;
+    try {
+      flow = JSON.parse(authFlow.value);
+    } catch {
+      // A malformed client cookie is discarded just like an invalid shape.
+    }
+    if (
+      typeof flow !== "object" || flow === null ||
+      !("type" in flow) || typeof flow.type !== "string" ||
+      !("url" in flow) || typeof flow.url !== "string" || !flow.url ||
+      flow.type === "adding-account"
+    ) {
       cookieStore.delete("beutl.auth-flow");
     }
   }

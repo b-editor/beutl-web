@@ -13,6 +13,7 @@
   "paymentFailed": "支払いが成功しませんでした。もう一度お試しください。",
   "somethingWentWrong": "何かがうまくいきませんでした。もう一度お試しください。",
   "returnToProductPage": "商品ページに戻る",
+  "checkoutRateLimited": "購入手続きのリクエストが多すぎます。{{seconds}}秒待ってから、もう一度お試しください。",
   "screenshots": "スクリーンショット",
   "removedFromLibrary": "ライブラリから削除しました",
   "owned": "入手済",

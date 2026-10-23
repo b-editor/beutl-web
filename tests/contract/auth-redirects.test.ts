@@ -4,14 +4,12 @@ const mocks = vi.hoisted(() => ({
   lang: "ja",
   getSession: vi.fn(),
   signInMagicLink: vi.fn(),
-  existsUserByEmail: vi.fn(),
 }));
 
 vi.mock("@/lib/better-auth", () => ({
   auth: { api: { getSession: mocks.getSession } },
   getAuth: async () => ({ api: { signInMagicLink: mocks.signInMagicLink } }),
 }));
-vi.mock("@beutl/db", () => ({ existsUserByEmail: mocks.existsUserByEmail }));
 vi.mock("@beutl/next/language", () => ({ getLanguage: async () => mocks.lang }));
 vi.mock("@beutl/i18n", async () => {
   const { z } = await import("../../apps/web/node_modules/zod");
@@ -42,7 +40,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.getSession.mockResolvedValue({ user: { id: "user-1" } });
   mocks.signInMagicLink.mockResolvedValue({ status: true });
-  mocks.existsUserByEmail.mockResolvedValue(true);
 });
 
 describe.each(["ja", "en"])("authentication redirects (%s)", (lang) => {

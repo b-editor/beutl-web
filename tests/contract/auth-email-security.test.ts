@@ -13,6 +13,7 @@ import { signInWithEmailAction } from "../../apps/web/src/app/[lang]/(auth-flow)
 import { signInWithEmailAction as adminSignIn } from "../../apps/admin/src/app/[lang]/account/sign-in/actions";
 import { submitFeedback } from "../../apps/web/src/app/[lang]/(main)/feedback/actions";
 import { limitAuthEmailSend, limitFeedbackSend } from "@beutl/next/auth-email-rate-limit";
+import { consumePackageCheckoutLimit } from "../../apps/web/src/lib/stripe/checkout-rate-limit";
 
 const external = vi.hoisted(() => ({
   headers: new Headers(),
@@ -256,6 +257,19 @@ describe("feedback admission", () => {
       data.set(key, value);
     return data;
   }
+  it("removes control characters from the subject and keeps the HTML escaped", async () => {
+    const data = feedback();
+    const name = "Alice\r\n\t\u0000\u007f\u0085\u2028\u2029\u202eBob <&> テスト";
+    data.set("name", name);
+    expect(await submitFeedback({}, data)).toMatchObject({ success: true });
+    const mail = external.confirmationEmail.mock.calls[0][0];
+    expect(mail.subject).toBe("[Feedback] Other: from AliceBob <&> テスト");
+    expect(mail.body).toContain("Bob &lt;&amp;&gt; テスト");
+    expect(db.feedback.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ name }),
+    }));
+  });
+
   it("limits anonymous concurrent submissions before saving or sending", async () => {
     external.headers = new Headers({ "cf-connecting-ip": "203.0.113.5" });
     const results = await Promise.all(Array.from({ length: 25 }, (_, i) => submitFeedback({}, feedback(`sender${i}@example.com`))));
@@ -287,6 +301,60 @@ describe("feedback admission", () => {
     expect(await submitFeedback({}, feedback())).toMatchObject({ success: false });
     expect(db.feedback.create).not.toHaveBeenCalled();
     expect(external.confirmationEmail).not.toHaveBeenCalled();
+  });
+});
+
+describe("package checkout admission", () => {
+  it("caps concurrent attempts per user independently of authentication emails", async () => {
+    const results = await Promise.all(Array.from({ length: 25 }, () =>
+      consumePackageCheckoutLimit("owner", external.headers),
+    ));
+    expect(results.filter((result) => result.allowed)).toHaveLength(10);
+    expect(results.find((result) => !result.allowed)).toMatchObject({
+      allowed: false, retryAfter: expect.any(Number),
+    });
+    await expect(limitAuthEmailSend("owner@example.com", external.headers)).resolves.toBeUndefined();
+  });
+
+  it.each(["trusted IPv4", "trusted IPv6", "no trusted IP"])(
+    "caps different users by %s without trusting forwarding headers",
+    async (source) => {
+      for (let i = 0; i <= 30; i++) {
+        const headers = new Headers({
+          "x-forwarded-for": `198.51.100.${i + 1}`,
+          "x-real-ip": `198.51.100.${i + 1}`,
+        });
+        if (source === "trusted IPv4") headers.set("cf-connecting-ip", "203.0.113.1");
+        if (source === "trusted IPv6") headers.set("cf-connecting-ip",
+          i % 2 ? "2001:0db8:0000:0001:0:0:0:1" : "2001:db8:0:1::2",
+        );
+        expect((await consumePackageCheckoutLimit(`user-${i}`, headers)).allowed).toBe(i < 30);
+      }
+    },
+  );
+
+  it.each(["user", "IP"])("keeps the hourly %s cap after minute windows expire", async (scope) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const perMinute = scope === "user" ? 10 : 30;
+    for (let minute = 0; minute < 6; minute++) {
+      for (let i = 0; i < perMinute; i++) {
+        const userId = scope === "user" ? "owner" : `user-${minute}-${i}`;
+        expect((await consumePackageCheckoutLimit(userId, external.headers)).allowed).toBe(true);
+      }
+      vi.setSystemTime(Date.now() + 61_000);
+    }
+    const userId = scope === "user" ? "owner" : "another-user";
+    expect(await consumePackageCheckoutLimit(userId, external.headers)).toMatchObject({
+      allowed: false, retryAfter: expect.any(Number),
+    });
+    vi.setSystemTime(Date.now() + 60 * 60_000);
+    expect((await consumePackageCheckoutLimit(userId, external.headers)).allowed).toBe(true);
+  });
+
+  it("fails closed when the shared counters are unavailable", async () => {
+    db.$transaction.mockRejectedValueOnce(new Error("database unavailable"));
+    await expect(consumePackageCheckoutLimit("owner", external.headers))
+      .rejects.toThrow("database unavailable");
   });
 });
 
@@ -381,6 +449,24 @@ describe("email-change authorization", () => {
 });
 
 describe("shared authentication-email limits", () => {
+  it.each(["owner@example.com", "unregistered@example.com"])(
+    "sends the same sign-in response and applies the same quota for %s",
+    async (email) => {
+      for (let i = 0; i < 5; i++) {
+        await expect(signInWithEmailAction({}, form(email)))
+          .rejects.toThrow("redirect:/en/account/verify-request");
+      }
+      expect(await signInWithEmailAction({}, form(email))).toEqual({
+        message: "Too many email requests. Please wait before trying again.",
+      });
+      expect(db.user.findFirst).not.toHaveBeenCalled();
+      expect(external.magicEmail).toHaveBeenCalledTimes(5);
+      expect(external.magicEmail).toHaveBeenCalledWith(
+        expect.objectContaining({ email }), expect.anything(),
+      );
+    },
+  );
+
   it("blocks the sixth signup Server Action before token creation or email delivery", async () => {
     for (let i = 0; i < 5; i++)
       await expect(signUpWithEmailAction({}, form("recipient@example.com"))).rejects.toThrow(
