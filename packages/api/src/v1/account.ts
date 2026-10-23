@@ -1,9 +1,9 @@
 // v1/account is the authentication backbone: the ONLY place that mints access
 // JWTs (createJwtToken) and refresh tokens (prepareRefreshToken), which every v3
-// endpoint validates via lib/api/auth.ts (getUserId). Do NOT retire this file;
-// only its genuinely-dead sub-routes are deprecated. The desktop app is coupled
-// to the exact claim names and refresh-token crypto, so any change must stay
-// byte-compatible. See docs/adr/0001-v1-account-is-the-auth-backbone.md.
+// endpoint validates via api/auth.ts (getUserId). Do NOT retire this file;
+// only its genuinely-dead sub-routes are deprecated. Preserve the JWT claim
+// names and response fields; desktop clients treat refresh tokens as opaque.
+// See docs/adr/0001-v1-account-is-the-auth-backbone.md for crypto migrations.
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -38,6 +38,10 @@ const exchangeSchema = z.object({
   session_id: z.string(),
 });
 
+// v2.<base64(iv[12] || salt[16] || ciphertext || authenticationTag[16])>
+const REFRESH_TOKEN_PREFIX = "v2.";
+const REFRESH_TOKEN_CONTEXT = new TextEncoder().encode("beutl:refresh-token:v2");
+
 async function getKeyMaterial(secret: string) {
   const encoder = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(
@@ -60,7 +64,7 @@ async function deriveKey(keyMaterial: CryptoKey, salt: Uint8Array) {
     },
     keyMaterial,
     {
-      name: "AES-CBC",
+      name: "AES-GCM",
       length: 256,
     },
     false,
@@ -69,30 +73,45 @@ async function deriveKey(keyMaterial: CryptoKey, salt: Uint8Array) {
 }
 
 async function getKey(salt: Uint8Array) {
-  const keyMaterial = await getKeyMaterial(process.env.JWT_SECRET as string);
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error("JWT_SECRET is not configured");
+  }
+  const keyMaterial = await getKeyMaterial(secret);
   return await deriveKey(keyMaterial, salt);
 }
 
 async function decryptRefreshToken(token: string) {
-  try {
-    const data = Buffer.from(token, "base64");
-    const iv = data.subarray(0, 16);
-    const salt = data.subarray(16, 32);
-    const encryptedData = data.subarray(32);
-    const key = await getKey(salt);
+  // Never fall back to unauthenticated CBC, including after a GCM failure.
+  if (!token.startsWith(REFRESH_TOKEN_PREFIX)) return null;
+  const encoded = token.slice(REFRESH_TOKEN_PREFIX.length);
+  const data = Buffer.from(encoded, "base64");
+  // Buffer's base64 decoder is permissive; require the canonical encoding and
+  // a complete IV, salt, non-empty ciphertext, and 128-bit authentication tag.
+  if (data.length <= 12 + 16 + 16 || data.toString("base64") !== encoded) {
+    return null;
+  }
+  const iv = data.subarray(0, 12);
+  const salt = data.subarray(12, 28);
+  const encryptedData = data.subarray(28);
+  // Configuration failures must surface as server errors, not invalid tokens.
+  const key = await getKey(salt);
 
+  try {
     const decrypted = await crypto.subtle.decrypt(
       {
-        name: "AES-CBC",
+        name: "AES-GCM",
         iv: iv,
+        additionalData: REFRESH_TOKEN_CONTEXT,
+        tagLength: 128,
       },
       key,
       encryptedData,
     );
 
     return Buffer.from(decrypted).toString("utf8");
-  } catch (err) {
-    console.error("Failed to decrypt refresh token", err);
+  } catch {
+    // Invalid input and authentication failures share the same 401 response.
     return null;
   }
 }
@@ -100,19 +119,22 @@ async function decryptRefreshToken(token: string) {
 async function encryptRefreshToken(token: string) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const key = await getKey(salt);
-  const iv = new Uint8Array(16);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
   const encrypted = await crypto.subtle.encrypt(
     {
-      name: "AES-CBC",
+      name: "AES-GCM",
       iv: iv,
+      additionalData: REFRESH_TOKEN_CONTEXT,
+      tagLength: 128,
     },
     key,
     Buffer.from(token, "utf8"),
   );
 
-  return Buffer.concat([iv, salt, new Uint8Array(encrypted)]).toString(
+  const encoded = Buffer.concat([iv, salt, new Uint8Array(encrypted)]).toString(
     "base64",
   );
+  return `${REFRESH_TOKEN_PREFIX}${encoded}`;
 }
 
 async function createJwtToken(userId: string) {
