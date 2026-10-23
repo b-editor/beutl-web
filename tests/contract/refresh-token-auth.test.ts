@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDecipheriv, pbkdf2Sync } from "node:crypto";
 import { decode, sign } from "hono/jwt";
 import { createSessionPrisma } from "../stubs/session-prisma";
 
@@ -29,6 +30,26 @@ type Credentials = {
   token: string;
   refresh_token: string;
 };
+
+// Decode actual API output with an independent implementation of the wire format.
+function decryptGcmRefreshToken(token: string) {
+  expect(token).toMatch(/^v2\./);
+  const data = Buffer.from(token.slice(3), "base64");
+  const key = pbkdf2Sync(
+    "refresh-test-secret",
+    data.subarray(12, 28),
+    100_000,
+    32,
+    "sha256",
+  );
+  const decipher = createDecipheriv("aes-256-gcm", key, data.subarray(0, 12));
+  decipher.setAAD(Buffer.from("beutl:refresh-token:v2"));
+  decipher.setAuthTag(data.subarray(-16));
+  return Buffer.concat([
+    decipher.update(data.subarray(28, -16)),
+    decipher.final(),
+  ]).toString("utf8");
+}
 
 describe("v1 refresh-token rotation", () => {
   let store: ReturnType<typeof createSessionPrisma>;
@@ -65,6 +86,7 @@ describe("v1 refresh-token rotation", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     delete process.env.JWT_SECRET;
     delete process.env.JWT_ISSUER;
     delete process.env.JWT_AUDIENCE;
@@ -73,9 +95,12 @@ describe("v1 refresh-token rotation", () => {
   });
 
   it("stores the initial native refresh token outside Better Auth sessions", async () => {
-    await issueCredentials("session-owner");
+    const credentials = await issueCredentials("session-owner");
 
     expect(store.all()).toHaveLength(1);
+    expect(decryptGcmRefreshToken(credentials.refresh_token)).toBe(
+      store.all()[0].token,
+    );
     expect(store.allSessions()).toHaveLength(0);
     expect(store.all()[0]).toMatchObject({
       userId: "session-owner",
@@ -88,6 +113,151 @@ describe("v1 refresh-token rotation", () => {
       userId: "session-owner",
       revokedAt: null,
     });
+  });
+
+  it.each([
+    ["IV", 0],
+    ["salt", 12],
+    ["ciphertext", 28],
+    ["authentication tag", 64],
+  ])("rejects a modified %s before accessing the database", async (_, offset) => {
+    const credentials = await issueCredentials("session-owner");
+    const data = Buffer.from(credentials.refresh_token.slice(3), "base64");
+    data[offset] ^= 1;
+    const getDb = vi.fn(async () => store.prisma as never);
+    setDbProvider(getDb);
+
+    const response = await post("/refresh", {
+      refresh_token: `v2.${data.toString("base64")}`,
+      token: credentials.token,
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({
+      error_code: "invalidRefreshToken",
+    });
+    expect(getDb).not.toHaveBeenCalled();
+    expect(store.all()[0].refreshTokenConsumedAt).toBeNull();
+    expect(store.allFamilies()[0].revokedAt).toBeNull();
+  });
+
+  it.each([
+    ["missing version", (token: string) => token.slice(3)],
+    ["unsupported version", (token: string) => token.replace("v2.", "v3.")],
+    ["empty payload", () => "v2."],
+    ["truncated header", () => `v2.${Buffer.alloc(27).toString("base64")}`],
+    ["missing ciphertext", () => `v2.${Buffer.alloc(44).toString("base64")}`],
+    ["invalid base64", (token: string) => `${token}!`],
+    ["base64 whitespace", (token: string) => `${token}\n`],
+    ["missing padding", (token: string) => token.replace(/=+$/, "")],
+  ])("rejects malformed %s before key derivation or DB access", async (_, mutate) => {
+    const credentials = await issueCredentials("session-owner");
+    const deriveKey = vi.spyOn(crypto.subtle, "deriveKey");
+    const getDb = vi.fn(async () => store.prisma as never);
+    setDbProvider(getDb);
+
+    const response = await post("/refresh", {
+      refresh_token: mutate(credentials.refresh_token),
+      token: credentials.token,
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({
+      error_code: "invalidRefreshToken",
+    });
+    expect(deriveKey).not.toHaveBeenCalled();
+    expect(getDb).not.toHaveBeenCalled();
+  });
+
+  it.each(["truncated", "extended"])("rejects a %s tag", async (change) => {
+    const credentials = await issueCredentials("session-owner");
+    const data = Buffer.from(credentials.refresh_token.slice(3), "base64");
+    const malformed =
+      change === "truncated"
+        ? data.subarray(0, -1)
+        : Buffer.concat([data, Buffer.from([0])]);
+    const getDb = vi.fn(async () => store.prisma as never);
+    setDbProvider(getDb);
+
+    const response = await post("/refresh", {
+      refresh_token: `v2.${malformed.toString("base64")}`,
+      token: credentials.token,
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({
+      error_code: "invalidRefreshToken",
+    });
+    expect(getDb).not.toHaveBeenCalled();
+  });
+
+  it("rejects a token encrypted with another secret before accessing the database", async () => {
+    const credentials = await issueCredentials("session-owner");
+    process.env.JWT_SECRET = "another-secret";
+    const getDb = vi.fn(async () => store.prisma as never);
+    setDbProvider(getDb);
+
+    const response = await post("/refresh", {
+      refresh_token: credentials.refresh_token,
+      token: credentials.token,
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({
+      error_code: "invalidRefreshToken",
+    });
+    expect(getDb).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "v2."])("rejects legacy CBC with prefix '%s'", async (prefix) => {
+    // Golden token from the old PBKDF2/SHA-256 + AES-CBC wire format, using
+    // refresh-test-secret, a zero IV, and salt 00112233445566778899aabbccddeeff.
+    const legacyToken =
+      "AAAAAAAAAAAAAAAAAAAAAAARIjNEVWZ3iJmqu8zd7v8P5KuyLiTiOsVNEXmBbqTD19lPfbrIZTC+C4QFj6tr+W9Y7TowogebHXQ3qIp051s=";
+    store = createSessionPrisma([
+      {
+        token: "00000000-0000-4000-8000-000000000001",
+        userId: "legacy-owner",
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    ]);
+    const getDb = vi.fn(async () => store.prisma as never);
+    setDbProvider(getDb);
+
+    const response = await post("/refresh", {
+      refresh_token: `${prefix}${legacyToken}`,
+      token: "unused-access-token",
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({
+      error_code: "invalidRefreshToken",
+    });
+    expect(getDb).not.toHaveBeenCalled();
+    expect(store.allSessions()).toHaveLength(1);
+    expect(store.all()).toHaveLength(0);
+    expect(store.allFamilies()).toHaveLength(0);
+  });
+
+  it.each([undefined, ""])("returns 500 for JWT secret '%s'", async (secret) => {
+    const credentials = await issueCredentials("session-owner");
+    if (secret === undefined) {
+      delete process.env.JWT_SECRET;
+    } else {
+      process.env.JWT_SECRET = secret;
+    }
+    const getDb = vi.fn(async () => store.prisma as never);
+    setDbProvider(getDb);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const response = await post("/refresh", {
+      refresh_token: credentials.refresh_token,
+      token: credentials.token,
+    });
+
+    expect(response.status).toBe(500);
+    expect(getDb).not.toHaveBeenCalled();
+    expect(store.all()[0].refreshTokenConsumedAt).toBeNull();
   });
 
   it("caps the initial refresh-token lifetime at 90 days", async () => {
@@ -272,6 +442,22 @@ describe("v1 refresh-token rotation", () => {
 
     expect(first.status).toBe(200);
     expect(retry.status).toBe(200);
+    const firstCredentials = (await first.json()) as Credentials;
+    const retryCredentials = (await retry.json()) as Credentials;
+    const replacement = store.all().find(
+      (session) => !session.refreshTokenConsumedAt,
+    )!;
+    expect(decryptGcmRefreshToken(firstCredentials.refresh_token)).toBe(
+      replacement.token,
+    );
+    expect(decryptGcmRefreshToken(retryCredentials.refresh_token)).toBe(
+      replacement.token,
+    );
+    // Even when wrapping the same raw token, every response uses fresh randomness.
+    const firstData = Buffer.from(firstCredentials.refresh_token.slice(3), "base64");
+    const retryData = Buffer.from(retryCredentials.refresh_token.slice(3), "base64");
+    expect(firstData.subarray(0, 12)).not.toEqual(retryData.subarray(0, 12));
+    expect(firstData.subarray(12, 28)).not.toEqual(retryData.subarray(12, 28));
     expect(store.all()).toHaveLength(2);
     expect(
       store.all().filter((session) => !session.refreshTokenConsumedAt),
