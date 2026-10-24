@@ -53,3 +53,5 @@ export * from "./user-payment-history";
 export * from "./user";
 export * from "./user-lookup";
 export * from "./storage-management";
+
+export * from "./native-devices";

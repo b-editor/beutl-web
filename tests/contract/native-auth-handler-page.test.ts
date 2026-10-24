@@ -53,6 +53,8 @@ vi.mock(
   }),
 );
 
+vi.mock("../../apps/web/src/app/[lang]/(auth-flow)/account/native-auth/handler/oauth-page", () => ({ OAuthConsentPage: () => "oauth-consent-page" }));
+
 import Page from "../../apps/web/src/app/[lang]/(auth-flow)/account/native-auth/handler/page";
 import ContinuePage from "../../apps/web/src/app/[lang]/(auth-flow)/account/native-auth/continue/page";
 
@@ -180,6 +182,7 @@ describe("native-auth handler page", () => {
   });
 
   it.each([
+    "/api/auth/oauth2/authorize?client_id=beutl-desktop",
     "/account/native-auth/handler?identifier=auth-id",
     "/ja/account/native-auth/handler?identifier=auth-id",
     "/en/account/native-auth/handler?identifier=auth-id",

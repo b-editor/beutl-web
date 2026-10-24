@@ -1,7 +1,7 @@
 import { byteRangeHeaders, parseByteRange, resolveContentAccess } from "@beutl/core";
 import { existsUserPaymentHistory, findFileForContentAccess, getDb } from "@beutl/db";
 import { getR2Bucket } from "../ai/r2-provider";
-import { tryGetUserIdFromHeaders } from "../api/auth";
+import { tryGetUserIdFromRequest } from "../api/auth";
 import { authenticateNuget } from "./tokens";
 import { verifyDownloadTicket } from "./tickets";
 import type { NugetEnv } from "./protocol";
@@ -16,7 +16,7 @@ export async function downloadPackage(request: Request, fileId: string, executio
   if (access.outcome !== "allowed") {
     const ticket = new URL(request.url).searchParams.get("ticket");
     userId = (ticket ? await verifyDownloadTicket(ticket, fileId) : null) ??
-      (await authenticateNuget(request.headers))?.userId ?? await tryGetUserIdFromHeaders(request.headers);
+      (await authenticateNuget(request.headers))?.userId ?? await tryGetUserIdFromRequest(request);
     access = await resolveContentAccess({ file, userId, hasPurchasedPackage: (packageId) => existsUserPaymentHistory({ packageId, userId: userId ?? undefined }) });
   }
   if (access.outcome !== "allowed") return new Response(null, { status: userId ? 403 : 401,

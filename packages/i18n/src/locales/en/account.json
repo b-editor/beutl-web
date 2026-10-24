@@ -194,5 +194,12 @@
       "nugetLimitReached": "You can have up to 20 active NuGet keys. Revoke an unused key first.",
       "repositoryLimitReached": "You can have up to 50 API keys per repository. Revoke an unused key first."
     }
+  },
+  "devices": {
+    "title": "Connected devices and apps",
+    "empty": "No connected devices.",
+    "disconnect": "Disconnect",
+    "confirm": "Disconnect this device?",
+    "failed": "Could not disconnect. Try again."
   }
 }

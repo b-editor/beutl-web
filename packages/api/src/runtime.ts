@@ -5,7 +5,7 @@
 export { GitRepositoryDurableObject } from "./git/repo-durable-object";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { runWithDbProvider } from "@beutl/db";
+import { cleanupExpiredAuthVerifications, runWithDbProvider } from "@beutl/db";
 import { runWithR2BucketProvider } from "./ai/r2-provider";
 import {
   boundedBody,
@@ -43,6 +43,7 @@ export interface Env extends GitEnvironment {
   // workerd はこれらを process.env に自動投入しないため、fetch 冒頭でコピーする。
   // ここに列挙したキーは「vars/secrets に設定されていれば」コピーされる。
   // 未設定のキー (例: BEUTL_LATEST_VERSION) は undefined のまま (Web 側と同挙動)。
+  BETTER_AUTH_URL?: string;
   JWT_SECRET?: string;
   JWT_ISSUER?: string;
   JWT_AUDIENCE?: string;
@@ -265,6 +266,7 @@ export default {
           reconcileGitRepositoryDeletions(env),
           reconcileGitLfsReservations(env),
           reconcileGitHistoryReservations(env),
+          cleanupExpiredAuthVerifications(scheduledAt),
         ] as const;
       await Promise.all(reconciliations).catch(async (error) => {
         // Do not close this invocation's DB while another reconciler is active.

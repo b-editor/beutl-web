@@ -1,4 +1,6 @@
 import { betterAuth } from "better-auth";
+import { createAuthMiddleware } from "better-auth/api";
+import { nativeOAuthBefore, nativeOAuthPlugins } from "./native-oauth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { passkey } from "@better-auth/passkey";
 import { customSession, magicLink } from "better-auth/plugins";
@@ -17,7 +19,7 @@ export type BetterAuthSession = Session;
 export type BetterAuthUser = User;
 
 // Create the auth instance with Prisma adapter
-async function createAuthWithPrisma() {
+export async function createAuthWithPrisma() {
   const prisma = await getDb();
   return betterAuth({
     database: prismaAdapter(prisma, {
@@ -41,7 +43,9 @@ async function createAuthWithPrisma() {
         clientSecret: process.env.AUTH_GITHUB_SECRET as string,
       },
     },
+    disabledPaths: ["/token"],
     plugins: [
+      ...nativeOAuthPlugins(prisma),
       passkey({
         rpID: process.env.BETTER_AUTH_RP_ID || "localhost",
         rpName: "Beutl",
@@ -68,6 +72,7 @@ async function createAuthWithPrisma() {
       nextCookies(),
     ],
     session: {
+      additionalFields: { passkeyVerifiedAt: { type: "date", required: false, input: false } },
       expiresIn: 60 * 60 * 24 * 30,
       updateAge: 60 * 60 * 24,
       cookieCache: {
@@ -95,7 +100,10 @@ async function createAuthWithPrisma() {
         trustedProviders: ["google"],
       },
     },
-    hooks: { before: authEmailRateLimitHook },
+    hooks: { before: createAuthMiddleware(async (ctx) => {
+      await authEmailRateLimitHook(ctx);
+      await nativeOAuthBefore(ctx);
+    }) },
     advanced: {
       ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] },
       // BETTER_AUTH_COOKIE_DOMAIN を設定したときだけ Domain 付きのセッションクッキーを
@@ -127,6 +135,10 @@ async function createAuthWithPrisma() {
       },
       session: {
         create: {
+          before: async (session, ctx) => ({ data: {
+            ...session,
+            ...(ctx?.path === "/passkey/verify-authentication" ? { passkeyVerifiedAt: new Date() } : {}),
+          } }),
           after: async (session) => {
             await addAuditLog({
               userId: session.userId,

@@ -1,6 +1,6 @@
 import { nugetFileUrl } from "@beutl/api/nuget/tickets";
 import { byteRangeHeaders, parseByteRange, resolveContentAccess } from "@beutl/core";
-import { tryGetUserIdFromHeaders } from "@beutl/api/api/auth";
+import { tryGetUserIdFromRequest } from "@beutl/api/api/auth";
 import { getR2Bucket } from "@beutl/api/ai/r2-provider";
 
 import {
@@ -70,7 +70,7 @@ async function serveContent(
   let downloadUserId: string | null = null;
   if (access.outcome !== "allowed") {
     const session = await auth.api.getSession({ headers: request.headers });
-    const userId = session?.user?.id ?? (await tryGetUserIdFromHeaders(request.headers));
+    const userId = session?.user?.id ?? (await tryGetUserIdFromRequest(request));
     downloadUserId = userId;
     access = await resolveContentAccess({
       file,

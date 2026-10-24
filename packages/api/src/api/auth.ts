@@ -1,5 +1,6 @@
 import { decode, verify as jwtVerify } from "hono/jwt";
 import type { Context } from "hono";
+import { verifyNativeOAuthRequest } from "./oauth-auth";
 
 const nameIdentifierClaim =
   "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier";
@@ -56,8 +57,27 @@ async function verifyBearer(authHeader: string | null) {
   }
 }
 
+const authenticatedRequests = new WeakMap<Request, Promise<string | null>>();
+
+export function getUserIdFromRequest(request: Request) {
+  let result = authenticatedRequests.get(request);
+  if (!result) {
+    const authorization = request.headers.get("Authorization");
+    result = /^DPoP[\t ]/iu.test(authorization ?? "")
+      ? verifyNativeOAuthRequest(request)
+      : verifyBearer(authorization);
+    authenticatedRequests.set(request, result);
+  }
+  return result;
+}
+
+export async function tryGetUserIdFromRequest(request: Request) {
+  try { return await getUserIdFromRequest(request); }
+  catch (error) { console.error("Optional authentication failed", error); return null; }
+}
+
 export async function getUserId(c: Context) {
-  return verifyBearer(c.req.header("Authorization") ?? null);
+  return getUserIdFromRequest(c.req.raw);
 }
 
 export async function getUserIdFromHeaders(headers: Headers) {
