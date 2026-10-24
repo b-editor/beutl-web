@@ -3,6 +3,8 @@ import { sign, verify } from "hono/jwt";
 import { setDbProvider } from "@beutl/db";
 import { createSessionPrisma, type NativeAppAuthRecord } from "../stubs/session-prisma";
 
+const oauth = vi.hoisted(() => ({ verify: vi.fn(async () => "owner") }));
+vi.mock("../../packages/api/src/api/oauth-auth", () => ({ verifyNativeOAuthRequest: oauth.verify }));
 const session = vi.hoisted(() => ({ getSession: vi.fn() }));
 vi.mock("@/lib/better-auth", () => ({ auth: { api: { getSession: session.getSession } } }));
 vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
@@ -79,6 +81,32 @@ describe("native authorization security", () => {
     expect((await account.request("/handler?identifier=auth-id", {
       headers: { authorization: `Bearer ${token}` },
     })).status).toBe(400);
+  });
+  it("refuses to turn an authorized OAuth device into an independent legacy grant", async () => {
+    const created = await post("/createAuthUri", { continue_uri: authorization().continueUrl });
+    const { auth_uri } = await created.json();
+    const identifier = new URL(auth_uri).searchParams.get("identifier")!;
+    // Model a valid device identity; this route must still require legacy authentication.
+    const response = await account.request(`/handler?identifier=${identifier}`, {
+      headers: { authorization: "DPoP valid-device-token", DPoP: "valid-device-proof" },
+    });
+    expect(response.status).toBe(401);
+    expect(store.allNativeAppAuth()[0]).toMatchObject({ code: null, userId: null });
+    expect(store.allFamilies()).toHaveLength(0);
+  });
+  it("retains code issuance for an existing legacy bearer session", async () => {
+    store.putNativeAppAuth({ ...authorization(), code: null });
+    const token = await sign({
+      "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": "owner",
+      exp: Math.floor(Date.now() / 1000) + 60,
+    }, "local-test-secret");
+    const response = await account.request("/handler?identifier=auth-id", {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(response.status).toBe(302);
+    const code = new URL(response.headers.get("location")!).searchParams.get("code");
+    expect((await post("/code2jwt", { session_id: "native-session", code })).status).toBe(200);
+    expect(store.allFamilies()).toHaveLength(1);
   });
   it("allows only one concurrent exchange and one refresh-token family", async () => {
     store.putNativeAppAuth(authorization());

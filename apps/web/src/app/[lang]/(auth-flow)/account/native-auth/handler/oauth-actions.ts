@@ -32,7 +32,8 @@ export async function consentToNativeOAuth(
       body: { accept, oauth_query: oauthQuery },
     });
     callbackUrl = result.url;
-  } catch {
+  } catch (error) {
+    console.error("Native device consent failed", error);
     return { success: false as const };
   }
   // Let Next.js finish the action before navigating away from its response stream.

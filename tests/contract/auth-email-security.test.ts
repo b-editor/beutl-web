@@ -49,6 +49,10 @@ let tokens: Map<string, Row>;
 let counters: Map<string, Row>;
 let transactions: Promise<unknown>;
 const db = {
+  jwks: {
+    findMany: vi.fn(async () => []),
+    create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => data),
+  },
   feedback: { create: vi.fn(async () => ({ id: "feedback" })) },
   profile: { findFirst: vi.fn() },
   user: { findFirst: vi.fn(), update: vi.fn() },

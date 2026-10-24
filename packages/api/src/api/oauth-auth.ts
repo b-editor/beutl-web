@@ -64,6 +64,7 @@ export async function verifyNativeOAuthRequest(request: Request): Promise<string
     });
     return device ? payload.sub : null;
   } catch {
+    // Invalid proofs, revoked grants, and unavailable verification all fail closed as unauthenticated.
     return null;
   }
 }

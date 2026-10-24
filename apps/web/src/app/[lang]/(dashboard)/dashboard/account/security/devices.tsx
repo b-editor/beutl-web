@@ -37,6 +37,7 @@ export function ConnectedDevices({
       if (!result.success) throw new Error("Disconnect failed");
       setDevices((items) => items.filter((item) => item.id !== id));
     } catch {
+      // Preserve the device in the list and let the user retry the failed action.
       setFailed(true);
     } finally {
       setPending(null);

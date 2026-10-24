@@ -7,7 +7,7 @@
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
-import { getUserId } from "../api/auth";
+import { getUserIdFromHeaders } from "../api/auth";
 import { apiErrorResponse } from "../api/error";
 import {
   createNativeAppAuth,
@@ -218,7 +218,8 @@ const app = new Hono()
   // not at this API route). Kept until client telemetry confirms no desktop build
   // calls GET /api/v1/account/handler.
   .get("/handler", async (c) => {
-    const userId = await getUserId(c);
+    // Device-bound OAuth credentials must not mint independent legacy grants.
+    const userId = await getUserIdFromHeaders(c.req.raw.headers);
     if (!userId) {
       return c.json(await apiErrorResponse("authenticationIsRequired"), {
         status: 401,

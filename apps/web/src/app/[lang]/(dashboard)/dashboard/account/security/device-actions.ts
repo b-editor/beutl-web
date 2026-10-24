@@ -8,7 +8,8 @@ export async function disconnectDevice(id: string) {
   if (!session || typeof id !== "string" || id.length > 100) return { success: false };
   try {
     return { success: await revokeNativeDevice(session.user.id, id) };
-  } catch {
+  } catch (error) {
+    console.error("Native device disconnection failed", error);
     return { success: false };
   }
 }

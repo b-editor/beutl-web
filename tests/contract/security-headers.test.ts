@@ -139,7 +139,7 @@ describe("wiring", () => {
   it("wraps the web middleware, keeping the api and _next exclusions", async () => {
     const middleware = await readFile(new URL("../../apps/web/src/middleware.ts", import.meta.url), "utf8");
     expect(middleware).toContain("applySecurityHeaders(oversized ?? localeMiddleware(request))");
-    expect(middleware).toContain('"/((?!_next|api/).*)"');
+    expect(middleware).toContain(String.raw`"/((?!_next|api/|\\.well-known/).*)"`);
   });
 
   it("wraps the admin middleware, keeping the api and _next exclusions", async () => {

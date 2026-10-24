@@ -33,6 +33,10 @@ const profile = {
   iconFileId: "profile-icon",
 };
 const db = {
+  jwks: {
+    findMany: vi.fn(async () => []),
+    create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => data),
+  },
   profile: { findFirst: vi.fn() },
   session: { findFirst: vi.fn() },
   user: { findFirst: vi.fn() },

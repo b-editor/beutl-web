@@ -25,6 +25,7 @@ export function OAuthConsentForm({
         const result = await authClient.signIn.passkey();
         if (result.error || result.data?.user.id !== userId) return true;
       } catch {
+        // A cancelled or failed passkey prompt leaves consent pending and shows the retry message.
         return true;
       }
     }

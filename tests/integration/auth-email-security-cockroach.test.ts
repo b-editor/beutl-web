@@ -54,7 +54,7 @@ describeWithCockroach("authentication-email security on CockroachDB", () => {
     await client.query(`CREATE TABLE "Session" (
       "id" STRING PRIMARY KEY, "token" STRING NOT NULL UNIQUE, "userId" STRING NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
       "expiresAt" TIMESTAMP(3) NOT NULL, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT current_timestamp(),
-      "updatedAt" TIMESTAMP(3) NOT NULL, "ipAddress" STRING, "userAgent" STRING
+      "updatedAt" TIMESTAMP(3) NOT NULL, "ipAddress" STRING, "userAgent" STRING, "passkeyVerifiedAt" TIMESTAMP(3)
     )`);
     await client.query(`CREATE TABLE "RefreshTokenFamily" (
       "id" STRING PRIMARY KEY, "userId" STRING NOT NULL, "expiresAt" TIMESTAMP(3) NOT NULL,
