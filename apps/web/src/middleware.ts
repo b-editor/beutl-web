@@ -20,6 +20,6 @@ export const config = {
     // matcher に含めると Next.js が本文を middleware 用に複製し、既定 10MB を
     // 超えた分を捨てる。20MB まで受け付ける AI のアップロードが、閉じ境界を
     // 欠いた multipart としてハンドラに届いていた。
-    "/((?!_next|api/).*)",
+    "/((?!_next|api/|\\.well-known/).*)",
   ],
 };

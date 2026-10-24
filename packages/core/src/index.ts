@@ -217,3 +217,5 @@ export * from "./git-repositories";
 export * from "./byte-range";
 export * from "./nuget";
 export * from "./localization";
+
+export * from "./native-oauth";

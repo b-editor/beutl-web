@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   findFileForContentAccess: vi.fn(),
   existsUserPaymentHistory: vi.fn(),
   getSession: vi.fn(),
-  tryGetUserIdFromHeaders: vi.fn(),
+  tryGetUserIdFromRequest: vi.fn(),
   getCloudflareContext: vi.fn(),
   get: vi.fn(),
   open: vi.fn(),
@@ -21,7 +21,7 @@ vi.mock("@beutl/db", () => ({
   findFileForContentAccess: mocks.findFileForContentAccess,
   existsUserPaymentHistory: mocks.existsUserPaymentHistory,
 }));
-vi.mock("@beutl/api/api/auth", () => ({ tryGetUserIdFromHeaders: mocks.tryGetUserIdFromHeaders }));
+vi.mock("@beutl/api/api/auth", () => ({ tryGetUserIdFromRequest: mocks.tryGetUserIdFromRequest }));
 vi.mock("@/lib/better-auth", () => ({ auth: { api: { getSession: mocks.getSession } } }));
 // This dependency belongs to apps/web; mocking a bare import from the root
 // tests would register a different module ID from the route's resolved import.
@@ -93,7 +93,7 @@ beforeEach(() => {
   mocks.output.mockImplementation(async () => ({ response: () => new Response(WEBP_BYTES) }));
   mocks.findFileForContentAccess.mockResolvedValue(file());
   mocks.getSession.mockResolvedValue(null);
-  mocks.tryGetUserIdFromHeaders.mockResolvedValue(null);
+  mocks.tryGetUserIdFromRequest.mockResolvedValue(null);
   mocks.existsUserPaymentHistory.mockResolvedValue(false);
   mocks.get.mockImplementation(async () => ({
     body: new Response(BYTES).body,
@@ -581,12 +581,12 @@ describe("image delivery", () => {
 
   it("authenticates a desktop token before serving a private thumbnail", async () => {
     mocks.findFileForContentAccess.mockResolvedValue({ ...file(), visibility: "PRIVATE" });
-    mocks.tryGetUserIdFromHeaders.mockResolvedValue("owner");
+    mocks.tryGetUserIdFromRequest.mockResolvedValue("owner");
     const response = await request({ Authorization: "Bearer desktop-token" }, "?image=thumbnail-320");
     expect(response.status).toBe(200);
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(WEBP_BYTES);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
-    expect(mocks.tryGetUserIdFromHeaders).toHaveBeenCalledTimes(1);
+    expect(mocks.tryGetUserIdFromRequest).toHaveBeenCalledTimes(1);
     expect(mocks.input).toHaveBeenCalledTimes(1);
   });
 
@@ -678,7 +678,7 @@ describe("image delivery", () => {
   it("skips session and token lookups for public images", async () => {
     expect((await request({ Cookie: "session=unused", Authorization: "Bearer unused" })).status).toBe(200);
     expect(mocks.getSession).not.toHaveBeenCalled();
-    expect(mocks.tryGetUserIdFromHeaders).not.toHaveBeenCalled();
+    expect(mocks.tryGetUserIdFromRequest).not.toHaveBeenCalled();
     expect(mocks.existsUserPaymentHistory).not.toHaveBeenCalled();
   });
 
@@ -740,9 +740,9 @@ describe("image delivery", () => {
 
   it("still accepts a desktop token for a private image", async () => {
     mocks.findFileForContentAccess.mockResolvedValue({ ...file(), visibility: "PRIVATE" });
-    mocks.tryGetUserIdFromHeaders.mockResolvedValue("owner");
+    mocks.tryGetUserIdFromRequest.mockResolvedValue("owner");
     expect((await request({ Authorization: "Bearer desktop-token" })).status).toBe(200);
-    expect(mocks.tryGetUserIdFromHeaders).toHaveBeenCalledTimes(1);
+    expect(mocks.tryGetUserIdFromRequest).toHaveBeenCalledTimes(1);
   });
 
   it("checks a paid release purchase again before issuing another download ticket", async () => {

@@ -6,7 +6,7 @@ import { createRoot, type Root } from "../../apps/web/node_modules/react-dom/cli
 
 const mocks = vi.hoisted(() => ({ create: vi.fn(), copy: vi.fn() }));
 vi.mock("@/lib/auth-guard", () => ({ authOrSignIn: async () => ({ user: { id: "owner" } }) }));
-vi.mock("@beutl/db", () => ({ retrieveAccountsWithIdToken: async () => [], getPasskeysByUserId: async () => [] }));
+vi.mock("@beutl/db", () => ({ retrieveAccountsWithIdToken: async () => [], getPasskeysByUserId: async () => [], listNativeDevices: async () => [] }));
 vi.mock("../../apps/web/src/app/[lang]/(dashboard)/dashboard/account/security/components", () => ({ Form: () => null, List: () => null, PasskeysList: () => null }));
 vi.mock("../../apps/web/src/app/[lang]/(dashboard)/dashboard/account/security/api-key-actions", () => ({
   retrieveApiKeys: async () => ({ success: true, data: { keys: [], repositories: [], gitAvailable: true } }),

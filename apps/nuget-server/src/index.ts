@@ -9,6 +9,8 @@ import app from "@beutl/api/nuget/app";
 type Env = Parameters<typeof resolveStorageBucket>[0] & {
   BEUTL_DATABASE_HYPERDRIVE: { connectionString: string };
   NUGET_PUBLIC_ORIGIN?: string;
+  PUBLIC_ORIGIN?: string;
+  BETTER_AUTH_URL?: string;
   NUGET_DOWNLOAD_SECRET: string;
   JWT_SECRET?: string;
   JWT_ISSUER?: string;
@@ -21,7 +23,7 @@ export default {
     const env = await resolveWorkerSecrets<Env>(bindings);
     const connectionString = env.BEUTL_DATABASE_HYPERDRIVE?.connectionString;
     if (!connectionString || !env.NUGET_DOWNLOAD_SECRET) throw new Error("NuGet Worker bindings are missing");
-    for (const key of ["NUGET_DOWNLOAD_SECRET", "JWT_SECRET", "JWT_ISSUER", "JWT_AUDIENCE"] as const) {
+    for (const key of ["NUGET_DOWNLOAD_SECRET", "JWT_SECRET", "JWT_ISSUER", "JWT_AUDIENCE", "PUBLIC_ORIGIN", "BETTER_AUTH_URL"] as const) {
       if (env[key]) process.env[key] = env[key];
     }
     const bucket = resolveStorageBucket(env);

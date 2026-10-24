@@ -1,3 +1,4 @@
+import { OAuthConsentPage } from "./oauth-page";
 import { getTranslation } from "@beutl/i18n";
 import { auth } from "@/lib/better-auth";
 import { findNativeAppAuthById } from "@beutl/db";
@@ -12,11 +13,19 @@ import { AuthLegalLinks } from "@/components/auth/legal-links";
 import { NativeAuthConsentForm } from "./components";
 
 export default async function Page(props: {
-  searchParams: Promise<{ identifier?: string | string[] }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
   params: Promise<{ lang: string }>;
 }) {
   const { lang } = await props.params;
-  const { identifier } = await props.searchParams;
+  const search = await props.searchParams;
+  if (typeof search.sig === "string") {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(search)) {
+      for (const item of Array.isArray(value) ? value : value === undefined ? [] : [value]) query.append(key, item);
+    }
+    return <OAuthConsentPage oauthQuery={query.toString()} lang={lang} />;
+  }
+  const { identifier } = search;
   const { t } = await getTranslation(lang);
   const row = typeof identifier === "string" && identifier
     ? await findNativeAppAuthById({ id: identifier })

@@ -34,7 +34,7 @@ export default async function Page(
   // The handler obtains consent immediately before issuing a code. Keep this
   // confirmation page for legacy callbacks, but avoid a second consent there.
   const pathname = returnUrl.split(/[?#]/, 1)[0];
-  if (["", ...availableLanguages].some((language) =>
+  if (pathname === "/api/auth/oauth2/authorize" || ["", ...availableLanguages].some((language) =>
     pathname === `${language ? `/${language}` : ""}/account/native-auth/handler`,
   )) {
     redirect(returnUrl);

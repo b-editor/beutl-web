@@ -7,7 +7,7 @@ const dbMocks = vi.hoisted(() => ({
 }));
 const authMocks = vi.hoisted(() => ({
   getSession: vi.fn(),
-  tryGetUserIdFromHeaders: vi.fn(),
+  tryGetUserIdFromRequest: vi.fn(),
 }));
 const bucketMocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -15,7 +15,7 @@ const bucketMocks = vi.hoisted(() => ({
 
 vi.mock("@beutl/db", () => dbMocks);
 vi.mock("@beutl/api/api/auth", () => ({
-  tryGetUserIdFromHeaders: authMocks.tryGetUserIdFromHeaders,
+  tryGetUserIdFromRequest: authMocks.tryGetUserIdFromRequest,
 }));
 vi.mock("@/lib/better-auth", () => ({
   auth: {
@@ -66,7 +66,7 @@ describe("content route security", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     authMocks.getSession.mockResolvedValue(null);
-    authMocks.tryGetUserIdFromHeaders.mockResolvedValue(null);
+    authMocks.tryGetUserIdFromRequest.mockResolvedValue(null);
     dbMocks.existsUserPaymentHistory.mockResolvedValue(false);
   });
 

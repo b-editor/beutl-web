@@ -1,3 +1,5 @@
+import { listNativeDevices } from "@beutl/db";
+import { ConnectedDevices } from "./devices";
 import { getAuthenticatorName } from "@better-auth/passkey";
 import { Form, List, PasskeysList } from "./components";
 import { authOrSignIn } from "@/lib/auth-guard";
@@ -87,6 +89,7 @@ export default async function Page(
 
   const { t } = await getTranslation(lang);
   const apiKeys = await retrieveApiKeys();
+  const devices = await listNativeDevices(session.user.id);
   const nugetOrigin = (process.env.NUGET_PUBLIC_ORIGIN || NUGET_ORIGIN).replace(/\/$/u, "");
   const { repository } = await props.searchParams;
 
@@ -111,6 +114,7 @@ export default async function Page(
         {passkeysList.length !== 0 && <Separator />}
         <PasskeysList lang={lang} authenticators={passkeysList} />
       </div>
+      <ConnectedDevices lang={lang} initialDevices={devices} />
       <ApiKeys lang={lang} initialResult={apiKeys} initialRepositoryId={repository} nugetSource={`${nugetOrigin}/v3/index.json`} />
     </div>
   );

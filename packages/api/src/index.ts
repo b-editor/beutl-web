@@ -6,7 +6,7 @@ export {
   fileTooLargeApiResponse,
 } from "./api/error";
 export type { ApiErrorCode, ApiErrorResponse } from "./api/error";
-export { getUserId, getUserIdFromHeaders, getUserIdFromToken, tryGetUserIdFromHeaders } from "./api/auth";
+export { getUserId, getUserIdFromRequest, tryGetUserIdFromRequest, getUserIdFromHeaders, getUserIdFromToken, tryGetUserIdFromHeaders } from "./api/auth";
 export { getContentUrl, contentPath } from "./content-url";
 export * from "./ai";
 export { getStorageEntitlement } from "./storage-entitlements";
