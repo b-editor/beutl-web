@@ -149,6 +149,7 @@ export async function updateRelease(
               where: {
                 id: replacementFileId,
                 userId: session.user.id,
+                visibility: { in: ["PRIVATE", "DEDICATED"] },
                 Release: { none: { id: { not: validated.data.id } } },
               },
               data: { visibility: "DEDICATED" },
