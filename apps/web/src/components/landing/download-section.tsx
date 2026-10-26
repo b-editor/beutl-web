@@ -17,9 +17,9 @@ function downloadLabel(download: AppDownload, t: Translator): string {
     case "app":
       return t(download.arch === "arm64" ? "main:downloadAppleSilicon" : "main:downloadIntelMac");
     case "flatpak":
-      return t("main:downloadFlatpak");
+      return t("main:downloadFlatpak", { arch: ARCH_NAMES[download.arch] });
     case "zip":
-      return t("main:downloadZip");
+      return t("main:downloadZip", { arch: ARCH_NAMES[download.arch] });
   }
 }
 

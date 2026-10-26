@@ -139,8 +139,8 @@
   "downloadInstaller": "インストーラー（{{arch}}）",
   "downloadAppleSilicon": "Appleシリコン",
   "downloadIntelMac": "Intel",
-  "downloadFlatpak": "Flatpak",
-  "downloadZip": "ZIP",
+  "downloadFlatpak": "Flatpak（{{arch}}）",
+  "downloadZip": "ZIP（{{arch}}）",
   "releaseNotes": "リリースノート",
   "moreDownloads": "その他の形式・過去のバージョン"
 }
