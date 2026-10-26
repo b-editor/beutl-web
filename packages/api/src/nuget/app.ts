@@ -3,13 +3,15 @@ import { cors } from "hono/cors";
 import { InvalidNugetIdentityError } from "@beutl/core";
 import { PackageIdentityReservedError, ReleaseArtifactLockedError, ReleaseIdentityConflictError } from "@beutl/db";
 import { InvalidNugetPackageError } from "./archive";
-import { NugetOwnershipError, NugetPackageUnpublishedError, NugetPushTooLargeError } from "./push";
+import { NUGET_PUSH_LIMIT, NugetOwnershipError, NugetPackageUnpublishedError, NugetPushTooLargeError } from "./push";
 import { nugetOrigin, type NugetEnv } from "./protocol";
 import catalogRoutes from "./routes/catalog";
 import contentRoutes from "./routes/content";
 import publishRoutes from "./routes/publish";
 
 export type { NugetEnv } from "./protocol";
+
+const NUGET_PUSH_LIMIT_MIB = NUGET_PUSH_LIMIT / (1024 * 1024);
 
 const app = new Hono<NugetEnv>({ strict: false });
 
@@ -41,7 +43,7 @@ app.onError((error, c) => {
     return c.json({ message: "Package belongs to another account" }, 403);
   }
   if (error instanceof NugetPushTooLargeError) {
-    return c.json({ message: "The maximum push size is 50 MiB" }, 413);
+    return c.json({ message: `The maximum push size is ${NUGET_PUSH_LIMIT_MIB} MiB` }, 413);
   }
   if (error instanceof InvalidNugetPackageError || error instanceof InvalidNugetIdentityError) {
     return c.json({ message: error.message }, 400);
