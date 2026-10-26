@@ -24,6 +24,17 @@ export type StorageUploadCompletionFields = {
 export const DEDICATED_STORAGE_WRITE_LEASE_MILLISECONDS = 60 * 1000;
 export const DEDICATED_STORAGE_LATE_PUT_GRACE_MILLISECONDS = 15 * 60 * 1000;
 
+/**
+ * A dedicated storage commit reads the quota, writes the file, publishes the
+ * package release and settles the reservation in one transaction. Over
+ * Hyperdrive that can take longer than Prisma's 5-second default, and an
+ * expired transaction leaves the package unpublished after its upload.
+ */
+export const DEDICATED_STORAGE_TRANSACTION = {
+  maxWait: 5_000,
+  timeout: 20_000,
+} as const;
+
 function withCompletionFields<T extends object>(
   value: T | null,
 ): (T & StorageUploadCompletionFields) | null {
@@ -496,7 +507,7 @@ export async function commitDedicatedStorageReservation({
     } as never);
     return { kind: "created" as const, record: created };
   };
-  return prisma ? run(prisma) : startRetryableTransaction(run);
+  return prisma ? run(prisma) : startRetryableTransaction(run, DEDICATED_STORAGE_TRANSACTION);
 }
 
 /** Mark a failed dedicated write for durable remote cleanup and release its slot. */
@@ -551,7 +562,7 @@ export async function releaseDedicatedStorageReservation({
     } as never);
     return true;
   };
-  return prisma ? run(prisma) : startRetryableTransaction(run);
+  return prisma ? run(prisma) : startRetryableTransaction(run, DEDICATED_STORAGE_TRANSACTION);
 }
 
 /** A provider put that settles after the request stopped waiting must recreate
@@ -614,7 +625,7 @@ export async function recordLateDedicatedStorageWriteResult({
     }
     return { kind: "cleanup" as const };
   };
-  return prisma ? run(prisma) : startRetryableTransaction(run);
+  return prisma ? run(prisma) : startRetryableTransaction(run, DEDICATED_STORAGE_TRANSACTION);
 }
 
 /** Persist a cancellation tombstone for an upload that never reached storage. */
