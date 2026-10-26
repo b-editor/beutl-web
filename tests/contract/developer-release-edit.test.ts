@@ -31,6 +31,7 @@ describe("editing a release without replacing its artifact", () => {
     publishedPackageVersion: { upsert: () => Promise<{ releaseId: string }> };
     release: { findUniqueOrThrow: () => Promise<unknown>; findMany: () => Promise<typeof row[]>; findFirst: () => Promise<typeof row>; findFirstOrThrow: () => Promise<typeof row>; update: ReturnType<typeof vi.fn> };
     package: { findUniqueOrThrow: () => Promise<{ name: string }>; findFirst: () => Promise<{ id: string; name: string; userId: string; tags: string[] }>; update: ReturnType<typeof vi.fn> };
+    file: { updateMany: ReturnType<typeof vi.fn> };
   };
   beforeEach(() => {
     beforeTransaction = undefined;
@@ -54,6 +55,7 @@ describe("editing a release without replacing its artifact", () => {
         findFirst: async () => ({ id: "pkg", name: "Package", userId: "owner", tags: [] }),
         update: vi.fn(async () => ({ name: "Package" })),
       },
+      file: { updateMany: vi.fn(async () => ({ count: 1 })) },
     };
     setDbProvider(async () => ({
       ...models,

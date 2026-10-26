@@ -22,6 +22,7 @@ import { Label } from "@beutl/ui/ui/label";
 import { Checkbox } from "@beutl/ui/ui/checkbox";
 import { useToast } from "@beutl/ui/use-toast";
 import { showOpenFileDialog } from "@/lib/fileDialog";
+import { uploadStorageFile } from "@/lib/storage-upload";
 import { Info } from "lucide-react";
 import {
   Popover,
@@ -83,11 +84,13 @@ export function ReleaseForm({
   lang,
   languages,
   beutlVersions,
+  ownerId,
 }: {
   pkg: Package;
   lang: string;
   languages: LanguageLabel[];
   beutlVersions: string[];
+  ownerId: string;
 }) {
   const [edit, setEdit] = useState(false);
   const [open, setOpen] = useState(false);
@@ -148,10 +151,33 @@ export function ReleaseForm({
 
   const handleSave = useCallback(async () => {
     if (!release) return;
+    if (files.length > 0 && (release.artifactLocked || release.published)) {
+      toast({
+        variant: "destructive",
+        title: t("developer:release.saveError"),
+        description: t("developer:release.artifactLocked"),
+      });
+      return;
+    }
     startSaveTransition(async () => {
       const formData = new FormData();
-      for (const f of files) {
-        formData.append("file", f);
+      // A .nupkg can be larger than one request may carry. Send it in parts
+      // through the storage upload API and attach its file by id below.
+      if (files.length === 1 && files[0].name.toLowerCase().endsWith(".nupkg")) {
+        const uploaded = await uploadStorageFile(files[0], { ownerId });
+        if (!uploaded.ok) {
+          toast({
+            variant: "destructive",
+            title: t("developer:release.saveError"),
+            description: uploaded.errorCode,
+          });
+          return;
+        }
+        formData.append("uploadedFileId", uploaded.file.id);
+      } else {
+        for (const f of files) {
+          formData.append("file", f);
+        }
       }
       formData.append("id", release.id);
       formData.append("title", title);
@@ -211,6 +237,7 @@ export function ReleaseForm({
     pkg.audience,
     title,
     toast,
+    ownerId,
   ]);
 
   const handleSelectFiles = useCallback(async () => {

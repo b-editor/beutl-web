@@ -1,18 +1,19 @@
 "use server";
 
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
-import { applyPackageType, isValidNugetVersion, type ActionResult } from "@beutl/core";
+import { applyPackageType, isValidNugetVersion, type ActionResult, type PackageType } from "@beutl/core";
 import { InvalidNugetPackageError, readNugetPackage, storedPackageReader } from "@beutl/api/nuget/archive";
 import { refreshNugetPackageMetadata, ReleaseArtifactLockedError, ReleaseIdentityConflictError } from "@beutl/db";
 import { authenticated } from "@/lib/auth-guard";
 import {
+  findStorageFileByIdAndUserId,
   getPackageNameFromPackageId,
   retrieveDevPackageByName,
   startTransaction,
   deleteUnreferencedFileWithStorageCleanup,
   updateDevPackageTags,
 } from "@beutl/db";
-import type { PrismaTransaction } from "@beutl/db";
+import type { PrismaTransaction, ReleaseNugetData } from "@beutl/db";
 import {
   createRelease as createReleaseRecord,
   deleteReleaseWithStorageCleanup,
@@ -63,7 +64,12 @@ export async function updateRelease(
 
     return await sameUser(release.packageId, session.user.id, t, async () => {
       const uploaded = formData.getAll("file").filter((f): f is File => typeof f !== "string" && f.size > 0);
-      if (uploaded.length && (release.artifactLocked || release.published)) {
+      const uploadedFileIdRaw = formData.get("uploadedFileId");
+      const uploadedFileId = typeof uploadedFileIdRaw === "string" && uploadedFileIdRaw.length > 0
+        ? uploadedFileIdRaw
+        : undefined;
+      if ((uploaded.length > 0 || uploadedFileId !== undefined) &&
+          (release.artifactLocked || release.published)) {
         return { success: false, message: t("developer:release.artifactLocked") };
       }
       if (release.package.audience === "USER" && !validated.data.targetVersion) {
@@ -75,6 +81,25 @@ export async function updateRelease(
         });
         if (!packageName) {
           return { success: false, message: t("developer:errors.idNotFound") };
+        }
+
+        let uploadedArtifact: { nuget: ReleaseNugetData; packageType?: PackageType } | undefined;
+        if (uploadedFileId) {
+          const file = await findStorageFileByIdAndUserId({
+            id: uploadedFileId,
+            userId: session.user.id,
+          });
+          if (!file) return { success: false, message: t("developer:errors.fileNotFound") };
+          if (!file.name.toLowerCase().endsWith(".nupkg")) {
+            return { success: false, message: t("developer:nuget.nupkgRequired") };
+          }
+          uploadedArtifact = {
+            nuget: await readNugetPackage(
+              storedPackageReader(file.objectKey, Number(file.size)),
+              { id: packageName, version: release.version },
+            ),
+            packageType: release.package.audience === "USER" ? "extension" : undefined,
+          };
         }
 
         // Audit the visibility transition separately; publication rechecks ownership
@@ -116,9 +141,23 @@ export async function updateRelease(
           if (validated.data.published === "on" && !fileId) {
             throw new ReleaseFileRequiredError();
           }
+          if (replacementFileId) {
+            // A multipart upload lands as an ordinary private File. Claim it
+            // for this release in the same transaction that attaches it, and
+            // refuse a file another release already owns.
+            const claimed = await tx.file.updateMany({
+              where: {
+                id: replacementFileId,
+                userId: session.user.id,
+                Release: { none: { id: { not: validated.data.id } } },
+              },
+              data: { visibility: "DEDICATED" },
+            });
+            if (claimed.count !== 1) throw new ReleaseFileRequiredError();
+          }
           // Migrated drafts were not backfilled. Validate the retained file
           // from this transaction's snapshot before reserving and locking it.
-          const nuget = artifact?.nuget ?? (validated.data.published === "on" &&
+          const nuget = uploadedArtifact?.nuget ?? artifact?.nuget ?? (validated.data.published === "on" &&
             !current.published && !current.artifactLocked && !current.nugetMetadata && current.file
             ? await readNugetPackage(storedPackageReader(current.file.objectKey, Number(current.file.size)),
               { id: packageName, version: current.version }) : undefined);
@@ -150,10 +189,11 @@ export async function updateRelease(
           await refreshNugetPackageMetadata(tx, { id: release.packageId, audience: current.package.audience });
 
           // Merge the upload's kind into the current tags so concurrent edits survive.
-          if (artifact?.packageType) {
+          const packageType = uploadedArtifact?.packageType ?? artifact?.packageType;
+          if (packageType) {
             await updateDevPackageTags({
               packageId: release.packageId,
-              tags: applyPackageType(devPackage.tags, artifact.packageType),
+              tags: applyPackageType(devPackage.tags, packageType),
               prisma: tx,
             });
           }
@@ -168,7 +208,9 @@ export async function updateRelease(
         };
 
         let data: ReleaseRecord;
-        if (artifact) {
+        if (uploadedFileId) {
+          data = await startTransaction((tx) => publishRelease(tx, uploadedFileId));
+        } else if (artifact) {
           let published: ReleaseRecord | undefined;
           const result = await createDedicatedFile(
             session.user.id,
