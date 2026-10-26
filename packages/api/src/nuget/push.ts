@@ -4,7 +4,9 @@ import { createRelease, getDb, ReleaseIdentityConflictError, updateRelease, type
 import { createStorageOperations } from "../storage/files";
 import { blobReader, InvalidNugetPackageError, readNugetPackage } from "./archive";
 
-export const NUGET_PUSH_LIMIT = 50 * 1024 * 1024;
+// Cloudflare accepts at most 100 MB in a request body on the Free and Pro
+// plans. Leave room for the multipart envelope and stay below that ceiling.
+export const NUGET_PUSH_LIMIT = 90 * 1024 * 1024;
 export class NugetPushTooLargeError extends Error {}
 export class NugetOwnershipError extends Error {}
 export class NugetPackageUnpublishedError extends Error {}
