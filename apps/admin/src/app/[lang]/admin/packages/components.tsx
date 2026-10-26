@@ -123,11 +123,13 @@ export function RepairHashesButton({ lang }: { lang: string }) {
   const { toast } = useToast();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const [cursor, setCursor] = useState<string | undefined>();
 
   const repair = () => {
     startTransition(async () => {
       try {
-        const result = await repairMissingReleaseSha256();
+        const result = await repairMissingReleaseSha256(cursor);
+        if (result.success) setCursor(result.nextCursor);
         toast({
           title: result.success
             ? t("admin:packages.repairHashesSuccess")
@@ -148,7 +150,7 @@ export function RepairHashesButton({ lang }: { lang: string }) {
 
   return (
     <Button size="sm" variant="outline" disabled={pending} onClick={repair}>
-      {t("admin:packages.repairHashes")}
+      {t(cursor ? "admin:packages.repairHashesContinue" : "admin:packages.repairHashes")}
     </Button>
   );
 }

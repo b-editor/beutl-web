@@ -655,6 +655,7 @@
   "packages": {
     "title": "パッケージ",
     "repairHashes": "不足している SHA-256 を再計算",
+    "repairHashesContinue": "SHA-256 の再計算を続ける",
     "repairHashesSuccess": "SHA-256 を再計算しました",
     "searchPlaceholder": "パッケージ名・表示名・所有者のメールで検索",
     "allStates": "すべての公開状態",

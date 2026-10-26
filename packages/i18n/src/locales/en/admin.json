@@ -655,6 +655,7 @@
   "packages": {
     "title": "Packages",
     "repairHashes": "Repair missing SHA-256",
+    "repairHashesContinue": "Continue repairing SHA-256",
     "repairHashesSuccess": "SHA-256 repaired",
     "searchPlaceholder": "Search by package name, display name, or owner email",
     "allStates": "All states",

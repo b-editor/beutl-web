@@ -5,8 +5,10 @@ import Link from "next/link";
 import { navHref, socialLinks, type NavLinkKey } from "@/components/site-links";
 
 export default async function Footer({ lang }: { lang: string }) {
-  const url = new URL((await headers()).get("x-url") || "/");
-  const langUrl = url.pathname?.replace(/\/ja/, "").replace(/\/en/, "");
+  // Middleware is skipped on paths such as /_next. Language links need only
+  // its pathname header, with a local homepage fallback when it is absent.
+  const pathname = (await headers()).get("x-pathname") || "/";
+  const langUrl = pathname.replace(/^\/(?:ja|en)(?=\/|$)/u, "");
   const { t } = await getTranslation(lang);
 
   return (

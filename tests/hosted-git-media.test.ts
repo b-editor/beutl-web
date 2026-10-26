@@ -52,14 +52,16 @@ it("refreshes Git Durable Object credentials and cached storage across fetch and
       expect(requests.length).toBeGreaterThan(0);
       expect(requests.every((r) => r.headers.get("authorization")?.includes(`Credential=${value}/`))).toBe(true);
     }
-    secret.mockRejectedValueOnce(new Error("unavailable"));
+    // Keep the provider unavailable until the invocation exhausts its retries.
+    secret.mockRejectedValue(new Error("unavailable"));
     await expect(durable.fetch(request())).rejects.toThrow("Unable to resolve Secrets Store binding BEUTL_S3_SECRET_ACCESS_KEY");
     // A failed read must not poison the serialized invocation queue.
+    secret.mockResolvedValue("store-secret");
     expect((await durable.fetch(request())).status).toBe(200);
     await storage.delete("repoId");
     await durable.alarm();
     expect(key).toHaveBeenCalledTimes(5);
-    expect(secret).toHaveBeenCalledTimes(5);
+    expect(secret).toHaveBeenCalledTimes(7);
   } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
 });
 

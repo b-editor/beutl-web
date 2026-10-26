@@ -3,10 +3,18 @@
 // この定数は「契約が無いとき」の値。
 export const STORAGE_FREE_QUOTA_BYTES = 1024 * 1024 * 1024;
 
-// 1 パートの大きさ。Cloudflare Workers は 128MB のメモリ上限を持ち、
-// Next.js のリクエスト処理がパートを一時的に保持するため、R2 が最後以外の
-// パートに求める最小の 5MiB にする。1GiB でも 205 リクエストで済む。
-export const STORAGE_UPLOAD_PART_BYTES = 5 * 1024 * 1024;
+// 1 パートの大きさ。presigned URL でブラウザから直接 S3 へ送る場合は
+// Worker のメモリを消費しないので 16MiB にする。1GiB でも 64 パート。
+export const STORAGE_UPLOAD_PART_BYTES = 16 * 1024 * 1024;
+
+// presigned URL を使えない環境 (R2 バインディングなど) は Worker が
+// パート本文を受け取るため、Next.js のメモリ上限に収まる 5MiB にする。
+export const STORAGE_UPLOAD_PROXIED_PART_BYTES = 5 * 1024 * 1024;
+
+// The largest part the request-body guard accepts. The upload's stored
+// partSize still determines each part's actual allowance; this keeps legacy
+// 16 MiB uploads working through the proxied route.
+export const STORAGE_UPLOAD_MAX_PART_BYTES = 16 * 1024 * 1024;
 
 // R2 のマルチパートアップロードが受け付けるパート数の上限。
 export const STORAGE_MULTIPART_MAX_PARTS = 10_000;
@@ -25,6 +33,10 @@ export const STORAGE_UPLOAD_FINISH_BODY_BYTES =
 // 大きくても、1 ファイルでこれを超えるものは受けない。
 export const STORAGE_MAX_FILE_BYTES =
   STORAGE_MULTIPART_MAX_PARTS * STORAGE_UPLOAD_PART_BYTES;
+
+// Worker 経由のアップロードで受けられる単一ファイルの上限。
+export const STORAGE_MAX_PROXIED_FILE_BYTES =
+  STORAGE_MULTIPART_MAX_PARTS * STORAGE_UPLOAD_PROXIED_PART_BYTES;
 
 // 無料枠の 1 ユーザーあたりのファイル数の上限。容量だけでは本数を縛れない——1 バイトの
 // ファイルを順に完成させれば、容量の枠の内側で R2 のオブジェクトと DB の行を

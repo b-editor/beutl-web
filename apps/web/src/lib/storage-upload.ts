@@ -15,7 +15,7 @@ type UploadOutcome =
       pendingCompletion?: PendingStorageUploadCompletion;
     };
 
-type StartedUpload = { id: string; partSize: number; partCount: number };
+type StartedUpload = { id: string; partSize: number; partCount: number; directUpload: boolean };
 type UploadedPart = { partNumber: number; etag: string };
 /** The only durable state needed to ask a committed upload for its receipt. */
 export type PendingStorageUploadCompletion = Readonly<{
@@ -269,6 +269,9 @@ export async function uploadStorageFile(
     name: file.name,
     mimeType: file.type || "application/octet-stream",
     size: file.size,
+    // Old tabs do not send this and keep the proxied part size they were
+    // started with; only a client that understands directUpload opts in.
+    directUpload: true,
   });
   // A start succeeds only after a non-5xx response and valid JSON are read.
   // Retry either an error response or an unreadable response under the same id.
@@ -335,7 +338,9 @@ export async function uploadStorageFile(
           if (partNumber === undefined) return;
           const start = (partNumber - 1) * upload.partSize;
           const slice = file.slice(start, start + upload.partSize);
-          const etag = await sendPart(upload.id, partNumber, slice);
+          const etag = upload.directUpload
+            ? await sendDirectPart(upload.id, partNumber, slice)
+            : await sendPart(upload.id, partNumber, slice);
           parts.push({ partNumber, etag });
           sent += slice.size;
           onProgress?.(sent);
@@ -480,6 +485,60 @@ async function sendPart(
       if (response.status < 500) {
         throw new UploadPartError(await errorCodeOf(response));
       }
+      lastError = new UploadPartError("uploadFailed");
+    } catch (error) {
+      if (error instanceof UploadPartError) throw error;
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+  }
+  throw lastError ?? new UploadPartError("uploadFailed");
+}
+
+async function presignPart(uploadId: string, partNumber: number): Promise<string> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= ATTEMPTS_PER_PART; attempt++) {
+    try {
+      const response = await fetch(
+        `/api/internal/storage/uploads/${uploadId}/parts/${partNumber}`,
+        { method: "POST", headers: { ...INTERNAL_REQUEST_HEADERS } },
+      );
+      if (response.ok) {
+        try {
+          const body = (await response.json()) as { url?: unknown };
+          if (typeof body.url === "string" && body.url.length > 0) return body.url;
+        } catch {
+          // A truncated body is retried like a lost response.
+        }
+      } else if (response.status < 500) {
+        throw new UploadPartError(await errorCodeOf(response));
+      }
+    } catch (error) {
+      if (error instanceof UploadPartError) throw error;
+    }
+    lastError = new UploadPartError("uploadFailed");
+    await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+  }
+  throw lastError ?? new UploadPartError("uploadFailed");
+}
+
+async function sendDirectPart(
+  uploadId: string,
+  partNumber: number,
+  body: Blob,
+): Promise<string> {
+  const url = await presignPart(uploadId, partNumber);
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= ATTEMPTS_PER_PART; attempt++) {
+    try {
+      const response = await fetch(url, { method: "PUT", body });
+      if (response.ok) {
+        const etag = response.headers.get("etag");
+        if (!etag) throw new UploadPartError("uploadFailed");
+        return etag;
+      }
+      // A 4xx from the bucket will not improve on retry.
+      if (response.status < 500) throw new UploadPartError("uploadFailed");
       lastError = new UploadPartError("uploadFailed");
     } catch (error) {
       if (error instanceof UploadPartError) throw error;

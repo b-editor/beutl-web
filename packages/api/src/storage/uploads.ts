@@ -1,5 +1,7 @@
 import {
+  STORAGE_MULTIPART_MAX_PARTS,
   STORAGE_UPLOAD_PART_BYTES,
+  STORAGE_UPLOAD_PROXIED_PART_BYTES,
 } from "@beutl/core";
 import {
   claimStorageUploadForAbandon,
@@ -67,6 +69,7 @@ export type StartedUpload = {
   id: string;
   partSize: number;
   partCount: number;
+  directUpload: boolean;
 };
 
 type StartUploadOutcome =
@@ -79,6 +82,7 @@ type StorageUploadIntent = {
   name: string;
   mimeType: string;
   size: bigint;
+  partSize: number;
 };
 
 const INTENT_DIGEST_PREFIX = "intent-";
@@ -117,7 +121,10 @@ export function partCountOf(size: bigint, partSize = STORAGE_UPLOAD_PART_BYTES):
   return Number(parts);
 }
 
-async function storageUploadIntentDigest(intent: StorageUploadIntent): Promise<string> {
+async function storageUploadIntentDigest(
+  intent: StorageUploadIntent,
+  partSize = intent.partSize,
+): Promise<string> {
   const serialized = JSON.stringify({
     version: 1,
     userId: intent.userId,
@@ -125,7 +132,7 @@ async function storageUploadIntentDigest(intent: StorageUploadIntent): Promise<s
     name: intent.name,
     mimeType: intent.mimeType,
     size: intent.size.toString(),
-    partSize: STORAGE_UPLOAD_PART_BYTES,
+    partSize,
     reservationKind: "multipart",
     visibility: "PRIVATE",
   });
@@ -138,18 +145,16 @@ async function storageUploadIntentDigest(intent: StorageUploadIntent): Promise<s
   ).join("");
 }
 
-function storageUploadIntentMatches(
+async function storageUploadIntentMatches(
   upload: NonNullable<Awaited<ReturnType<typeof findStorageUploadByIdAndUserId>>>,
   intent: StorageUploadIntent,
-  intentDigest: string,
-): boolean {
+): Promise<boolean> {
   if (
     upload.userId !== intent.userId ||
     upload.id !== intent.id ||
     upload.reservationKind !== "multipart" ||
     upload.mimeType !== intent.mimeType ||
-    BigInt(upload.size) !== intent.size ||
-    upload.partSize !== STORAGE_UPLOAD_PART_BYTES
+    BigInt(upload.size) !== intent.size
   ) {
     return false;
   }
@@ -159,6 +164,7 @@ function storageUploadIntentMatches(
     ? upload.objectKey.slice(prefix.length).split("/", 1)[0]
     : "";
   if (generation.startsWith(INTENT_DIGEST_PREFIX)) {
+    const intentDigest = await storageUploadIntentDigest(intent, upload.partSize);
     return generation === `${INTENT_DIGEST_PREFIX}${intentDigest}`;
   }
 
@@ -194,6 +200,7 @@ export async function startUpload({
   name,
   mimeType,
   size,
+  directUpload = false,
 }: {
   userId: string;
   // 開始要求の名前。応答だけが失われても、同じ名前で問い合わせ直せば同じ
@@ -203,8 +210,17 @@ export async function startUpload({
   name: string;
   mimeType: string;
   size: bigint;
+  directUpload?: boolean;
 }): Promise<StartUploadOutcome> {
-  const intent = { userId, id, name, mimeType, size };
+  const configured = bucket();
+  const supportsDirectUpload = directUpload && typeof configured.presignUploadPart === "function";
+  const partSize = supportsDirectUpload
+    ? STORAGE_UPLOAD_PART_BYTES
+    : STORAGE_UPLOAD_PROXIED_PART_BYTES;
+  if (size > BigInt(partSize) * BigInt(STORAGE_MULTIPART_MAX_PARTS)) {
+    return { ok: false, reason: "uploadFailed" };
+  }
+  const intent = { userId, id, name, mimeType, size, partSize };
   const intentDigest = await storageUploadIntentDigest(intent);
   const existing = await findStorageUploadByIdAndUserId({ id, userId });
   if (existing) {
@@ -213,7 +229,7 @@ export async function startUpload({
     if (existing.completedFileId || existing.abandonedAt) {
       return { ok: false, reason: "uploadFailed" };
     }
-    if (!storageUploadIntentMatches(existing, intent, intentDigest)) {
+    if (!await storageUploadIntentMatches(existing, intent)) {
       return { ok: false, reason: "uploadFailed", conflict: true };
     }
     if (existing.uploadId) {
@@ -223,6 +239,7 @@ export async function startUpload({
           id: existing.id,
           partSize: existing.partSize,
           partCount: partCountOf(existing.size, existing.partSize),
+          directUpload: supportsDirectUpload,
         },
       };
     }
@@ -254,7 +271,7 @@ export async function startUpload({
       const raced = await findStorageUploadByIdAndUserId({ id, userId, prisma });
       // 取り消しの墓標。この名前は始まる前に取り消されているので、始めない。
       if (raced?.abandonedAt) return "cancelled";
-      if (raced && !storageUploadIntentMatches(raced, intent, intentDigest)) {
+      if (raced && !await storageUploadIntentMatches(raced, intent)) {
         return "conflict";
       }
       if (raced) return raced;
@@ -290,7 +307,7 @@ export async function startUpload({
         name: await availableStorageFileName({ userId, name, prisma }),
         mimeType,
         size,
-        partSize: STORAGE_UPLOAD_PART_BYTES,
+        partSize,
         prisma,
       });
     });
@@ -298,7 +315,7 @@ export async function startUpload({
     if (isUniqueConstraintError(error)) {
       const raced = await findStorageUploadByIdAndUserId({ id, userId });
       if (raced) {
-        upload = storageUploadIntentMatches(raced, intent, intentDigest)
+        upload = await storageUploadIntentMatches(raced, intent)
           ? raced
           : "conflict";
       } else {
@@ -334,7 +351,7 @@ export async function startUpload({
   }
 
   if (upload.uploadId) {
-    return { ok: true, upload: { id: upload.id, partSize: upload.partSize, partCount: partCountOf(upload.size, upload.partSize) } };
+    return { ok: true, upload: { id: upload.id, partSize: upload.partSize, partCount: partCountOf(upload.size, upload.partSize), directUpload: supportsDirectUpload } };
   }
 
   const leaseToken = crypto.randomUUID();
@@ -351,11 +368,11 @@ export async function startUpload({
   });
   if (!claimed) {
     const current = await findStorageUploadByIdAndUserId({ id, userId });
-    if (current && !storageUploadIntentMatches(current, intent, intentDigest)) {
+    if (current && !await storageUploadIntentMatches(current, intent)) {
       return { ok: false, reason: "uploadFailed", conflict: true };
     }
     if (current?.uploadId) {
-      return { ok: true, upload: { id: current.id, partSize: current.partSize, partCount: partCountOf(current.size, current.partSize) } };
+      return { ok: true, upload: { id: current.id, partSize: current.partSize, partCount: partCountOf(current.size, current.partSize), directUpload: supportsDirectUpload } };
     }
     return { ok: false, reason: "uploadFailed" };
   }
@@ -418,7 +435,49 @@ export async function startUpload({
       id: upload.id,
       partSize: upload.partSize,
       partCount: partCountOf(upload.size, upload.partSize),
+      directUpload: supportsDirectUpload,
     },
+  };
+}
+
+export async function presignUploadPart({
+  userId,
+  uploadId,
+  partNumber,
+}: {
+  userId: string;
+  uploadId: string;
+  partNumber: number;
+}): Promise<{ ok: true; url: string } | { ok: false; reason: UploadFailure }> {
+  const upload = await findStorageUploadByIdAndUserId({ id: uploadId, userId });
+  if (!upload || !upload.uploadId || upload.completedFileId || upload.abandonedAt) {
+    return { ok: false, reason: "uploadNotFound" };
+  }
+  if (
+    !Number.isSafeInteger(partNumber) ||
+    partNumber < 1 ||
+    partNumber > partCountOf(upload.size, upload.partSize)
+  ) {
+    return { ok: false, reason: "uploadFailed" };
+  }
+  // Direct parts bypass uploadPart, so keep the same idle-upload activity
+  // touch; otherwise a long upload could be abandoned by the stale sweep.
+  if (!await touchStorageUploadActivity({ id: uploadId, userId })) {
+    return { ok: false, reason: "uploadNotFound" };
+  }
+  const presign = bucket().presignUploadPart;
+  if (!presign) return { ok: false, reason: "uploadFailed" };
+  const length = allowedPartSize(upload.size, upload.partSize, partNumber);
+  if (length <= BigInt(0)) return { ok: false, reason: "uploadFailed" };
+  return {
+    ok: true,
+    url: await presign(
+      upload.objectKey,
+      upload.uploadId,
+      partNumber,
+      900,
+      Number(length),
+    ),
   };
 }
 
@@ -502,6 +561,9 @@ export async function sha256OfStoredObject(objectKey: string): Promise<string | 
       if (next.done) break;
       hash.update(next.value);
     }
+  } catch (error) {
+    console.error("Failed to hash a stored object", objectKey, error);
+    return undefined;
   } finally {
     await reader.cancel().catch(() => undefined);
     reader.releaseLock();

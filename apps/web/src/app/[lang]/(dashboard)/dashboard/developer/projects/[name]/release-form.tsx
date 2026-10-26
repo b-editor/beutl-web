@@ -2,6 +2,7 @@
 
 import {
   useCallback,
+  useRef,
   useState,
   useTransition,
 } from "react";
@@ -22,7 +23,7 @@ import { Label } from "@beutl/ui/ui/label";
 import { Checkbox } from "@beutl/ui/ui/checkbox";
 import { useToast } from "@beutl/ui/use-toast";
 import { showOpenFileDialog } from "@/lib/fileDialog";
-import { uploadStorageFile } from "@/lib/storage-upload";
+import { resumeStorageUploadCompletion, uploadStorageFile } from "@/lib/storage-upload";
 import { Info } from "lucide-react";
 import {
   Popover,
@@ -30,7 +31,7 @@ import {
   PopoverTrigger,
 } from "@beutl/ui/ui/popover";
 import SemVer from "semver";
-import { createRelease, deleteRelease, updateRelease } from "./actions/release";
+import { createRelease, deleteRelease, discardReleaseUpload, updateRelease } from "./actions/release";
 import {
   Dialog,
   DialogContent,
@@ -104,6 +105,10 @@ export function ReleaseForm({
   );
   const [title, setTitle] = useState(release?.title || "");
   const [files, setFiles] = useState<File[]>([]);
+  const uploadedFile = useRef<{
+    file: File;
+    result: Awaited<ReturnType<typeof uploadStorageFile>>;
+  } | null>(null);
   const [description, setDescription] = useState(release?.description || "");
   const [translations, setTranslations] = useState<Record<string, string>>(
     () => initialDescriptions(release, languages),
@@ -125,10 +130,26 @@ export function ReleaseForm({
     !pickTranslation(release?.ReleaseTranslation, selectedLanguage ?? "")
       ?.description?.trim();
 
+  const discardUpload = useCallback(async () => {
+    const previous = uploadedFile.current;
+    uploadedFile.current = null;
+    if (!previous) return;
+    try {
+      const result = !previous.result.ok && previous.result.pendingCompletion
+        ? await resumeStorageUploadCompletion(previous.result.pendingCompletion)
+        : previous.result;
+      if (result.ok) await discardReleaseUpload(result.file.id);
+      // An unknown completion keeps its durable receipt for storage recovery.
+    } catch (error) {
+      console.error("Failed to discard a release upload", error);
+    }
+  }, []);
+
   // 選択中のリリースに属する入力一式を差し替える。翻訳の下書きもリリース
   // ごとなので、本体と一緒に切り替える。
   const selectRelease = useCallback(
     (selected: ReleaseState | undefined) => {
+      void discardUpload();
       setRelease(selected);
       setTitle(selected?.title || "");
       setDescription(selected?.description || "");
@@ -137,17 +158,18 @@ export function ReleaseForm({
       setPublished(selected?.published || false);
       setFiles([]);
     },
-    [languages],
+    [languages, discardUpload],
   );
 
   const handleReset = useCallback(() => {
+    void discardUpload();
     setTitle(release?.title || "");
     setDescription(release?.description || "");
     setTranslations(initialDescriptions(release, languages));
     setTargetVersion({ value: release?.targetVersion || "", message: "" });
     setPublished(release?.published || false);
     setFiles([]);
-  }, [release, languages]);
+  }, [release, languages, discardUpload]);
 
   const handleSave = useCallback(async () => {
     if (!release) return;
@@ -164,7 +186,11 @@ export function ReleaseForm({
       // A .nupkg can be larger than one request may carry. Send it in parts
       // through the storage upload API and attach its file by id below.
       if (files.length === 1 && files[0].name.toLowerCase().endsWith(".nupkg")) {
-        const uploaded = await uploadStorageFile(files[0], { ownerId });
+        const previous = uploadedFile.current?.file === files[0] ? uploadedFile.current.result : undefined;
+        const uploaded = previous?.ok ? previous
+          : previous?.pendingCompletion ? await resumeStorageUploadCompletion(previous.pendingCompletion)
+          : await uploadStorageFile(files[0], { ownerId });
+        uploadedFile.current = { file: files[0], result: uploaded };
         if (!uploaded.ok) {
           toast({
             variant: "destructive",
@@ -195,6 +221,8 @@ export function ReleaseForm({
       formData.append("published", published ? "on" : "off");
       const result = await updateRelease(formData);
       if (result.success) {
+        uploadedFile.current = null;
+        setFiles([]);
         const data: ReleaseState | undefined = result.data;
         if (data) {
           // 保存応答は翻訳行を持たないので、今保存した下書きで補って
@@ -243,9 +271,12 @@ export function ReleaseForm({
   const handleSelectFiles = useCallback(async () => {
     const files = await showOpenFileDialog({ multiple: true });
     if (files) {
-      setFiles(Array.from(files));
+      startSaveTransition(async () => {
+        setFiles(Array.from(files));
+        await discardUpload();
+      });
     }
-  }, []);
+  }, [discardUpload]);
 
   const handleClose = useCallback(() => {
     setOpen(false);

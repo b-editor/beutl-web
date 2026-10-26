@@ -105,6 +105,31 @@ export async function setReleasePublished(input: unknown): Promise<ActionResult>
 
 const MAX_HASH_REPAIRS = 20;
 
+export type RepairHashesResult =
+  | { success: true; message: string; nextCursor?: string }
+  | { success: false; message?: string };
+
+function encodeHashCursor(position: { createdAt: Date; id: string }): string {
+  return Buffer.from(`${position.createdAt.toISOString()}|${position.id}`, "utf8")
+    .toString("base64url");
+}
+
+function decodeHashCursor(value: string | undefined): { createdAt: Date; id: string } | undefined {
+  if (!value) return undefined;
+  try {
+    const decoded = Buffer.from(value, "base64url").toString("utf8");
+    const separator = decoded.indexOf("|");
+    if (separator <= 0) return undefined;
+    const createdAt = new Date(decoded.slice(0, separator));
+    const id = decoded.slice(separator + 1);
+    if (!Number.isFinite(createdAt.getTime()) || id.length === 0) return undefined;
+    return { createdAt, id };
+  } catch {
+    // A cursor that does not decode is a malformed request, not a server error.
+    return undefined;
+  }
+}
+
 async function sha256OfStream(stream: ReadableStream<Uint8Array>): Promise<string> {
   const hash = createHash("sha256");
   const reader = stream.getReader();
@@ -124,20 +149,36 @@ async function sha256OfStream(stream: ReadableStream<Uint8Array>): Promise<strin
 /** Recompute the SHA-256 of published release files that were uploaded before
  * the multipart path recorded one. The NuGet download ETag is this value, and
  * the desktop app verifies it when installing a package. */
-export async function repairMissingReleaseSha256(): Promise<ActionResult> {
-  return await adminAction(async (session) => {
+export async function repairMissingReleaseSha256(cursor?: string): Promise<RepairHashesResult> {
+  return (await adminAction(async (session) => {
+    const position = decodeHashCursor(cursor);
     const db = await getDb();
     const releases = await db.release.findMany({
-      where: { published: true, file: { is: { sha256: null } } },
+      where: {
+        published: true,
+        file: { is: { sha256: null } },
+        ...(position
+          ? {
+              OR: [
+                { createdAt: { gt: position.createdAt } },
+                { createdAt: position.createdAt, id: { gt: position.id } },
+              ],
+            }
+          : {}),
+      },
       select: {
         id: true,
+        createdAt: true,
         file: { select: { id: true, objectKey: true } },
       },
-      orderBy: { createdAt: "asc" },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       take: MAX_HASH_REPAIRS,
     });
     if (releases.length === 0) {
-      return { success: true, message: "No missing SHA-256." };
+      return {
+        success: true,
+        message: cursor ? "No more missing SHA-256." : "No missing SHA-256.",
+      };
     }
 
     const { stores } = await getStorageStores();
@@ -174,9 +215,13 @@ export async function repairMissingReleaseSha256(): Promise<ActionResult> {
     }
 
     revalidatePackagePages();
+    const nextCursor = releases.length === MAX_HASH_REPAIRS
+      ? encodeHashCursor(releases[releases.length - 1])
+      : undefined;
     return {
       success: true,
-      message: `Repaired ${repaired} file hash(es)${failed > 0 ? `; ${failed} could not be read` : ""}.`,
+      message: `Repaired ${repaired} file hash(es)${failed > 0 ? `; ${failed} could not be read` : ""}${nextCursor ? ". Run again to continue with the next batch." : "."}`,
+      nextCursor,
     };
-  });
+  })) as RepairHashesResult;
 }
