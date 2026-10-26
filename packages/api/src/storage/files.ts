@@ -4,6 +4,7 @@ import { blobStream } from "@beutl/core";
 import {
   commitDedicatedStorageReservation,
   createDedicatedStorageReservation,
+  DEDICATED_STORAGE_TRANSACTION,
   DEDICATED_STORAGE_WRITE_LEASE_MILLISECONDS,
   createFileAndSettleStorageWrite,
   deleteAiStorageCleanup,
@@ -449,7 +450,7 @@ export function createStorageOperations(execution?: {
             fileCountLimit: resolved.fileCountLimit,
             prisma: tx,
           });
-        });
+        }, DEDICATED_STORAGE_TRANSACTION);
     if (reservation.kind !== "reserved") return reservation;
     const leaseToken = reservation.reservation.creationLeaseToken;
     let leaseUntil = reservation.reservation.creationLeaseUntil;
