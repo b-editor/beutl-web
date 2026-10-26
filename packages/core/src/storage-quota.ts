@@ -8,6 +8,10 @@ export const STORAGE_FREE_QUOTA_BYTES = 1024 * 1024 * 1024;
 // パートに求める最小の 5MiB にする。1GiB でも 205 リクエストで済む。
 export const STORAGE_UPLOAD_PART_BYTES = 5 * 1024 * 1024;
 
+// Keep accepting parts negotiated before the default changed to 5 MiB.
+// The upload's stored partSize still determines each part's actual allowance.
+export const STORAGE_UPLOAD_MAX_PART_BYTES = 16 * 1024 * 1024;
+
 // R2 のマルチパートアップロードが受け付けるパート数の上限。
 export const STORAGE_MULTIPART_MAX_PARTS = 10_000;
 
@@ -21,7 +25,7 @@ export const STORAGE_UPLOAD_FINISH_BODY_BYTES =
   STORAGE_MULTIPART_MAX_PARTS * (STORAGE_UPLOAD_ETAG_MAX_LENGTH + 64);
 
 // 1 ファイルの上限。パートの大きさを固定しているので、パート数の上限がそのまま
-// ファイルの上限になる (16MiB × 10,000 = 160,000MiB、およそ 156GiB)。有料ティアの容量がこれより
+// ファイルの上限になる (5MiB × 10,000 = 50,000MiB、およそ 48.8GiB)。有料ティアの容量がこれより
 // 大きくても、1 ファイルでこれを超えるものは受けない。
 export const STORAGE_MAX_FILE_BYTES =
   STORAGE_MULTIPART_MAX_PARTS * STORAGE_UPLOAD_PART_BYTES;

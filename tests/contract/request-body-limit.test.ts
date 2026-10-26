@@ -11,7 +11,7 @@ import {
   MAX_REQUEST_BODY_BYTES,
   MAX_STRIPE_WEBHOOK_BODY_BYTES,
   RequestBodyLimitExceededError,
-  STORAGE_UPLOAD_PART_BYTES,
+  STORAGE_UPLOAD_MAX_PART_BYTES,
   aiApiMultipartBodyLimit,
   boundedBody,
   requestBodyLimit,
@@ -90,7 +90,7 @@ describe("what one request body may come to", () => {
       "/api/internal/storage/uploads/upload-1/parts/1",
       "PUT",
       "application/octet-stream",
-    )).toBe(STORAGE_UPLOAD_PART_BYTES);
+    )).toBe(STORAGE_UPLOAD_MAX_PART_BYTES);
 
     const transcriptionPath = "/api/v3/ai/transcriptions";
     const transcriptionCap = aiApiMultipartBodyLimit(transcriptionPath);
