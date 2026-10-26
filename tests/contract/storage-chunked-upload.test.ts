@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setDbProvider } from "@beutl/db";
 import * as storageDb from "@beutl/db";
@@ -84,6 +85,7 @@ import {
   startUpload,
 } from "../../apps/web/src/lib/storage-upload-server";
 import { uploadPart } from "../../apps/web/src/lib/storage-upload-server";
+import { sha256OfStoredObject } from "../../packages/api/src/storage/uploads";
 import {
   abandonStaleStorageUploads,
 } from "../../packages/api/src/storage-uploads";
@@ -454,6 +456,24 @@ describe("uploading a file too large for one request", () => {
       ok: false,
       reason: "insufficientStorageSpace",
     });
+  });
+
+  it("hashes a stored object without buffering", async () => {
+    const bytes = new TextEncoder().encode("release package");
+    setR2BucketProvider(() => ({
+      get: async () => ({
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(bytes);
+            controller.close();
+          },
+        }),
+      }),
+    }) as never);
+
+    await expect(sha256OfStoredObject("release.nupkg")).resolves.toBe(
+      createHash("sha256").update(bytes).digest("hex"),
+    );
   });
 
   it("takes a file in parts and stores it as one", async () => {

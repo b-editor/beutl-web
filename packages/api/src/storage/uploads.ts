@@ -34,6 +34,7 @@ import {
   resolveStorageQuota,
   DEDICATED_STORAGE_TRANSACTION,
 } from "@beutl/db";
+import { createHash } from "node:crypto";
 import { getR2Bucket } from "../ai/r2-provider";
 
 // Uploading a file that one request cannot carry.
@@ -478,6 +479,36 @@ type TrackedUpload = NonNullable<
   Awaited<ReturnType<typeof findStorageUploadByIdAndUserId>>
 >;
 
+/** Hash a joined object without buffering it. A provider that cannot read
+ * objects (or a transient read failure) leaves the hash unset; the admin
+ * screen can repair it later. */
+export async function sha256OfStoredObject(objectKey: string): Promise<string | undefined> {
+  const configured = getR2Bucket();
+  const get = configured.get;
+  if (!get) return undefined;
+  let object: Awaited<ReturnType<NonNullable<typeof get>>>;
+  try {
+    object = await get.call(configured, objectKey);
+  } catch (error) {
+    console.error("Failed to read a stored object for hashing", objectKey, error);
+    return undefined;
+  }
+  if (!object?.body) return undefined;
+  const hash = createHash("sha256");
+  const reader = object.body.getReader();
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      hash.update(next.value);
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  return hash.digest("hex");
+}
+
 export async function finishUpload({
   userId,
   uploadId,
@@ -748,6 +779,7 @@ async function finalizeUpload(
   | { ok: true; file: { id: string; name: string; size: bigint } }
   | { ok: false; reason: UploadFailure }
 > {
+  const sha256 = await sha256OfStoredObject(upload.objectKey);
   let outcome:
     | { kind: "created"; id: string; name: string }
     | { kind: "alreadyCompleted"; fileId: string }
@@ -802,6 +834,7 @@ async function finalizeUpload(
         mimeType: current.mimeType,
         userId,
         visibility: "PRIVATE",
+        sha256,
         prisma,
       });
       // The row stays as the receipt of a finished upload. Its size is no

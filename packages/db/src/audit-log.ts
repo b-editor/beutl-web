@@ -64,6 +64,7 @@ export const auditLogActions = {
     storageObjectMoved: "admin.storageObjectMoved",
     packagePublished: "admin.packagePublished",
     packageUnpublished: "admin.packageUnpublished",
+    releaseSha256Repaired: "admin.releaseSha256Repaired",
     releasePublished: "admin.releasePublished",
     releaseUnpublished: "admin.releaseUnpublished",
     userSessionsRevoked: "admin.userSessionsRevoked",

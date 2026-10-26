@@ -10,6 +10,7 @@ import { formatTimestamp } from "@/lib/format";
 import { fetchPaginated, parsePageParam } from "@/lib/pagination";
 import { firstSearchParam } from "@/lib/search-params";
 import { Pagination } from "@/components/admin/pagination";
+import { RepairHashesButton } from "./components";
 
 const PAGE_SIZE = 30;
 const PUBLISHED_FILTERS = ["published", "draft"] as const;
@@ -50,8 +51,9 @@ export default async function Page(props: {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">{t("admin:packages.title")}</h1>
+        <RepairHashesButton lang={lang} />
       </div>
 
       <form method="get" className="flex flex-wrap items-end gap-2">

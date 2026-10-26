@@ -24,6 +24,7 @@ import {
 } from "@beutl/db";
 import { getR2Bucket } from "./ai/storage";
 import { isTerminalMultipartAbortError } from "./storage/multipart-errors";
+import { sha256OfStoredObject } from "./storage/uploads";
 
 export { isTerminalMultipartAbortError } from "./storage/multipart-errors";
 
@@ -172,6 +173,7 @@ export async function reconcileUnknownStorageUploadCompletions(
       continue;
     }
 
+    const sha256 = await sha256OfStoredObject(candidate.objectKey);
     try {
       const outcome = await startRetryableTransaction(async (prisma) => {
         const current = await findStorageUploadByIdAndUserId({
@@ -238,6 +240,7 @@ export async function reconcileUnknownStorageUploadCompletions(
           mimeType: current.mimeType,
           userId: current.userId,
           visibility: "PRIVATE",
+          sha256,
           prisma,
         });
         if (!await markStorageUploadCompleted({
