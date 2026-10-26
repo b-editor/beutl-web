@@ -37,6 +37,8 @@
 
 export type SecurityEnvironment = {
   NODE_ENV?: string | undefined;
+  /** Public origin of the S3 endpoint, allowed for direct multipart PUTs. */
+  STORAGE_ORIGIN?: string | undefined;
 };
 
 const DIRECTIVES = [
@@ -52,9 +54,6 @@ const DIRECTIVES = [
   // (ai-video-duration.ts / audio-extract.ts が video 要素に createObjectURL を
   // 渡す) 用。無いと有効な入力が「読み取れないもの」として投稿が拒否される。
   "media-src 'self' blob:",
-  // cloudflareinsights.com は RUM ビーコンが計測値を POST する先
-  // (上の script-src の注記を参照)。
-  "connect-src 'self' https://cloudflareinsights.com",
   "object-src 'none'",
   "frame-ancestors 'none'",
   "base-uri 'self'",
@@ -68,6 +67,7 @@ const DIRECTIVES = [
 
 export function contentSecurityPolicy({
   NODE_ENV = "production",
+  STORAGE_ORIGIN,
 }: SecurityEnvironment = {}): string {
   // static.cloudflareinsights.com は Cloudflare の Web Analytics (RUM) のビーコン。
   // ゾーン設定でエッジから HTML に注入されるためコード側では出せない。許可しないと
@@ -76,14 +76,22 @@ export function contentSecurityPolicy({
     NODE_ENV === "development"
       ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
       : "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com";
-  return [DIRECTIVES[0], scriptSrc, ...DIRECTIVES.slice(1)].join("; ");
+  // cloudflareinsights.com は RUM ビーコンが計測値を POST する先。
+  // STORAGE_ORIGIN は presigned でブラウザから直接 PUT する S3 のオリジン。
+  const connectSrc = [
+    "'self'",
+    "https://cloudflareinsights.com",
+    ...(STORAGE_ORIGIN ? [STORAGE_ORIGIN] : []),
+  ].join(" ");
+  return [DIRECTIVES[0], scriptSrc, ...DIRECTIVES.slice(1), `connect-src ${connectSrc}`].join("; ");
 }
 
 export function securityHeaders({
   NODE_ENV = "production",
+  STORAGE_ORIGIN,
 }: SecurityEnvironment = {}): Readonly<Record<string, string>> {
   return {
-    "Content-Security-Policy": contentSecurityPolicy({ NODE_ENV }),
+    "Content-Security-Policy": contentSecurityPolicy({ NODE_ENV, STORAGE_ORIGIN }),
     // サイトはすべて Cloudflare の HTTPS (カスタムドメイン) で配信され、
     // サブドメイン (admin.beutl.beditor.net) も HTTPS のため includeSubDomains は
     // 安全。preload は HSTS preload リストへの登録 (抜け出すのが難しい) を伴う

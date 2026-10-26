@@ -71,8 +71,8 @@ describe("storage plan catalog", () => {
     expect(STORAGE_MAX_FILE_BYTES).toBe(
       STORAGE_MULTIPART_MAX_PARTS * STORAGE_UPLOAD_PART_BYTES,
     );
-    // 10,000 parts of 5 MiB: 50,000 MiB, a little under 48.8 GiB.
-    expect(STORAGE_MAX_FILE_BYTES).toBe(10_000 * 5 * 1024 * 1024);
+    // 10,000 parts of 16 MiB: 160,000 MiB, a little over 156 GiB.
+    expect(STORAGE_MAX_FILE_BYTES).toBe(10_000 * 16 * 1024 * 1024);
     expect(STORAGE_MAX_FILE_BYTES).toBeLessThan(1024 * GIB);
   });
 

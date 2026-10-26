@@ -1,5 +1,7 @@
 import {
+  STORAGE_MULTIPART_MAX_PARTS,
   STORAGE_UPLOAD_PART_BYTES,
+  STORAGE_UPLOAD_PROXIED_PART_BYTES,
 } from "@beutl/core";
 import {
   claimStorageUploadForAbandon,
@@ -66,6 +68,7 @@ export type StartedUpload = {
   id: string;
   partSize: number;
   partCount: number;
+  directUpload: boolean;
 };
 
 type StartUploadOutcome =
@@ -78,6 +81,7 @@ type StorageUploadIntent = {
   name: string;
   mimeType: string;
   size: bigint;
+  partSize: number;
 };
 
 const INTENT_DIGEST_PREFIX = "intent-";
@@ -118,7 +122,7 @@ export function partCountOf(size: bigint, partSize = STORAGE_UPLOAD_PART_BYTES):
 
 async function storageUploadIntentDigest(
   intent: StorageUploadIntent,
-  partSize = STORAGE_UPLOAD_PART_BYTES,
+  partSize = intent.partSize,
 ): Promise<string> {
   const serialized = JSON.stringify({
     version: 1,
@@ -195,6 +199,7 @@ export async function startUpload({
   name,
   mimeType,
   size,
+  directUpload = false,
 }: {
   userId: string;
   // 開始要求の名前。応答だけが失われても、同じ名前で問い合わせ直せば同じ
@@ -204,8 +209,17 @@ export async function startUpload({
   name: string;
   mimeType: string;
   size: bigint;
+  directUpload?: boolean;
 }): Promise<StartUploadOutcome> {
-  const intent = { userId, id, name, mimeType, size };
+  const configured = bucket();
+  const supportsDirectUpload = directUpload && typeof configured.presignUploadPart === "function";
+  const partSize = supportsDirectUpload
+    ? STORAGE_UPLOAD_PART_BYTES
+    : STORAGE_UPLOAD_PROXIED_PART_BYTES;
+  if (size > BigInt(partSize) * BigInt(STORAGE_MULTIPART_MAX_PARTS)) {
+    return { ok: false, reason: "uploadFailed" };
+  }
+  const intent = { userId, id, name, mimeType, size, partSize };
   const intentDigest = await storageUploadIntentDigest(intent);
   const existing = await findStorageUploadByIdAndUserId({ id, userId });
   if (existing) {
@@ -224,6 +238,7 @@ export async function startUpload({
           id: existing.id,
           partSize: existing.partSize,
           partCount: partCountOf(existing.size, existing.partSize),
+          directUpload: supportsDirectUpload,
         },
       };
     }
@@ -291,7 +306,7 @@ export async function startUpload({
         name: await availableStorageFileName({ userId, name, prisma }),
         mimeType,
         size,
-        partSize: STORAGE_UPLOAD_PART_BYTES,
+        partSize,
         prisma,
       });
     });
@@ -335,7 +350,7 @@ export async function startUpload({
   }
 
   if (upload.uploadId) {
-    return { ok: true, upload: { id: upload.id, partSize: upload.partSize, partCount: partCountOf(upload.size, upload.partSize) } };
+    return { ok: true, upload: { id: upload.id, partSize: upload.partSize, partCount: partCountOf(upload.size, upload.partSize), directUpload: supportsDirectUpload } };
   }
 
   const leaseToken = crypto.randomUUID();
@@ -356,7 +371,7 @@ export async function startUpload({
       return { ok: false, reason: "uploadFailed", conflict: true };
     }
     if (current?.uploadId) {
-      return { ok: true, upload: { id: current.id, partSize: current.partSize, partCount: partCountOf(current.size, current.partSize) } };
+      return { ok: true, upload: { id: current.id, partSize: current.partSize, partCount: partCountOf(current.size, current.partSize), directUpload: supportsDirectUpload } };
     }
     return { ok: false, reason: "uploadFailed" };
   }
@@ -419,7 +434,49 @@ export async function startUpload({
       id: upload.id,
       partSize: upload.partSize,
       partCount: partCountOf(upload.size, upload.partSize),
+      directUpload: supportsDirectUpload,
     },
+  };
+}
+
+export async function presignUploadPart({
+  userId,
+  uploadId,
+  partNumber,
+}: {
+  userId: string;
+  uploadId: string;
+  partNumber: number;
+}): Promise<{ ok: true; url: string } | { ok: false; reason: UploadFailure }> {
+  const upload = await findStorageUploadByIdAndUserId({ id: uploadId, userId });
+  if (!upload || !upload.uploadId || upload.completedFileId || upload.abandonedAt) {
+    return { ok: false, reason: "uploadNotFound" };
+  }
+  if (
+    !Number.isSafeInteger(partNumber) ||
+    partNumber < 1 ||
+    partNumber > partCountOf(upload.size, upload.partSize)
+  ) {
+    return { ok: false, reason: "uploadFailed" };
+  }
+  // Direct parts bypass uploadPart, so keep the same idle-upload activity
+  // touch; otherwise a long upload could be abandoned by the stale sweep.
+  if (!await touchStorageUploadActivity({ id: uploadId, userId })) {
+    return { ok: false, reason: "uploadNotFound" };
+  }
+  const presign = bucket().presignUploadPart;
+  if (!presign) return { ok: false, reason: "uploadFailed" };
+  const length = allowedPartSize(upload.size, upload.partSize, partNumber);
+  if (length <= BigInt(0)) return { ok: false, reason: "uploadFailed" };
+  return {
+    ok: true,
+    url: await presign(
+      upload.objectKey,
+      upload.uploadId,
+      partNumber,
+      900,
+      Number(length),
+    ),
   };
 }
 

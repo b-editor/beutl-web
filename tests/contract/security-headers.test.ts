@@ -54,6 +54,18 @@ describe("contentSecurityPolicy", () => {
     expect(csp).not.toContain("'unsafe-eval'");
   });
 
+  it("allows the configured direct-upload origin", () => {
+    const csp = contentSecurityPolicy({
+      NODE_ENV: "production",
+      STORAGE_ORIGIN: "https://s3.example.test",
+    });
+
+    expect(directive(csp, "connect-src")).toBe(
+      "connect-src 'self' https://cloudflareinsights.com https://s3.example.test",
+    );
+    expect(directivesOf(csp).filter((d) => d.startsWith("connect-src "))).toHaveLength(1);
+  });
+
   it("adds eval only for the dev bundle, without duplicating script-src", () => {
     const dev = contentSecurityPolicy({ NODE_ENV: "development" });
 
@@ -138,7 +150,8 @@ describe("wiring", () => {
 
   it("wraps the web middleware, keeping the api and _next exclusions", async () => {
     const middleware = await readFile(new URL("../../apps/web/src/middleware.ts", import.meta.url), "utf8");
-    expect(middleware).toContain("applySecurityHeaders(oversized ?? localeMiddleware(request))");
+    expect(middleware).toContain("applySecurityHeaders(oversized ?? localeMiddleware(request), {");
+    expect(middleware).toContain("STORAGE_ORIGIN: storageOrigin()");
     expect(middleware).toContain(String.raw`"/((?!_next|api/|\\.well-known/).*)"`);
   });
 

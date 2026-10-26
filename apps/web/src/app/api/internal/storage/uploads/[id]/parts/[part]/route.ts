@@ -1,6 +1,6 @@
 import { auth } from "@/lib/better-auth";
 import { fromThisSite, unauthorizedResponse } from "@/lib/internal-request";
-import { uploadPart } from "@/lib/storage-upload-server";
+import { presignUploadPart, uploadPart } from "@/lib/storage-upload-server";
 
 // One part of a file. The body is handed to the bucket as it arrives rather
 // than read into memory: a part is the largest thing this Worker ever holds,
@@ -48,4 +48,32 @@ export async function PUT(
   }
 
   return Response.json({ partNumber, etag: outcome.etag });
+}
+
+
+// Ask for a short-lived URL that lets the browser send this part straight to
+// the bucket. The part body never passes through this Worker.
+export async function POST(
+  request: Request,
+  props: { params: Promise<{ id: string; part: string }> },
+): Promise<Response> {
+  if (!fromThisSite(request)) return unauthorizedResponse();
+
+  const session = await auth.api.getSession({ headers: request.headers });
+  const userId = session?.user?.id;
+  if (!userId) return unauthorizedResponse();
+
+  const { id, part } = await props.params;
+  const outcome = await presignUploadPart({
+    userId,
+    uploadId: id,
+    partNumber: Number(part),
+  });
+  if (!outcome.ok) {
+    return Response.json(
+      { error_code: outcome.reason },
+      { status: outcome.reason === "uploadNotFound" ? 404 : 400 },
+    );
+  }
+  return Response.json({ url: outcome.url });
 }

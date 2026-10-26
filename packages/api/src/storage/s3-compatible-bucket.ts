@@ -334,6 +334,30 @@ export function createS3CompatibleBucket(
     }
   }
 
+  async function presignUploadPart(
+    key: string,
+    uploadId: string,
+    partNumber: number,
+    expiresSeconds = 900,
+    contentLength?: number,
+  ): Promise<string> {
+    const url = objectUrl(
+      key,
+      `?partNumber=${partNumber}&uploadId=${encodeURIComponent(uploadId)}`,
+    );
+    url.searchParams.set("X-Amz-Expires", String(expiresSeconds));
+    const signed = await client.sign(url.toString(), {
+      method: "PUT",
+      headers: contentLength === undefined
+        ? undefined
+        : { "content-length": String(contentLength) },
+      // Sign the length when one is known, so the URL cannot upload a larger
+      // part than the reservation allowed.
+      aws: { signQuery: true, allHeaders: contentLength !== undefined },
+    });
+    return signed.url;
+  }
+
   async function head(key: string): Promise<{ size?: number } | null> {
     const response = await send({
       method: "HEAD",
@@ -526,6 +550,7 @@ export function createS3CompatibleBucket(
       }
       return { uploadId };
     },
+    presignUploadPart,
     resumeMultipartUpload,
   };
 }
