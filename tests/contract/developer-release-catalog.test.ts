@@ -44,7 +44,7 @@ describe("developer release version catalog", () => {
     renderToStaticMarkup(await Page({ params: params() }));
 
     expect(mocks.releaseForm).toHaveBeenCalledWith(
-      { pkg, lang: "en", languages: expect.any(Array), beutlVersions: [] },
+      { pkg, lang: "en", languages: expect.any(Array), beutlVersions: [], ownerId: "owner" },
       undefined,
     );
     expect(log).toHaveBeenCalledWith("Failed to load Beutl version suggestions", error);
@@ -63,7 +63,7 @@ describe("developer release version catalog", () => {
     renderToStaticMarkup(await Page({ params: params() }));
 
     expect(mocks.releaseForm).toHaveBeenCalledWith(
-      { pkg, lang: "en", languages: expect.any(Array), beutlVersions: ["2.0.0", "2.0.0-preview.10", "2.0.0-preview.9", "1.9.0"] },
+      { pkg, lang: "en", languages: expect.any(Array), beutlVersions: ["2.0.0", "2.0.0-preview.10", "2.0.0-preview.9", "1.9.0"], ownerId: "owner" },
       undefined,
     );
   });

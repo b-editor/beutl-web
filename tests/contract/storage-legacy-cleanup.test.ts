@@ -631,7 +631,7 @@ describe("legacy storage cleanup contracts", () => {
       action.indexOf("export async function createRelease"),
     );
     expect(update).toContain("published = await publishRelease(tx, record.id)");
-    expect(update).not.toContain("uploadedFileId");
+    expect(update).toContain("publishRelease(tx, uploadedFileId)");
     expect(update).not.toContain("deleteStorageFile");
   });
 
