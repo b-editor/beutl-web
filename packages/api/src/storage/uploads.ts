@@ -36,6 +36,7 @@ import {
   resolveStorageQuota,
   DEDICATED_STORAGE_TRANSACTION,
 } from "@beutl/db";
+import { createHash } from "node:crypto";
 import { getR2Bucket } from "../ai/r2-provider";
 
 // Uploading a file that one request cannot carry.
@@ -537,6 +538,61 @@ type TrackedUpload = NonNullable<
   Awaited<ReturnType<typeof findStorageUploadByIdAndUserId>>
 >;
 
+/** The completion lease is 60 seconds. A hash read gets 15 seconds, then
+ * leaves the hash unset so a slow provider cannot lose the completed upload
+ * to the stale sweep; the admin screen can repair it later. */
+const HASH_TIMEOUT_MILLISECONDS = 15 * 1000;
+
+/** Hash a joined object without buffering it. A provider that cannot read
+ * objects (or a transient read failure) leaves the hash unset; the admin
+ * screen can repair it later. */
+export async function sha256OfStoredObject(
+  objectKey: string,
+  timeoutMilliseconds = HASH_TIMEOUT_MILLISECONDS,
+): Promise<string | undefined> {
+  const configured = getR2Bucket();
+  const get = configured.get;
+  if (!get) return undefined;
+  let object: Awaited<ReturnType<NonNullable<typeof get>>>;
+  try {
+    object = await get.call(configured, objectKey);
+  } catch (error) {
+    console.error("Failed to read a stored object for hashing", objectKey, error);
+    return undefined;
+  }
+  if (!object?.body) return undefined;
+  const hash = createHash("sha256");
+  const reader = object.body.getReader();
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      // Resolve the pending read and release the provider's stream.
+      void reader.cancel().catch(() => undefined).finally(() => resolve(undefined));
+    }, timeoutMilliseconds);
+  });
+  const read = (async () => {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      if (timedOut) return undefined;
+      hash.update(next.value);
+    }
+    return timedOut ? undefined : hash.digest("hex");
+  })();
+  try {
+    return await Promise.race([read, timeout]);
+  } catch (error) {
+    console.error("Failed to hash a stored object", objectKey, error);
+    return undefined;
+  } finally {
+    if (timer) clearTimeout(timer);
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+
 export async function finishUpload({
   userId,
   uploadId,
@@ -807,6 +863,7 @@ async function finalizeUpload(
   | { ok: true; file: { id: string; name: string; size: bigint } }
   | { ok: false; reason: UploadFailure }
 > {
+  const sha256 = await sha256OfStoredObject(upload.objectKey);
   let outcome:
     | { kind: "created"; id: string; name: string }
     | { kind: "alreadyCompleted"; fileId: string }
@@ -861,6 +918,7 @@ async function finalizeUpload(
         mimeType: current.mimeType,
         userId,
         visibility: "PRIVATE",
+        sha256,
         prisma,
       });
       // The row stays as the receipt of a finished upload. Its size is no

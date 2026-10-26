@@ -17,7 +17,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@beutl/ui/ui/alert-dialog";
-import { setPackagePublished, setReleasePublished } from "./actions";
+import { repairMissingReleaseSha256, setPackagePublished, setReleasePublished } from "./actions";
 
 const MIN_REASON_LENGTH = 5;
 
@@ -112,5 +112,45 @@ export function PublishToggleButton({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  );
+}
+
+
+/** Repair the hashes of release files uploaded before the multipart path
+ * recorded a SHA-256. They are the download ETag and the installer's check. */
+export function RepairHashesButton({ lang }: { lang: string }) {
+  const { t } = useTranslation(lang);
+  const { toast } = useToast();
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [cursor, setCursor] = useState<string | undefined>();
+
+  const repair = () => {
+    startTransition(async () => {
+      try {
+        const result = await repairMissingReleaseSha256(cursor);
+        if (result.success) setCursor(result.nextCursor);
+        toast({
+          title: result.success
+            ? t("admin:packages.repairHashesSuccess")
+            : t("admin:packages.updateFailed"),
+          description: result.message ?? undefined,
+          variant: result.success ? undefined : "destructive",
+        });
+        router.refresh();
+      } catch (error) {
+        toast({
+          title: t("admin:packages.updateFailed"),
+          description: error instanceof Error ? error.message : String(error),
+          variant: "destructive",
+        });
+      }
+    });
+  };
+
+  return (
+    <Button size="sm" variant="outline" disabled={pending} onClick={repair}>
+      {t(cursor ? "admin:packages.repairHashesContinue" : "admin:packages.repairHashes")}
+    </Button>
   );
 }

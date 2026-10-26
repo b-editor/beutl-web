@@ -1,13 +1,16 @@
 "use server";
 
+import { createHash } from "node:crypto";
 import { addAuditLog, auditLogActions } from "@beutl/next/audit-log";
 import type { ActionResult } from "@beutl/core";
 import { adminAction } from "@/lib/auth-guard";
 import {
+  getDb,
   setPackagePublishedByAdmin,
   setReleasePublishedByAdmin,
   startRetryableTransaction,
 } from "@beutl/db";
+import { getStorageStores } from "@/lib/storage";
 import { revalidatePath } from "next/cache";
 
 // 公開状態の強制変更は開発者の意図を覆す操作なので、後から経緯を辿れるよう理由を必須にする。
@@ -97,4 +100,128 @@ export async function setReleasePublished(input: unknown): Promise<ActionResult>
     revalidatePackagePages();
     return { success: true };
   });
+}
+
+
+const MAX_HASH_REPAIRS = 20;
+
+export type RepairHashesResult =
+  | { success: true; message: string; nextCursor?: string }
+  | { success: false; message?: string };
+
+function encodeHashCursor(position: { createdAt: Date; id: string }): string {
+  return Buffer.from(`${position.createdAt.toISOString()}|${position.id}`, "utf8")
+    .toString("base64url");
+}
+
+function decodeHashCursor(value: string | undefined): { createdAt: Date; id: string } | undefined {
+  if (!value) return undefined;
+  try {
+    const decoded = Buffer.from(value, "base64url").toString("utf8");
+    const separator = decoded.indexOf("|");
+    if (separator <= 0) return undefined;
+    const createdAt = new Date(decoded.slice(0, separator));
+    const id = decoded.slice(separator + 1);
+    if (!Number.isFinite(createdAt.getTime()) || id.length === 0) return undefined;
+    return { createdAt, id };
+  } catch {
+    // A cursor that does not decode is a malformed request, not a server error.
+    return undefined;
+  }
+}
+
+async function sha256OfStream(stream: ReadableStream<Uint8Array>): Promise<string> {
+  const hash = createHash("sha256");
+  const reader = stream.getReader();
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      hash.update(next.value);
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  return hash.digest("hex");
+}
+
+/** Recompute the SHA-256 of published release files that were uploaded before
+ * the multipart path recorded one. The NuGet download ETag is this value, and
+ * the desktop app verifies it when installing a package. */
+export async function repairMissingReleaseSha256(cursor?: string): Promise<RepairHashesResult> {
+  return (await adminAction(async (session) => {
+    const position = decodeHashCursor(cursor);
+    const db = await getDb();
+    const releases = await db.release.findMany({
+      where: {
+        published: true,
+        file: { is: { sha256: null } },
+        ...(position
+          ? {
+              OR: [
+                { createdAt: { gt: position.createdAt } },
+                { createdAt: position.createdAt, id: { gt: position.id } },
+              ],
+            }
+          : {}),
+      },
+      select: {
+        id: true,
+        createdAt: true,
+        file: { select: { id: true, objectKey: true } },
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: MAX_HASH_REPAIRS,
+    });
+    if (releases.length === 0) {
+      return {
+        success: true,
+        message: cursor ? "No more missing SHA-256." : "No missing SHA-256.",
+      };
+    }
+
+    const { stores } = await getStorageStores();
+    let repaired = 0;
+    let failed = 0;
+    for (const release of releases) {
+      const file = release.file;
+      if (!file) continue;
+      let sha256: string | undefined;
+      for (const store of stores) {
+        try {
+          const object = await store.bucket.get?.(file.objectKey);
+          if (!object?.body) continue;
+          sha256 = await sha256OfStream(object.body);
+          break;
+        } catch (error) {
+          console.error("Failed to read a release file for hashing", file.objectKey, error);
+        }
+      }
+      if (!sha256) {
+        failed++;
+        continue;
+      }
+      await db.file.update({
+        where: { id: file.id },
+        data: { sha256 },
+      });
+      await addAuditLog({
+        userId: session.user.id,
+        action: auditLogActions.admin.releaseSha256Repaired,
+        details: `fileId: ${file.id}, releaseId: ${release.id}, sha256: ${sha256}`,
+      });
+      repaired++;
+    }
+
+    revalidatePackagePages();
+    const nextCursor = releases.length === MAX_HASH_REPAIRS
+      ? encodeHashCursor(releases[releases.length - 1])
+      : undefined;
+    return {
+      success: true,
+      message: `Repaired ${repaired} file hash(es)${failed > 0 ? `; ${failed} could not be read` : ""}${nextCursor ? ". Run again to continue with the next batch." : "."}`,
+      nextCursor,
+    };
+  })) as RepairHashesResult;
 }
