@@ -84,6 +84,13 @@ type ScheduledControllerLike = {
   scheduledTime: number;
 };
 
+// Cron polls AI providers, reconciles payments and cleans storage. Login,
+// signing and incoming-webhook credentials must not gate these maintenance jobs.
+const SCHEDULED_SECRET_NAMES = [
+  "STRIPE_SECRET_KEY", "OPENROUTER_API_KEY", "VERCEL_AI_GATEWAY_API_KEY",
+  "BEUTL_S3_ACCESS_KEY_ID", "BEUTL_S3_SECRET_ACCESS_KEY", "BEUTL_S3_SESSION_TOKEN",
+] as const;
+
 type ApiExecutionContext = NonNullable<Parameters<typeof api.fetch>[2]>;
 
 /** Keep API requests and cron jobs from replacing Next.js's global providers. */
@@ -232,7 +239,7 @@ export default {
     bindings: WorkerSecretBindings<Env>,
     context: ExecutionContextLike,
   ): Promise<void> {
-    const env = await resolveWorkerSecrets<Env>(bindings);
+    const env = await resolveWorkerSecrets<Env>(bindings, SCHEDULED_SECRET_NAMES);
     context.waitUntil(withApiBindings(env, async () => {
       const scheduledAt = new Date(controller.scheduledTime);
       // Duplicate top-up and package-payment refunds may be created by checkout

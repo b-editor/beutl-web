@@ -67,6 +67,7 @@ async function expectFileTooLarge(response: Response): Promise<void> {
 
 describe("embedded API env → process.env コピー", () => {
   afterEach(() => {
+    vi.useRealTimers();
     for (const key of Object.keys(process.env)) {
       if (!(key in originalEnv)) {
         delete process.env[key];
@@ -153,19 +154,40 @@ describe("embedded API env → process.env コピー", () => {
   });
 
   it("fails without exposing provider errors or partially updating secrets, then retries", async () => {
+    vi.useFakeTimers();
     process.env.JWT_SECRET = "old-jwt";
     process.env.STRIPE_SECRET_KEY = "old-stripe";
-    const get = vi.fn().mockRejectedValueOnce(new Error("provider included sensitive-value"))
-      .mockResolvedValueOnce("new-stripe");
+    const get = vi.fn().mockRejectedValue(new Error("provider included sensitive-value"));
     const bindings = { JWT_SECRET: { get: async () => "new-jwt" }, STRIPE_SECRET_KEY: { get } };
-    await expect(resolveWorkerSecrets(bindings)).rejects.toThrow(
+    const failure = expect(resolveWorkerSecrets(bindings)).rejects.toThrow(
       /^Unable to resolve Secrets Store binding STRIPE_SECRET_KEY$/u,
     );
+    await vi.runAllTimersAsync();
+    await failure;
+    expect(get).toHaveBeenCalledTimes(3);
     expect(process.env.JWT_SECRET).toBe("old-jwt");
     expect(process.env.STRIPE_SECRET_KEY).toBe("old-stripe");
+    get.mockResolvedValue("new-stripe");
     await resolveWorkerSecrets(bindings);
     expect(process.env.JWT_SECRET).toBe("new-jwt");
     expect(process.env.STRIPE_SECRET_KEY).toBe("new-stripe");
+  });
+
+  it("retries a rejected read without re-reading successful bindings or publishing partial secrets", async () => {
+    vi.useFakeTimers();
+    process.env.JWT_SECRET = "old-jwt";
+    const jwt = vi.fn(async () => "new-jwt");
+    const stripe = vi.fn().mockRejectedValueOnce(new Error("Network connection lost."))
+      .mockResolvedValueOnce("new-stripe");
+    const result = resolveWorkerSecrets({ JWT_SECRET: { get: jwt }, STRIPE_SECRET_KEY: { get: stripe } });
+    const resolved = expect(result).resolves.toMatchObject({ JWT_SECRET: "new-jwt", STRIPE_SECRET_KEY: "new-stripe" });
+    void resolved.catch(() => {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(process.env.JWT_SECRET).toBe("old-jwt");
+    await vi.runAllTimersAsync();
+    await resolved;
+    expect(jwt).toHaveBeenCalledOnce();
+    expect(stripe).toHaveBeenCalledTimes(2);
   });
 
   it.each(["", undefined, null, {}])("rejects an invalid Secrets Store value: %j", async (value) => {

@@ -17,9 +17,13 @@ const mocks = vi.hoisted(() => ({
   output: vi.fn(),
 }));
 
-vi.mock("@beutl/db", () => ({
+vi.mock("@beutl/db", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@beutl/db")>(),
   findFileForContentAccess: mocks.findFileForContentAccess,
   existsUserPaymentHistory: mocks.existsUserPaymentHistory,
+}));
+vi.mock("@/prisma", () => ({
+  withOwnPrismaClient: (work: (prisma: unknown) => Promise<unknown>) => work({}),
 }));
 vi.mock("@beutl/api/api/auth", () => ({ tryGetUserIdFromRequest: mocks.tryGetUserIdFromRequest }));
 vi.mock("@/lib/better-auth", () => ({ auth: { api: { getSession: mocks.getSession } } }));

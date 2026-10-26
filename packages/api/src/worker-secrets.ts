@@ -30,7 +30,18 @@ export async function resolveWorkerSecrets<Env extends object>(
     try {
       if (binding === null || typeof binding !== "object" || !("get" in binding) ||
           typeof binding.get !== "function") throw new Error();
-      const value: unknown = await binding.get();
+      let value: unknown;
+      // A rejected RPC read can be transient. Retry only that binding, within
+      // this invocation; do not reuse an old secret or cross-request promise.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          value = await binding.get();
+          break;
+        } catch (error) {
+          if (attempt === 2) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 100 * 2 ** attempt));
+        }
+      }
       if (typeof value !== "string" || value.length === 0) throw new Error();
       return [name, value] as const;
     } catch {
