@@ -483,14 +483,14 @@ importers:
   packages/i18n:
     dependencies:
       i18next:
-        specifier: ^26.5.4
-        version: 26.5.4(typescript@6.0.3)
+        specifier: ^26.5.6
+        version: 26.5.6(typescript@6.0.3)
       negotiator:
         specifier: ^1.1.0
         version: 1.1.0
       react-i18next:
         specifier: ^17.1.0
-        version: 17.1.0(i18next@26.5.4(typescript@6.0.3))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@6.0.3)
+        version: 17.1.0(i18next@26.5.6(typescript@6.0.3))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@6.0.3)
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -599,8 +599,8 @@ importers:
         specifier: ^0.7.1
         version: 0.7.1
       i18next:
-        specifier: ^26.5.4
-        version: 26.5.4(typescript@6.0.3)
+        specifier: ^26.5.6
+        version: 26.5.6(typescript@6.0.3)
       lucide-react:
         specifier: ^1.61.0
         version: 1.61.0(@types/react@19.3.0)(react@19.3.1)
@@ -612,7 +612,7 @@ importers:
         version: 19.3.1(react@19.3.1)
       react-i18next:
         specifier: ^17.1.0
-        version: 17.1.0(i18next@26.5.4(typescript@6.0.3))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@6.0.3)
+        version: 17.1.0(i18next@26.5.6(typescript@6.0.3))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@6.0.3)
       react-markdown:
         specifier: ^10.1.0
         version: 10.1.0(@types/react@19.3.0)(react@19.3.1)
@@ -3719,8 +3719,8 @@ packages:
   humanize-ms@1.2.1:
     resolution: {integrity: sha512-Fl70vYtsAFb/C06PTS9dZBo7ihau+Tu/DNCk/OyHhea07S+aeMWpFFkUaXRa8fI+ScZbEI8dfSxwY7gxZ9SAVQ==}
 
-  i18next@26.5.4:
-    resolution: {integrity: sha512-Wg0O1u2xmnsve9gICDwGekLkMe9SIC7+ZiuLYfWUGb/A3TQdRKygQ4OY9ros4raf5D66ZnW9JMrTDtGP2b8a7Q==}
+  i18next@26.5.6:
+    resolution: {integrity: sha512-GFWrDwGmYhOQS3bKvjA2Ir2ob9ScEdyY1UbeQJ10jyVACGQ6XxmDYqC/lxEj/IPEJlPQYNRnYffDET6TM8mnFg==}
     peerDependencies:
       typescript: ^5 || ^6 || ^7
     peerDependenciesMeta:
@@ -8559,7 +8559,7 @@ snapshots:
     dependencies:
       ms: 2.1.3
 
-  i18next@26.5.4(typescript@6.0.3):
+  i18next@26.5.6(typescript@6.0.3):
     optionalDependencies:
       typescript: 6.0.3
 
@@ -9478,11 +9478,11 @@ snapshots:
       react: 19.3.1
       scheduler: 0.28.0
 
-  react-i18next@17.1.0(i18next@26.5.4(typescript@6.0.3))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@6.0.3):
+  react-i18next@17.1.0(i18next@26.5.6(typescript@6.0.3))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@6.0.3):
     dependencies:
       '@babel/runtime': 7.29.7
       html-parse-stringify: 4.0.1
-      i18next: 26.5.4(typescript@6.0.3)
+      i18next: 26.5.6(typescript@6.0.3)
       react: 19.3.1
       use-sync-external-store: 1.6.0(react@19.3.1)
     optionalDependencies:
