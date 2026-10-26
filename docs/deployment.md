@@ -44,7 +44,12 @@ never holds its body, so a large file is not bounded by the Worker's memory
 limit.
 
 The bucket must allow `PUT` from the Web origin and expose `ETag`; without the
-exposed header the browser cannot finish the upload.
+exposed header the browser cannot finish the upload. Backblaze B2's
+S3-compatible API supports presigned URLs and `PutBucketCors`. Add the rule in
+the B2 console under the bucket's CORS rules (choose the S3 Put/Get/Head Object
+operations), or send the XML below to
+`https://s3.<region>.backblazeb2.com/<bucket>/?cors` with an application key
+that can write the bucket.
 
 ```xml
 <CORSConfiguration>
