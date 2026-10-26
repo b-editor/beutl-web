@@ -39,6 +39,7 @@ vi.mock("@beutl/db", async (importOriginal) => ({
 }));
 
 import worker, { type Env } from "../../packages/api/src/runtime";
+import { WORKER_SECRET_NAMES } from "../../packages/api/src/worker-secrets";
 
 const env = {
   BEUTL_DATABASE_HYPERDRIVE: { connectionString: "postgres://scheduler-test" },
@@ -132,5 +133,27 @@ describe("worker scheduled refund/cleanup dependency", () => {
       expect(fn).toHaveBeenCalledWith(new Date(0), "sk_store_scheduler");
     }
     expect(get).toHaveBeenCalledOnce();
+  });
+
+  it("resolves only maintenance credentials, so unavailable login and webhook secrets do not stop cron", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const required = ["STRIPE_SECRET_KEY", "OPENROUTER_API_KEY", "VERCEL_AI_GATEWAY_API_KEY",
+      "BEUTL_S3_ACCESS_KEY_ID", "BEUTL_S3_SECRET_ACCESS_KEY", "BEUTL_S3_SESSION_TOKEN"];
+    const secrets = Object.fromEntries(WORKER_SECRET_NAMES.map((name) => [name, {
+      get: vi.fn(async () => {
+        if (!required.includes(name)) throw new Error("unavailable unrelated secret");
+        return `resolved-${name}`;
+      }),
+    }]));
+    const pending: Promise<unknown>[] = [];
+    await worker.scheduled({ scheduledTime: 0 }, { ...env, ...secrets },
+      { waitUntil: (task) => { pending.push(task); } });
+    await Promise.all(pending);
+    for (const name of WORKER_SECRET_NAMES) {
+      expect(secrets[name].get).toHaveBeenCalledTimes(required.includes(name) ? 1 : 0);
+    }
+    expect(mocks.jobs).toHaveBeenCalledOnce();
+    expect(mocks.storage).toHaveBeenCalledOnce();
+    expect(mocks.duplicate).toHaveBeenCalledWith(new Date(0), "resolved-STRIPE_SECRET_KEY");
   });
 });

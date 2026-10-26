@@ -37,8 +37,24 @@ export async function keepRenderingAfterDisconnect(
   context: WorkerContext,
   downstream: DownstreamFetch,
 ): Promise<Response> {
-  if (!RENDER_METHODS.has(request.method) || isRouteHandlerPath(request)) {
+  if (!RENDER_METHODS.has(request.method)) {
     return await downstream(request);
+  }
+
+  if (isRouteHandlerPath(request)) {
+    // OpenNext resolves fetch only when Next writes headers. If the visitor
+    // leaves first, Next skips the destroyed response and that promise never
+    // settles, even after the handler's waitUntil finishes. Complete the fetch
+    // on disconnect while preserving the signal that cancels content streams.
+    if (request.signal.aborted) return new Response(null, { status: 499 });
+    const aborted = Promise.withResolvers<Response>();
+    const onAbort = () => aborted.resolve(new Response(null, { status: 499 }));
+    request.signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      return await Promise.race([downstream(request), aborted.promise]);
+    } finally {
+      request.signal.removeEventListener("abort", onAbort);
+    }
   }
 
   // Held from the start: a visitor can leave before the render's first byte.

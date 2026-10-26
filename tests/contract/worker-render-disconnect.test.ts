@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createRequire } from "node:module";
 import { keepRenderingAfterDisconnect } from "../../apps/web/src/lib/worker-render-disconnect";
 
 const encoder = new TextEncoder();
@@ -176,6 +177,48 @@ describe("page renders after a client disconnect", () => {
     });
     expect(abortedWhileFetching).toBe(true);
     expect(ctx.pending).toHaveLength(0);
+  });
+
+  it("settles an aborted API fetch when OpenNext finishes without writing headers", async () => {
+    const fromWeb = createRequire(new URL("../../apps/web/package.json", import.meta.url));
+    const fromAdapter = createRequire(fromWeb.resolve("@opennextjs/cloudflare"));
+    const { default: adapter } = await import(fromAdapter.resolve("@opennextjs/aws/overrides/wrappers/cloudflare-node.js"));
+    const started = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    // Exercise the installed adapter: its response promise is resolved only
+    // by writeHeaders, which a disconnected Next route never reaches.
+    const fetch = await adapter.wrapper(async () => {
+      started.resolve();
+      await resume.promise;
+    }, { convertFrom: async () => ({}) });
+    const visitor = new AbortController();
+    const ctx = context();
+    const result = keepRenderingAfterDisconnect(
+      new Request(`${ORIGIN}/api/contents/image`, { signal: visitor.signal }), ctx,
+      (request) => fetch(request, {}, ctx, request.signal),
+    );
+    await started.promise;
+    visitor.abort();
+    resume.resolve();
+    await Promise.all(ctx.pending);
+    const response = await Promise.race([result,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 100)),
+    ]);
+    expect(response?.status).toBe(499);
+  });
+
+  it("preserves API streaming and cancellation after headers arrive", async () => {
+    const body = controllableBody();
+    const { visitor, forwarded, response, ctx } = await respond("image/png", body.stream, "/api/contents/image");
+    expect(response.status).toBe(200);
+    expect(ctx.pending).toHaveLength(0);
+    body.push("bytes");
+    const reader = response.body!.getReader();
+    expect(decoder.decode((await reader.read()).value)).toBe("bytes");
+    visitor.abort();
+    expect(forwarded.signal.aborted).toBe(true);
+    await reader.cancel();
+    expect(body.state.cancelled).toBe(true);
   });
 
   it("keeps the visitor's signal on POST for AI submissions", async () => {

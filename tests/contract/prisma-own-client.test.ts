@@ -5,6 +5,8 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
   afterCallbacks: [] as (() => unknown)[],
   clients: [] as { ended: boolean }[],
+  readStarted: Promise.withResolvers<void>(),
+  resumeRead: Promise.withResolvers<void>(),
 }));
 
 vi.mock("@prisma/client", async (importOriginal) => ({
@@ -18,17 +20,30 @@ vi.mock("@prisma/client", async (importOriginal) => ({
       if (this.ended) throw new Error("Cannot use a pool after calling end on the pool");
       return label;
     }
+    file = {
+      findFirst: async () => {
+        state.readStarted.resolve();
+        await state.resumeRead.promise;
+        // A relation query can need the pool again after its first I/O.
+        await this.query("file relations");
+        return null;
+      },
+    };
   },
 }));
+
+vi.mock("@/lib/better-auth", () => ({ auth: { api: { getSession: vi.fn() } } }));
 
 import { getDb, runWithSharedDb } from "@beutl/db";
 
 let withOwnPrismaClient: typeof import("../../apps/web/src/prisma").withOwnPrismaClient;
+let contentRoute: typeof import("../../apps/web/src/app/api/contents/[fileId]/route");
 
 beforeAll(async () => {
   // prisma.ts resolves these from apps/web, so mock them at that path.
   const fromWeb = createRequire(new URL("../../apps/web/package.json", import.meta.url));
-  vi.doMock(fromWeb.resolve("next/server"), () => ({
+  vi.doMock(fromWeb.resolve("next/server"), async (importOriginal) => ({
+    ...await importOriginal<typeof import("next/server")>(),
     after: (callback: () => unknown) => { state.afterCallbacks.push(callback); },
   }));
   vi.doMock(fromWeb.resolve("@opennextjs/cloudflare"), () => ({
@@ -38,6 +53,7 @@ beforeAll(async () => {
   }));
   vi.doMock(fromWeb.resolve("@prisma/adapter-pg"), () => ({ PrismaPg: class {} }));
   ({ withOwnPrismaClient } = await import("../../apps/web/src/prisma"));
+  contentRoute = await import("../../apps/web/src/app/api/contents/[fileId]/route");
 });
 
 type FakeClient = { ended: boolean; query(label: string): Promise<string> };
@@ -50,6 +66,8 @@ describe("work that outlives the response", () => {
   beforeEach(() => {
     state.afterCallbacks.length = 0;
     state.clients.length = 0;
+    state.readStarted = Promise.withResolvers<void>();
+    state.resumeRead = Promise.withResolvers<void>();
   });
 
   it("shares an action client and disconnects it only after the response", async () => {
@@ -122,6 +140,22 @@ describe("work that outlives the response", () => {
       throw new Error("query failed");
     })).rejects.toThrow("query failed");
     expect(state.clients[0].ended).toBe(true);
+  });
+
+  it.each(["GET", "HEAD"] as const)("keeps content %s queries alive across an early disconnect, then releases the pool", async (method) => {
+    const visitor = new AbortController();
+    const result = contentRoute[method](new Request("https://beutl.example/api/contents/missing", {
+      method, signal: visitor.signal,
+    }) as Parameters<typeof contentRoute.GET>[0], { params: Promise.resolve({ fileId: "missing" }) });
+    await state.readStarted.promise;
+    visitor.abort();
+    // Next's onClose invokes after() even while the route is still awaiting I/O.
+    await closeResponse();
+    state.resumeRead.resolve();
+    expect((await result).status).toBe(404);
+    expect(state.clients).toHaveLength(1);
+    expect(state.clients[0].ended).toBe(true);
+    expect(state.afterCallbacks).toHaveLength(0);
   });
 
   it("recomputes the landing packages on a client of their own", () => {

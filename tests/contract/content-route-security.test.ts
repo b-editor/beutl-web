@@ -13,7 +13,13 @@ const bucketMocks = vi.hoisted(() => ({
   get: vi.fn(),
 }));
 
-vi.mock("@beutl/db", () => dbMocks);
+vi.mock("@beutl/db", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@beutl/db")>(),
+  ...dbMocks,
+}));
+vi.mock("@/prisma", () => ({
+  withOwnPrismaClient: (work: (prisma: unknown) => Promise<unknown>) => work({}),
+}));
 vi.mock("@beutl/api/api/auth", () => ({
   tryGetUserIdFromRequest: authMocks.tryGetUserIdFromRequest,
 }));

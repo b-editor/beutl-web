@@ -10,6 +10,7 @@ import {
 
 import { NextResponse, type NextRequest } from "next/server";
 import { auth } from "@/lib/better-auth";
+import { withOwnDb } from "@/lib/db/with-own-db";
 import {
   contentCacheHeaders,
   contentDeliveryHeaders,
@@ -26,7 +27,7 @@ export async function GET(
   request: NextRequest,
   props: ContentProps,
 ) {
-  return serveContent(request, props, false);
+  return withOwnDb(() => serveContent(request, props, false));
 }
 
 /** Return representation metadata without fetching or encoding an image body. */
@@ -36,7 +37,7 @@ export async function HEAD(request: NextRequest, props: ContentProps) {
   headers.delete("range");
   headers.delete("if-range");
   const headRequest = new Request(request.url, { method: "HEAD", headers, signal: request.signal });
-  const response = await serveContent(headRequest as NextRequest, props, true);
+  const response = await withOwnDb(() => serveContent(headRequest as NextRequest, props, true));
   void response.body?.cancel().catch(() => {});
   return new NextResponse(null, { status: response.status, headers: response.headers });
 }
