@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { s3PublicOriginFromEnv } from "@beutl/api/storage/bucket-from-env";
 import { localeMiddleware } from "@beutl/next/middleware";
 import { applySecurityHeaders } from "@beutl/next/security-headers";
 import { refuseOversizedAiUpload } from "@/lib/ai-upload-guard";
@@ -8,9 +9,7 @@ import { refuseOversizedAiUpload } from "@/lib/ai-upload-guard";
 // 移さず各アプリで宣言する。処理本体は localeMiddleware に集約している。
 function storageOrigin(): string | undefined {
   try {
-    const endpoint = (getCloudflareContext().env as { BEUTL_S3_ENDPOINT?: unknown })
-      .BEUTL_S3_ENDPOINT;
-    return typeof endpoint === "string" ? new URL(endpoint).origin : undefined;
+    return s3PublicOriginFromEnv(getCloudflareContext().env);
   } catch {
     // Middleware may run without an OpenNext request context (tests, early
     // startup). Without an endpoint we simply omit the direct-upload CSP entry.

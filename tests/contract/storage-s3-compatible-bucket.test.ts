@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { s3PublicOriginFromEnv } from "@beutl/api/storage/bucket-from-env";
 import {
   createS3CompatibleBucket,
   isTerminalMultipartAbortError,
@@ -379,5 +380,32 @@ describe("S3 compatible bucket adapter", () => {
     const handle = bucket().resumeMultipartUpload!("k", "up");
     expect(await handle.complete([{ partNumber: 1, etag: "e1" }])).toEqual({ size: 3 });
     expect(recorded.filter((request) => request.method === "POST")).toHaveLength(2);
+  });
+});
+
+
+describe("S3 public origin", () => {
+  const base = {
+    BEUTL_STORAGE_PROVIDER: "s3",
+    BEUTL_S3_ENDPOINT: "https://s3.example.test",
+    BEUTL_S3_BUCKET: "beutl",
+  };
+
+  it("follows the path-style addressing default", () => {
+    expect(s3PublicOriginFromEnv(base)).toBe("https://s3.example.test");
+  });
+
+  it("uses the virtual-host bucket origin when path style is off", () => {
+    expect(s3PublicOriginFromEnv({
+      ...base,
+      BEUTL_S3_FORCE_PATH_STYLE: "false",
+    })).toBe("https://beutl.s3.example.test");
+  });
+
+  it("has no S3 origin when the primary store is R2", () => {
+    expect(s3PublicOriginFromEnv({
+      ...base,
+      BEUTL_STORAGE_PROVIDER: "r2",
+    })).toBeUndefined();
   });
 });

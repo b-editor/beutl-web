@@ -99,6 +99,21 @@ function s3Bucket(env: object): R2BucketLike {
   return createS3CompatibleBucket(s3BucketOptionsFromEnv(env));
 }
 
+/**
+ * The origin a browser must be allowed to reach for presigned S3 uploads. It
+ * follows the adapter's addressing style: virtual-host buckets live under
+ * `<bucket>.<endpoint host>`, path-style buckets under the endpoint host.
+ */
+export function s3PublicOriginFromEnv(env: object): string | undefined {
+  if (storageProviderOf(env) !== "s3" || !s3Configured(env)) return undefined;
+  const endpoint = new URL(requireString(env, S3_KEYS.endpoint));
+  const bucket = requireString(env, S3_KEYS.bucket);
+  if (!readBoolean(env, S3_KEYS.forcePathStyle, true)) {
+    endpoint.hostname = `${bucket}.${endpoint.hostname}`;
+  }
+  return endpoint.origin;
+}
+
 /** Which providers the configuration describes, primary first. */
 export function configuredStorageProviders(env: object): StorageProvider[] {
   const primary = storageProviderOf(env);
