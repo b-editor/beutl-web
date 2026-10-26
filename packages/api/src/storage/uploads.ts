@@ -538,10 +538,18 @@ type TrackedUpload = NonNullable<
   Awaited<ReturnType<typeof findStorageUploadByIdAndUserId>>
 >;
 
+/** The completion lease is 60 seconds. A hash read gets 15 seconds, then
+ * leaves the hash unset so a slow provider cannot lose the completed upload
+ * to the stale sweep; the admin screen can repair it later. */
+const HASH_TIMEOUT_MILLISECONDS = 15 * 1000;
+
 /** Hash a joined object without buffering it. A provider that cannot read
  * objects (or a transient read failure) leaves the hash unset; the admin
  * screen can repair it later. */
-export async function sha256OfStoredObject(objectKey: string): Promise<string | undefined> {
+export async function sha256OfStoredObject(
+  objectKey: string,
+  timeoutMilliseconds = HASH_TIMEOUT_MILLISECONDS,
+): Promise<string | undefined> {
   const configured = getR2Bucket();
   const get = configured.get;
   if (!get) return undefined;
@@ -555,20 +563,34 @@ export async function sha256OfStoredObject(objectKey: string): Promise<string | 
   if (!object?.body) return undefined;
   const hash = createHash("sha256");
   const reader = object.body.getReader();
-  try {
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      // Resolve the pending read and release the provider's stream.
+      void reader.cancel().catch(() => undefined).finally(() => resolve(undefined));
+    }, timeoutMilliseconds);
+  });
+  const read = (async () => {
     for (;;) {
       const next = await reader.read();
       if (next.done) break;
+      if (timedOut) return undefined;
       hash.update(next.value);
     }
+    return timedOut ? undefined : hash.digest("hex");
+  })();
+  try {
+    return await Promise.race([read, timeout]);
   } catch (error) {
     console.error("Failed to hash a stored object", objectKey, error);
     return undefined;
   } finally {
+    if (timer) clearTimeout(timer);
     await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
-  return hash.digest("hex");
 }
 
 export async function finishUpload({

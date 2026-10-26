@@ -502,6 +502,20 @@ describe("uploading a file too large for one request", () => {
     );
   });
 
+  it("gives up hashing a stalled object instead of failing the completion", async () => {
+    setR2BucketProvider(() => ({
+      get: async () => ({
+        body: new ReadableStream<Uint8Array>({
+          start() {
+            // Never enqueue or close: the hash probe must time out.
+          },
+        }),
+      }),
+    }) as never);
+
+    await expect(sha256OfStoredObject("stalled.nupkg", 10)).resolves.toBeUndefined();
+  });
+
   it("presigns parts when the bucket supports direct uploads", async () => {
     const presign = vi.fn(async (key: string, uploadId: string, partNumber: number) =>
       `https://bucket.test/${encodeURIComponent(key)}?uploadId=${uploadId}&partNumber=${partNumber}`);
