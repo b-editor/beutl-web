@@ -190,6 +190,17 @@ describe("S3 compatible bucket adapter", () => {
     expect(recorded[0].headers.get("content-type")).toBe("video/mp4");
   });
 
+  it("presigns a multipart part URL with a short expiry", async () => {
+    const url = await bucket().presignUploadPart!("clip.mp4", "upload id/with space", 3, 900);
+    const parsed = new URL(url);
+    expect(parsed.pathname).toBe("/beutl/clip.mp4");
+    expect(parsed.searchParams.get("partNumber")).toBe("3");
+    expect(parsed.searchParams.get("uploadId")).toBe("upload id/with space");
+    expect(parsed.searchParams.get("X-Amz-Expires")).toBe("900");
+    expect(parsed.searchParams.get("X-Amz-Algorithm")).toBe("AWS4-HMAC-SHA256");
+    expect(parsed.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/u);
+  });
+
   it("streams a part without buffering it and strips the ETag quotes", async () => {
     respond(new Response(null, { status: 200, headers: { etag: '"part-etag"' } }));
     const handle = bucket().resumeMultipartUpload!("k", "up&1");

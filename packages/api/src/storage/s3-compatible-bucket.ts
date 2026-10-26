@@ -334,6 +334,24 @@ export function createS3CompatibleBucket(
     }
   }
 
+  async function presignUploadPart(
+    key: string,
+    uploadId: string,
+    partNumber: number,
+    expiresSeconds = 900,
+  ): Promise<string> {
+    const url = objectUrl(
+      key,
+      `?partNumber=${partNumber}&uploadId=${encodeURIComponent(uploadId)}`,
+    );
+    url.searchParams.set("X-Amz-Expires", String(expiresSeconds));
+    const signed = await client.sign(url.toString(), {
+      method: "PUT",
+      aws: { signQuery: true },
+    });
+    return signed.url;
+  }
+
   async function head(key: string): Promise<{ size?: number } | null> {
     const response = await send({
       method: "HEAD",
@@ -526,6 +544,7 @@ export function createS3CompatibleBucket(
       }
       return { uploadId };
     },
+    presignUploadPart,
     resumeMultipartUpload,
   };
 }

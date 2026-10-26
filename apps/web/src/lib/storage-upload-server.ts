@@ -3,6 +3,7 @@ export {
   startUpload,
   uploadPart,
   finishUpload,
+  presignUploadPart,
   cancelUpload,
   partCountOf,
 } from "@beutl/api/storage/uploads";

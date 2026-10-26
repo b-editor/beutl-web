@@ -5,7 +5,7 @@ import { api } from "@beutl/api/app";
 import { setDbProvider } from "@beutl/db";
 import {
   apiRequestBodyLimit,
-  STORAGE_UPLOAD_PART_BYTES,
+  STORAGE_UPLOAD_PROXIED_PART_BYTES,
   STORAGE_UPLOAD_FINISH_BODY_BYTES,
 } from "@beutl/core";
 import { withBoundedBody } from "../../packages/api/src/runtime";
@@ -150,13 +150,13 @@ describe.each([false, true])(
           "/api/v3/storage/uploads/id/parts/1",
           "application/octet-stream",
         ),
-      ).toBe(STORAGE_UPLOAD_PART_BYTES);
+      ).toBe(STORAGE_UPLOAD_PROXIED_PART_BYTES);
       expect(
         apiRequestBodyLimit("POST", "/api/v3/storage/uploads/id/complete", "application/json"),
       ).toBe(STORAGE_UPLOAD_FINISH_BODY_BYTES);
       const request = new Request("https://example.test/api/v3/storage/uploads/id/parts/1", {
         method: "PUT",
-        headers: { "content-length": String(STORAGE_UPLOAD_PART_BYTES + 1) },
+        headers: { "content-length": String(STORAGE_UPLOAD_PROXIED_PART_BYTES + 1) },
         body: "x",
       });
       expect(withBoundedBody(request, () => {})).toBeNull();

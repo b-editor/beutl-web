@@ -36,6 +36,34 @@ configuration, and `OPENROUTER_API_KEY` / `VERCEL_AI_GATEWAY_API_KEY` secrets
 must address the same production resources as Web before the Web service
 binding is deployed. Other Web/API routes retain their existing behavior.
 
+## Direct storage multipart uploads
+
+When `BEUTL_STORAGE_PROVIDER=s3`, the Web release form sends storage parts
+straight to the bucket with presigned URLs. The Worker only signs the part and
+never holds its body, so a large file is not bounded by the Worker's memory
+limit.
+
+The bucket must allow `PUT` from the Web origin and expose `ETag`; without the
+exposed header the browser cannot finish the upload.
+
+```xml
+<CORSConfiguration>
+  <CORSRule>
+    <AllowedOrigin>https://beutl.beditor.net</AllowedOrigin>
+    <AllowedOrigin>http://localhost:3000</AllowedOrigin>
+    <AllowedMethod>PUT</AllowedMethod>
+    <AllowedMethod>GET</AllowedMethod>
+    <AllowedMethod>HEAD</AllowedMethod>
+    <AllowedHeader>*</AllowedHeader>
+    <ExposeHeader>ETag</ExposeHeader>
+    <MaxAgeSeconds>3600</MaxAgeSeconds>
+  </CORSRule>
+</CORSConfiguration>
+```
+
+R2 bindings and providers without presigning keep the Worker-proxied path and
+its 5 MiB parts.
+
 ## Secrets Store
 
 All four Wrangler configurations use store

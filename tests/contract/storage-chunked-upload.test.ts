@@ -6,6 +6,7 @@ import {
   STORAGE_FREE_FILE_COUNT_LIMIT,
   STORAGE_FREE_QUOTA_BYTES,
   STORAGE_UPLOAD_PART_BYTES,
+  STORAGE_UPLOAD_PROXIED_PART_BYTES,
 } from "@beutl/core";
 import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
@@ -81,6 +82,7 @@ import {
   cancelUpload,
   finishUpload,
   partCountOf,
+  presignUploadPart,
   startUpload,
 } from "../../apps/web/src/lib/storage-upload-server";
 import { uploadPart } from "../../apps/web/src/lib/storage-upload-server";
@@ -456,8 +458,39 @@ describe("uploading a file too large for one request", () => {
     });
   });
 
+  it("presigns parts when the bucket supports direct uploads", async () => {
+    const presign = vi.fn(async (key: string, uploadId: string, partNumber: number) =>
+      `https://bucket.test/${encodeURIComponent(key)}?uploadId=${uploadId}&partNumber=${partNumber}`);
+    setR2BucketProvider(() => ({ ...bucket, presignUploadPart: presign }) as never);
+    const started = await startUpload({
+      userId: USER_ID,
+      id: crypto.randomUUID(),
+      name: "direct.bin",
+      mimeType: "application/octet-stream",
+      size: BigInt(STORAGE_UPLOAD_PART_BYTES + 1),
+      directUpload: true,
+    });
+    if (!started.ok) throw new Error(started.reason);
+    expect(started.upload).toMatchObject({
+      partSize: STORAGE_UPLOAD_PART_BYTES,
+      partCount: 2,
+      directUpload: true,
+    });
+
+    const part = await presignUploadPart({
+      userId: USER_ID,
+      uploadId: started.upload.id,
+      partNumber: 2,
+    });
+    expect(part.ok).toBe(true);
+    if (!part.ok) return;
+    expect(part.url).toContain("partNumber=2");
+    expect(presign).toHaveBeenCalledWith(expect.any(String), expect.any(String), 2, 900);
+    await cancelUpload({ userId: USER_ID, uploadId: started.upload.id });
+  });
+
   it("takes a file in parts and stores it as one", async () => {
-    const size = STORAGE_UPLOAD_PART_BYTES + 1_000;
+    const size = STORAGE_UPLOAD_PROXIED_PART_BYTES + 1_000;
     const started = await startUpload({
       userId: USER_ID,
       id: crypto.randomUUID(),
@@ -472,8 +505,8 @@ describe("uploading a file too large for one request", () => {
       userId: USER_ID,
       uploadId: started.upload.id,
       partNumber: 1,
-      contentLength: STORAGE_UPLOAD_PART_BYTES,
-      body: streamOf(STORAGE_UPLOAD_PART_BYTES),
+      contentLength: STORAGE_UPLOAD_PROXIED_PART_BYTES,
+      body: streamOf(STORAGE_UPLOAD_PROXIED_PART_BYTES),
     });
     const second = await uploadPart({
       userId: USER_ID,
@@ -2179,8 +2212,9 @@ describe("uploading a file too large for one request", () => {
           ok: true,
           upload: {
             id,
-            partSize: STORAGE_UPLOAD_PART_BYTES,
+            partSize: STORAGE_UPLOAD_PROXIED_PART_BYTES,
             partCount: 1,
+            directUpload: false,
           },
         });
       expect(bucket.createMultipartUpload).toHaveBeenCalledTimes(remoteCalls);

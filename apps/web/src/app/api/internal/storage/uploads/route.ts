@@ -58,6 +58,7 @@ export async function POST(request: Request): Promise<Response> {
     name,
     mimeType: typeof mimeType === "string" ? mimeType : "application/octet-stream",
     size: BigInt(size),
+    directUpload: true,
   });
   if (!outcome.ok) {
     return Response.json(

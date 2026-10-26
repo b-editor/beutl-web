@@ -15,7 +15,7 @@ type UploadOutcome =
       pendingCompletion?: PendingStorageUploadCompletion;
     };
 
-type StartedUpload = { id: string; partSize: number; partCount: number };
+type StartedUpload = { id: string; partSize: number; partCount: number; directUpload: boolean };
 type UploadedPart = { partNumber: number; etag: string };
 /** The only durable state needed to ask a committed upload for its receipt. */
 export type PendingStorageUploadCompletion = Readonly<{
@@ -335,7 +335,9 @@ export async function uploadStorageFile(
           if (partNumber === undefined) return;
           const start = (partNumber - 1) * upload.partSize;
           const slice = file.slice(start, start + upload.partSize);
-          const etag = await sendPart(upload.id, partNumber, slice);
+          const etag = upload.directUpload
+            ? await sendDirectPart(upload.id, partNumber, slice)
+            : await sendPart(upload.id, partNumber, slice);
           parts.push({ partNumber, etag });
           sent += slice.size;
           onProgress?.(sent);
@@ -480,6 +482,46 @@ async function sendPart(
       if (response.status < 500) {
         throw new UploadPartError(await errorCodeOf(response));
       }
+      lastError = new UploadPartError("uploadFailed");
+    } catch (error) {
+      if (error instanceof UploadPartError) throw error;
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+  }
+  throw lastError ?? new UploadPartError("uploadFailed");
+}
+
+async function presignPart(uploadId: string, partNumber: number): Promise<string> {
+  const response = await fetch(
+    `/api/internal/storage/uploads/${uploadId}/parts/${partNumber}`,
+    { method: "POST", headers: { ...INTERNAL_REQUEST_HEADERS } },
+  );
+  if (!response.ok) throw new UploadPartError(await errorCodeOf(response));
+  const body = (await response.json()) as { url?: unknown };
+  if (typeof body.url !== "string" || body.url.length === 0) {
+    throw new UploadPartError("uploadFailed");
+  }
+  return body.url;
+}
+
+async function sendDirectPart(
+  uploadId: string,
+  partNumber: number,
+  body: Blob,
+): Promise<string> {
+  const url = await presignPart(uploadId, partNumber);
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= ATTEMPTS_PER_PART; attempt++) {
+    try {
+      const response = await fetch(url, { method: "PUT", body });
+      if (response.ok) {
+        const etag = response.headers.get("etag");
+        if (!etag) throw new UploadPartError("uploadFailed");
+        return etag;
+      }
+      // A 4xx from the bucket will not improve on retry.
+      if (response.status < 500) throw new UploadPartError("uploadFailed");
       lastError = new UploadPartError("uploadFailed");
     } catch (error) {
       if (error instanceof UploadPartError) throw error;

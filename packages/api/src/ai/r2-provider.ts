@@ -36,6 +36,12 @@ export type R2BucketLike = {
     key: string,
     options?: { httpMetadata?: { contentType?: string } },
   ): Promise<{ uploadId: string }>;
+  presignUploadPart?(
+    key: string,
+    uploadId: string,
+    partNumber: number,
+    expiresSeconds?: number,
+  ): Promise<string>;
   resumeMultipartUpload?(
     key: string,
     uploadId: string,
