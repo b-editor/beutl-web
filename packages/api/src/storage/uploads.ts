@@ -32,6 +32,7 @@ import {
   lockStorageAccount,
   sumGitReservedBytes,
   resolveStorageQuota,
+  DEDICATED_STORAGE_TRANSACTION,
 } from "@beutl/db";
 import { getR2Bucket } from "../ai/r2-provider";
 
@@ -818,7 +819,7 @@ async function finalizeUpload(
         throw new UploadWasAbandoned();
       }
       return { kind: "created" as const, id: created.id, name: created.name };
-    });
+    }, DEDICATED_STORAGE_TRANSACTION);
   } catch (error) {
     if (error instanceof UploadWasAbandoned) {
       // The cleanup claimant owns the object now. This finalizer has no cleanup

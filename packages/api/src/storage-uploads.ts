@@ -18,6 +18,7 @@ import {
   settleTerminalClaimedStorageUpload,
   resolveStorageQuota,
   startRetryableTransaction,
+  DEDICATED_STORAGE_TRANSACTION,
   STORAGE_MULTIPART_SETTLEMENT_GRACE_MILLISECONDS,
   sumFileSizeByUserId,
 } from "@beutl/db";
@@ -249,7 +250,7 @@ export async function reconcileUnknownStorageUploadCompletions(
           throw new Error(`Unknown storage completion ${current.id} changed before receipt`);
         }
         return "finalized" as const;
-      });
+      }, DEDICATED_STORAGE_TRANSACTION);
       if (outcome === "finalized") finalized++;
       if (outcome === "abandoned") abandoned++;
     } catch (error) {
