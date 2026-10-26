@@ -3,12 +3,10 @@
 // この定数は「契約が無いとき」の値。
 export const STORAGE_FREE_QUOTA_BYTES = 1024 * 1024 * 1024;
 
-// 1 パートの大きさ。Cloudflare Workers はリクエストボディを 100MB で打ち切るので、
-// それより十分小さく取る。R2 は最後以外のパートに 5MiB 以上・同じ大きさを求める
-// ため、この値が全パート共通の大きさになる (最後だけ端数)。
-//
-// 16MiB なら 1GiB でも 64 リクエストで済み、1 つ失敗してもやり直しは 16MiB で済む。
-export const STORAGE_UPLOAD_PART_BYTES = 16 * 1024 * 1024;
+// 1 パートの大きさ。Cloudflare Workers は 128MB のメモリ上限を持ち、
+// Next.js のリクエスト処理がパートを一時的に保持するため、R2 が最後以外の
+// パートに求める最小の 5MiB にする。1GiB でも 205 リクエストで済む。
+export const STORAGE_UPLOAD_PART_BYTES = 5 * 1024 * 1024;
 
 // R2 のマルチパートアップロードが受け付けるパート数の上限。
 export const STORAGE_MULTIPART_MAX_PARTS = 10_000;
