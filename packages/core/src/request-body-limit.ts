@@ -5,7 +5,7 @@ import {
 } from "./ai-capabilities";
 import {
   STORAGE_UPLOAD_FINISH_BODY_BYTES,
-  STORAGE_UPLOAD_PROXIED_PART_BYTES,
+  STORAGE_UPLOAD_MAX_PART_BYTES,
 } from "./storage-quota";
 
 /**
@@ -61,7 +61,7 @@ export function apiRequestBodyLimit(
   const path = pathname.length > 1 ? pathname.replace(/\/+$/u, "") : pathname;
   if (normalizedMethod === "POST" && path === "/api/v3/storage/uploads") return MAX_INTERNAL_STORAGE_START_BODY_BYTES;
   if (normalizedMethod === "POST" && /^\/api\/v3\/storage\/uploads\/[^/]+\/complete$/u.test(path)) return STORAGE_UPLOAD_FINISH_BODY_BYTES;
-  if (normalizedMethod === "PUT" && /^\/api\/v3\/storage\/uploads\/[^/]+\/parts\/\d+$/u.test(path)) return STORAGE_UPLOAD_PROXIED_PART_BYTES;
+  if (normalizedMethod === "PUT" && /^\/api\/v3\/storage\/uploads\/[^/]+\/parts\/\d+$/u.test(path)) return STORAGE_UPLOAD_MAX_PART_BYTES;
   if (normalizedMethod === "POST" && /^\/api\/v3\/git\/[0-9a-f-]+\.git\/git-receive-pack$/u.test(path)) {
     return MAX_GIT_PUSH_BYTES;
   }
@@ -85,7 +85,7 @@ export function apiRequestBodyLimit(
     normalizedMethod === "PUT" &&
     /^\/api\/internal\/storage\/uploads\/[^/]+\/parts\/\d+$/u.test(path)
   ) {
-    return STORAGE_UPLOAD_PROXIED_PART_BYTES;
+    return STORAGE_UPLOAD_MAX_PART_BYTES;
   }
 
   const multipartLimit = normalizedMethod === "POST" && isMultipart(contentType)
@@ -140,7 +140,7 @@ export function requestBodyLimit(
     normalizedMethod === "PUT" &&
     /^\/api\/internal\/storage\/uploads\/[^/]+\/parts\/\d+$/u.test(path)
   ) {
-    return STORAGE_UPLOAD_PROXIED_PART_BYTES;
+    return STORAGE_UPLOAD_MAX_PART_BYTES;
   }
   if (path.startsWith("/api/internal/ai/")) {
     return apiRequestBodyLimit(

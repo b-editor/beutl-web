@@ -1,18 +1,19 @@
 import { zipSync, strToU8 } from "fflate";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { setDbProvider } from "@beutl/db";
+import { DEDICATED_STORAGE_TRANSACTION, setDbProvider } from "@beutl/db";
 import { MATERIAL_TAG } from "@beutl/core";
 import { setR2BucketProvider } from "@beutl/api/ai/r2-provider";
 import { getTranslation } from "@beutl/i18n";
 import { createDedicatedStorageFile } from "@/lib/storage";
 import { blobReader, parseNuspec, readNugetPackage } from "../../packages/api/src/nuget/archive";
+import { createInMemoryPrisma } from "../stubs/in-memory-prisma";
 
 vi.mock("@/lib/auth-guard", () => ({ authenticated: async (fn: (session: unknown) => unknown) => fn({ user: { id: "owner", name: "Owner" } }) }));
 vi.mock("@beutl/next/language", () => ({ getLanguage: async () => "en" }));
 vi.mock("@beutl/next/audit-log", () => ({ addAuditLog: async () => {}, auditLogActions: { developer: {} } }));
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
 vi.mock("@/lib/storage", () => ({ createDedicatedStorageFile: vi.fn() }));
-import { updateRelease } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/projects/[name]/actions/release";
+import { discardReleaseUpload, updateRelease } from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/projects/[name]/actions/release";
 
 const RELEASE_ID = "c7bc502e-aee6-4fbf-87f9-0c413659b1fe";
 const manifest = '<package><metadata><id>Package</id><version>2.0.0</version><authors>Owner</authors><title>Latest SDK</title><description>Latest searchable description</description><tags>latest sdk</tags><projectUrl>https://sdk.example.test</projectUrl></metadata></package>';
@@ -25,13 +26,14 @@ describe("editing a release without replacing its artifact", () => {
   };
   let previousReleases: typeof row[];
   let update: ReturnType<typeof vi.fn>;
+  let transaction: ReturnType<typeof vi.fn>;
   let beforeTransaction: (() => void) | undefined;
   let models: {
     profile: { findFirst: () => Promise<{ userName: string }> };
     publishedPackageVersion: { upsert: () => Promise<{ releaseId: string }> };
     release: { findUniqueOrThrow: () => Promise<unknown>; findMany: () => Promise<typeof row[]>; findFirst: () => Promise<typeof row>; findFirstOrThrow: () => Promise<typeof row>; update: ReturnType<typeof vi.fn> };
     package: { findUniqueOrThrow: () => Promise<{ name: string }>; findFirst: () => Promise<{ id: string; name: string; userId: string; tags: string[] }>; update: ReturnType<typeof vi.fn> };
-    file: { updateMany: ReturnType<typeof vi.fn> };
+    file: { findFirst: ReturnType<typeof vi.fn>; updateMany: ReturnType<typeof vi.fn> };
   };
   beforeEach(() => {
     beforeTransaction = undefined;
@@ -55,14 +57,15 @@ describe("editing a release without replacing its artifact", () => {
         findFirst: async () => ({ id: "pkg", name: "Package", userId: "owner", tags: [] }),
         update: vi.fn(async () => ({ name: "Package" })),
       },
-      file: { updateMany: vi.fn(async () => ({ count: 1 })) },
+      file: { findFirst: vi.fn(), updateMany: vi.fn(async () => ({ count: 1 })) },
     };
+    transaction = vi.fn(async (fn: (tx: typeof models) => unknown) => {
+      beforeTransaction?.();
+      return fn(models);
+    });
     setDbProvider(async () => ({
       ...models,
-      $transaction: async (fn: (tx: typeof models) => unknown) => {
-        beforeTransaction?.();
-        return fn(models);
-      },
+      $transaction: transaction,
     }) as never);
   });
   function input(published: boolean) {
@@ -74,6 +77,37 @@ describe("editing a release without replacing its artifact", () => {
     form.set("published", published ? "on" : "off");
     return form;
   }
+  it("retries a multipart attachment's write conflict with the extended commit timeout", async () => {
+    row.file = null;
+    const bytes = zipSync({ "Package.nuspec": strToU8(manifest) });
+    models.file.findFirst.mockResolvedValue({ id: "uploaded", name: "package.nupkg", objectKey: "uploaded-key", size: BigInt(bytes.length) });
+    setR2BucketProvider(() => ({ get: async (_key, options) => ({
+      arrayBuffer: async () => bytes.slice(options.range.offset, options.range.offset + options.range.length).buffer,
+    }) }) as never);
+    transaction.mockRejectedValueOnce(Object.assign(new Error("write conflict"), { code: "P2034" }));
+    const form = input(true); form.set("uploadedFileId", "uploaded");
+    expect(await updateRelease(form)).toMatchObject({ success: true });
+    expect(transaction).toHaveBeenCalledTimes(2);
+    for (const call of transaction.mock.calls) expect(call[1]).toEqual(DEDICATED_STORAGE_TRANSACTION);
+    expect(row).toMatchObject({ published: true, artifactLocked: true, fileId: "uploaded", nugetMetadata: parseNuspec(manifest) });
+    expect(createDedicatedStorageFile).not.toHaveBeenCalled();
+  });
+
+  it.each(["unused", "attached", "other-owner", "missing"])("discards only an unused owned upload (%s)", async (state) => {
+    const memory = createInMemoryPrisma();
+    if (state !== "missing") memory.state.files.set("uploaded", { id: "uploaded", objectKey: "uploaded-key",
+      userId: state === "other-owner" ? "another" : "owner", name: "package.nupkg", size: 7,
+      mimeType: "application/octet-stream", visibility: state === "attached" ? "DEDICATED" : "PRIVATE" } as never);
+    const find = memory.prisma.file.findFirst;
+    memory.prisma.file.findFirst = async (args) => {
+      const file = await find(args);
+      return file && state === "attached" ? { ...file, Release: [{ id: RELEASE_ID }] } as never : file;
+    };
+    setDbProvider(async () => memory.prisma as never);
+    await discardReleaseUpload("uploaded");
+    expect(memory.state.files.has("uploaded")).toBe(state === "attached" || state === "other-owner");
+    expect(memory.state.aiStorageCleanups.get("uploaded-key")?.state).toBe(state === "unused" ? "cleanup" : undefined);
+  });
   it.each([true, false])("saves metadata and publication=%s while retaining the current file", async (published) => {
     const result = await updateRelease(input(published));
     expect(result.success).toBe(true);

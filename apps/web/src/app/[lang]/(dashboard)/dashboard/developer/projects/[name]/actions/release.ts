@@ -10,6 +10,8 @@ import {
   getPackageNameFromPackageId,
   retrieveDevPackageByName,
   startTransaction,
+  startRetryableTransaction,
+  DEDICATED_STORAGE_TRANSACTION,
   deleteUnreferencedFileWithStorageCleanup,
   updateDevPackageTags,
 } from "@beutl/db";
@@ -210,7 +212,10 @@ export async function updateRelease(
 
         let data: ReleaseRecord;
         if (uploadedFileId) {
-          data = await startTransaction((tx) => publishRelease(tx, uploadedFileId));
+          data = await startRetryableTransaction(
+            (tx) => publishRelease(tx, uploadedFileId),
+            DEDICATED_STORAGE_TRANSACTION,
+          );
         } else if (artifact) {
           let published: ReleaseRecord | undefined;
           const result = await createDedicatedFile(
@@ -266,6 +271,18 @@ export async function updateRelease(
         throw error;
       }
     });
+  });
+}
+
+export async function discardReleaseUpload(fileId: string): Promise<void> {
+  await authenticated(async (session) => {
+    await startRetryableTransaction(async (tx) => {
+      const file = await findStorageFileByIdAndUserId({ id: fileId, userId: session.user.id, prisma: tx });
+      if (file) {
+        // A lost save response may already have attached this file to a release.
+        await deleteUnreferencedFileWithStorageCleanup({ fileId, userId: session.user.id, prisma: tx });
+      }
+    }, DEDICATED_STORAGE_TRANSACTION);
   });
 }
 

@@ -120,7 +120,10 @@ export function partCountOf(size: bigint, partSize = STORAGE_UPLOAD_PART_BYTES):
   return Number(parts);
 }
 
-async function storageUploadIntentDigest(intent: StorageUploadIntent): Promise<string> {
+async function storageUploadIntentDigest(
+  intent: StorageUploadIntent,
+  partSize = intent.partSize,
+): Promise<string> {
   const serialized = JSON.stringify({
     version: 1,
     userId: intent.userId,
@@ -128,7 +131,7 @@ async function storageUploadIntentDigest(intent: StorageUploadIntent): Promise<s
     name: intent.name,
     mimeType: intent.mimeType,
     size: intent.size.toString(),
-    partSize: intent.partSize,
+    partSize,
     reservationKind: "multipart",
     visibility: "PRIVATE",
   });
@@ -141,18 +144,16 @@ async function storageUploadIntentDigest(intent: StorageUploadIntent): Promise<s
   ).join("");
 }
 
-function storageUploadIntentMatches(
+async function storageUploadIntentMatches(
   upload: NonNullable<Awaited<ReturnType<typeof findStorageUploadByIdAndUserId>>>,
   intent: StorageUploadIntent,
-  intentDigest: string,
-): boolean {
+): Promise<boolean> {
   if (
     upload.userId !== intent.userId ||
     upload.id !== intent.id ||
     upload.reservationKind !== "multipart" ||
     upload.mimeType !== intent.mimeType ||
-    BigInt(upload.size) !== intent.size ||
-    upload.partSize !== intent.partSize
+    BigInt(upload.size) !== intent.size
   ) {
     return false;
   }
@@ -162,6 +163,7 @@ function storageUploadIntentMatches(
     ? upload.objectKey.slice(prefix.length).split("/", 1)[0]
     : "";
   if (generation.startsWith(INTENT_DIGEST_PREFIX)) {
+    const intentDigest = await storageUploadIntentDigest(intent, upload.partSize);
     return generation === `${INTENT_DIGEST_PREFIX}${intentDigest}`;
   }
 
@@ -226,7 +228,7 @@ export async function startUpload({
     if (existing.completedFileId || existing.abandonedAt) {
       return { ok: false, reason: "uploadFailed" };
     }
-    if (!storageUploadIntentMatches(existing, intent, intentDigest)) {
+    if (!await storageUploadIntentMatches(existing, intent)) {
       return { ok: false, reason: "uploadFailed", conflict: true };
     }
     if (existing.uploadId) {
@@ -268,7 +270,7 @@ export async function startUpload({
       const raced = await findStorageUploadByIdAndUserId({ id, userId, prisma });
       // 取り消しの墓標。この名前は始まる前に取り消されているので、始めない。
       if (raced?.abandonedAt) return "cancelled";
-      if (raced && !storageUploadIntentMatches(raced, intent, intentDigest)) {
+      if (raced && !await storageUploadIntentMatches(raced, intent)) {
         return "conflict";
       }
       if (raced) return raced;
@@ -312,7 +314,7 @@ export async function startUpload({
     if (isUniqueConstraintError(error)) {
       const raced = await findStorageUploadByIdAndUserId({ id, userId });
       if (raced) {
-        upload = storageUploadIntentMatches(raced, intent, intentDigest)
+        upload = await storageUploadIntentMatches(raced, intent)
           ? raced
           : "conflict";
       } else {
@@ -365,7 +367,7 @@ export async function startUpload({
   });
   if (!claimed) {
     const current = await findStorageUploadByIdAndUserId({ id, userId });
-    if (current && !storageUploadIntentMatches(current, intent, intentDigest)) {
+    if (current && !await storageUploadIntentMatches(current, intent)) {
       return { ok: false, reason: "uploadFailed", conflict: true };
     }
     if (current?.uploadId) {

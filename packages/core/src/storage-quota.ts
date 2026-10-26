@@ -11,6 +11,11 @@ export const STORAGE_UPLOAD_PART_BYTES = 16 * 1024 * 1024;
 // パート本文を受け取るため、Next.js のメモリ上限に収まる 5MiB にする。
 export const STORAGE_UPLOAD_PROXIED_PART_BYTES = 5 * 1024 * 1024;
 
+// The largest part the request-body guard accepts. The upload's stored
+// partSize still determines each part's actual allowance; this keeps legacy
+// 16 MiB uploads working through the proxied route.
+export const STORAGE_UPLOAD_MAX_PART_BYTES = 16 * 1024 * 1024;
+
 // R2 のマルチパートアップロードが受け付けるパート数の上限。
 export const STORAGE_MULTIPART_MAX_PARTS = 10_000;
 
