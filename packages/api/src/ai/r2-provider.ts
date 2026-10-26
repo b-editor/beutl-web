@@ -41,6 +41,7 @@ export type R2BucketLike = {
     uploadId: string,
     partNumber: number,
     expiresSeconds?: number,
+    contentLength?: number,
   ): Promise<string>;
   resumeMultipartUpload?(
     key: string,

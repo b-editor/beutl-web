@@ -60,8 +60,8 @@ export function createLayeredBucket({
 
   if (primary.presignUploadPart) {
     const presign = primary.presignUploadPart.bind(primary);
-    bucket.presignUploadPart = (key, uploadId, partNumber, expiresSeconds) =>
-      presign(key, uploadId, partNumber, expiresSeconds);
+    bucket.presignUploadPart = (key, uploadId, partNumber, expiresSeconds, contentLength) =>
+      presign(key, uploadId, partNumber, expiresSeconds, contentLength);
   }
 
   if (primary.resumeMultipartUpload) {

@@ -30,7 +30,7 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error_code: "invalidRequestBody" }, { status: 400 });
   }
 
-  const { id, name, mimeType, size } = (parsed.value ?? {}) as Record<
+  const { id, name, mimeType, size, directUpload } = (parsed.value ?? {}) as Record<
     string,
     unknown
   >;
@@ -58,7 +58,7 @@ export async function POST(request: Request): Promise<Response> {
     name,
     mimeType: typeof mimeType === "string" ? mimeType : "application/octet-stream",
     size: BigInt(size),
-    directUpload: true,
+    directUpload: directUpload === true,
   });
   if (!outcome.ok) {
     return Response.json(

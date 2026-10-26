@@ -485,7 +485,7 @@ describe("uploading a file too large for one request", () => {
     expect(part.ok).toBe(true);
     if (!part.ok) return;
     expect(part.url).toContain("partNumber=2");
-    expect(presign).toHaveBeenCalledWith(expect.any(String), expect.any(String), 2, 900);
+    expect(presign).toHaveBeenCalledWith(expect.any(String), expect.any(String), 2, 900, 1);
     await cancelUpload({ userId: USER_ID, uploadId: started.upload.id });
   });
 

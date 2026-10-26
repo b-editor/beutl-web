@@ -339,6 +339,7 @@ export function createS3CompatibleBucket(
     uploadId: string,
     partNumber: number,
     expiresSeconds = 900,
+    contentLength?: number,
   ): Promise<string> {
     const url = objectUrl(
       key,
@@ -347,7 +348,12 @@ export function createS3CompatibleBucket(
     url.searchParams.set("X-Amz-Expires", String(expiresSeconds));
     const signed = await client.sign(url.toString(), {
       method: "PUT",
-      aws: { signQuery: true },
+      headers: contentLength === undefined
+        ? undefined
+        : { "content-length": String(contentLength) },
+      // Sign the length when one is known, so the URL cannot upload a larger
+      // part than the reservation allowed.
+      aws: { signQuery: true, allHeaders: contentLength !== undefined },
     });
     return signed.url;
   }

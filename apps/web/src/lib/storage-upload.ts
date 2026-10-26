@@ -269,6 +269,9 @@ export async function uploadStorageFile(
     name: file.name,
     mimeType: file.type || "application/octet-stream",
     size: file.size,
+    // Old tabs do not send this and keep the proxied part size they were
+    // started with; only a client that understands directUpload opts in.
+    directUpload: true,
   });
   // A start succeeds only after a non-5xx response and valid JSON are read.
   // Retry either an error response or an unreadable response under the same id.
@@ -493,16 +496,30 @@ async function sendPart(
 }
 
 async function presignPart(uploadId: string, partNumber: number): Promise<string> {
-  const response = await fetch(
-    `/api/internal/storage/uploads/${uploadId}/parts/${partNumber}`,
-    { method: "POST", headers: { ...INTERNAL_REQUEST_HEADERS } },
-  );
-  if (!response.ok) throw new UploadPartError(await errorCodeOf(response));
-  const body = (await response.json()) as { url?: unknown };
-  if (typeof body.url !== "string" || body.url.length === 0) {
-    throw new UploadPartError("uploadFailed");
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= ATTEMPTS_PER_PART; attempt++) {
+    try {
+      const response = await fetch(
+        `/api/internal/storage/uploads/${uploadId}/parts/${partNumber}`,
+        { method: "POST", headers: { ...INTERNAL_REQUEST_HEADERS } },
+      );
+      if (response.ok) {
+        try {
+          const body = (await response.json()) as { url?: unknown };
+          if (typeof body.url === "string" && body.url.length > 0) return body.url;
+        } catch {
+          // A truncated body is retried like a lost response.
+        }
+      } else if (response.status < 500) {
+        throw new UploadPartError(await errorCodeOf(response));
+      }
+    } catch (error) {
+      if (error instanceof UploadPartError) throw error;
+    }
+    lastError = new UploadPartError("uploadFailed");
+    await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
   }
-  return body.url;
+  throw lastError ?? new UploadPartError("uploadFailed");
 }
 
 async function sendDirectPart(

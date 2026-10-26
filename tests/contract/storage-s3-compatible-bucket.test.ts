@@ -199,6 +199,11 @@ describe("S3 compatible bucket adapter", () => {
     expect(parsed.searchParams.get("X-Amz-Expires")).toBe("900");
     expect(parsed.searchParams.get("X-Amz-Algorithm")).toBe("AWS4-HMAC-SHA256");
     expect(parsed.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/u);
+
+    const sized = new URL(
+      await bucket().presignUploadPart!("clip.mp4", "upload", 3, 900, 1234),
+    );
+    expect(sized.searchParams.get("X-Amz-SignedHeaders")).toBe("content-length;host");
   });
 
   it("streams a part without buffering it and strips the ETag quotes", async () => {

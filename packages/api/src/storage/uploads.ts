@@ -457,11 +457,24 @@ export async function presignUploadPart({
   ) {
     return { ok: false, reason: "uploadFailed" };
   }
+  // Direct parts bypass uploadPart, so keep the same idle-upload activity
+  // touch; otherwise a long upload could be abandoned by the stale sweep.
+  if (!await touchStorageUploadActivity({ id: uploadId, userId })) {
+    return { ok: false, reason: "uploadNotFound" };
+  }
   const presign = bucket().presignUploadPart;
   if (!presign) return { ok: false, reason: "uploadFailed" };
+  const length = allowedPartSize(upload.size, upload.partSize, partNumber);
+  if (length <= BigInt(0)) return { ok: false, reason: "uploadFailed" };
   return {
     ok: true,
-    url: await presign(upload.objectKey, upload.uploadId, partNumber, 900),
+    url: await presign(
+      upload.objectKey,
+      upload.uploadId,
+      partNumber,
+      900,
+      Number(length),
+    ),
   };
 }
 
