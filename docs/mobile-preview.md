@@ -12,6 +12,10 @@ seconds during playback; tapping the video or using the keyboard shows them agai
 The six-digit pairing code grants playback control of the shared editor tab.
 Disconnecting a device revokes its access. No project editing is exposed.
 
+<img src="images/mobile-preview/pairing.png" alt="Phone pairing screen" width="240">
+
+![Playback controls in landscape, rendered with a test scene](images/mobile-preview/playback.png)
+
 Playback commands use the authenticated signaling socket (`type: "control"`,
 `requestId`, `action`, and `position` in seconds for `seek`). The desktop serializes
 commands and replies with `control-result` and the matching request ID. It publishes
