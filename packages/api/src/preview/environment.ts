@@ -1,5 +1,7 @@
+import type { PreviewTurnEnvironment } from './turn';
+
 interface PreviewObjectId { toString(): string }
-export interface PreviewEnvironment {
+export interface PreviewEnvironment extends PreviewTurnEnvironment {
   PUBLIC_ORIGIN?: string;
   BEUTL_PREVIEW_SESSIONS?: {
     idFromName(name: string): PreviewObjectId;
@@ -11,13 +13,13 @@ export interface PreviewEnvironment {
 
 // One active session per account. The second, random component changes on every start.
 export const PREVIEW_PATH = /^\/preview\/([a-f0-9]{64})\/([a-f0-9-]{36})(\/.*)?$/u;
-export const PREVIEW_ASSETS = new Set(['index.html', 'viewer.js', 'viewer.css', 'media-player.js']);
+export const PREVIEW_ASSETS = new Set(['index.html', 'viewer.js', 'viewer.css', 'preview-connection.js', 'theme.css', 'logo.svg']);
 export function previewHeaders(origin: string): HeadersInit {
   return {
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
-    'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src blob:; " +
+    'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self' blob:; " +
       `connect-src 'self' ${origin.replace(/^http/u, 'ws')}; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`,
   };
 }

@@ -52,13 +52,6 @@ async function viewer(session: Awaited<ReturnType<typeof create>>, cookie: strin
   const received = messages(socket); await once(socket, 'open');
   return { socket, received };
 }
-function packet(kind: number, marker: number) {
-  const value = new ArrayBuffer(25), view = new DataView(value);
-  view.setUint8(0, kind); view.setFloat64(16, 1, true); view.setUint8(24, marker);
-  return value;
-}
-const mark = (items: (string | ArrayBuffer)[]) => items.filter((x): x is ArrayBuffer => typeof x !== 'string').map(x => new Uint8Array(x)[24]);
-
 describe('mobile preview on workerd', () => {
   it('requires credentials, code and same origin; revokes devices and expires when the host closes', async () => {
     const session = await create();
@@ -77,32 +70,24 @@ describe('mobile preview on workerd', () => {
     host.socket.close();
     await expect.poll(async () => (await mf.dispatchFetch(`${session.viewerUrl}api/session`)).status).toBe(410);
   });
-  it('keeps the newest video per viewer, bounds audio separately and pauses without an ACK', async () => {
+  it('routes offers and ICE by paired socket identity and rejects media relay', async () => {
     const session = await create(), host = await publisher(session);
-    const slow = await viewer(session, await pair(session)), fast = await viewer(session, await pair(session));
-    host.socket.send(packet(1, 10));
-    await expect.poll(() => mark(slow.received)).toEqual([10]);
-    await expect.poll(() => mark(fast.received)).toEqual([10]);
-    fast.socket.send('ready'); host.socket.send(packet(1, 20));
-    await expect.poll(() => mark(fast.received)).toEqual([10, 20]);
-    host.socket.send(packet(1, 30));
-    await expect.poll(() => host.received.filter(x => x === 'ready').length).toBe(3);
-    expect(mark(slow.received)).toEqual([10]);
-    slow.socket.send('ready');
-    await expect.poll(() => mark(slow.received)).toEqual([10, 30]);
-    host.socket.send(packet(2, 40));
-    await expect.poll(() => host.received.includes('audio-ready')).toBe(true);
-    expect(mark(slow.received)).toEqual([10, 30]);
-    slow.socket.send('audio-on');
-    await expect.poll(() => mark(slow.received)).toEqual([10, 30, 40]);
-    host.socket.send(packet(2, 50)); host.socket.send(packet(2, 60)); host.socket.send(packet(2, 70));
-    await expect.poll(() => host.received.filter(x => x === 'audio-ready').length).toBe(4);
-    slow.socket.send('audio-ready');
-    await expect.poll(() => mark(slow.received)).toEqual([10, 30, 40, 60]);
-    host.socket.send('{"playing":false,"playbackId":1}');
-    await expect.poll(() => slow.received.includes('{"playing":false,"playbackId":1}')).toBe(true);
-    expect(mark(fast.received)).toEqual([10, 20]);
-    host.socket.close(); slow.socket.close(); fast.socket.close();
+    const first = await viewer(session, await pair(session)), second = await viewer(session, await pair(session));
+    first.socket.send(JSON.stringify({ type: 'offer', id: 'forged', sdp: 'first-offer', hdr: true }));
+    second.socket.send(JSON.stringify({ type: 'offer', sdp: 'second-offer', hdr: false }));
+    const signals = () => host.received.filter((x): x is string => typeof x === 'string').map(x => JSON.parse(x)).filter(x => x.type === 'signal');
+    await expect.poll(() => signals().length).toBe(2);
+    const one = signals().find(s => s.signal.sdp === 'first-offer');
+    const two = signals().find(s => s.signal.sdp === 'second-offer');
+    expect(one.id).not.toBe('forged'); expect(one.id).not.toBe(two.id);
+    host.socket.send(JSON.stringify({ type: 'signal', id: one.id, signal: { type: 'answer', sdp: 'only-first' } }));
+    await expect.poll(() => first.received.some(x => typeof x === 'string' && JSON.parse(x).sdp === 'only-first')).toBe(true);
+    expect(second.received.some(x => typeof x === 'string' && JSON.parse(x).sdp === 'only-first')).toBe(false);
+    first.socket.send(JSON.stringify({ type: 'candidate', candidate: { candidate: 'ice' } }));
+    await expect.poll(() => signals().length).toBe(3);
+    expect(signals()[2].id).toBe(one.id);
+    host.socket.send(new Uint8Array([1, 2, 3]));
+    await expect.poll(() => host.socket.readyState).toBeGreaterThanOrEqual(WebSocket.CLOSING);
   });
   it('restarts immediately without an old socket close deleting the new session', async () => {
     const first = await create(), oldHost = await publisher(first), second = await create();

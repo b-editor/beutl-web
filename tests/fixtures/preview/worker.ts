@@ -7,7 +7,7 @@ export default {
       const namespace = env.BEUTL_PREVIEW_SESSIONS!;
       const id = namespace.idFromName('test-account');
       return namespace.get(id).fetch(new Request('https://preview.internal/init', {
-        method: 'POST', body: JSON.stringify({ objectId: id.toString(), origin: new URL(request.url).origin }),
+        method: 'POST', body: JSON.stringify({ iceServers: [], objectId: id.toString(), origin: new URL(request.url).origin }),
       }));
     }
     return await handlePreviewRequest(request, env) || new Response(null, { status: 404 });

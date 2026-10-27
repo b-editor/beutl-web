@@ -13,6 +13,8 @@ declare namespace Cloudflare {
 		BEUTL_DATABASE_HYPERDRIVE: Hyperdrive;
 		BEUTL_GIT_REPOSITORIES: DurableObjectNamespace;
 		BEUTL_PREVIEW_SESSIONS: DurableObjectNamespace;
+		PREVIEW_TURN_KEY_ID?: string;
+		PREVIEW_TURN_API_TOKEN?: string;
 		BEUTL_GIT_ENABLED?: string;
 		BEUTL_S3_ENDPOINT?: string;
 		BEUTL_S3_REGION?: string;

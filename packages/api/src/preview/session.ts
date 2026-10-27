@@ -1,4 +1,5 @@
 import { PREVIEW_PATH, previewHeaders } from './environment';
+import { createPreviewIceServers, type PreviewIceServer, type PreviewTurnEnvironment } from './turn';
 
 interface Socket extends WebSocket {
   serializeAttachment(value: Attachment): void;
@@ -17,27 +18,24 @@ interface State {
 }
 declare const WebSocketPair: { new(): { 0: Socket; 1: Socket } };
 type Attachment = { role: 'publisher'; session: string } | {
-  role: 'viewer'; session: string; id: string; address: string; ready: boolean; audioReady: boolean; audio: boolean;
+  role: 'viewer'; session: string; id: string; address: string;
 };
 type Session = {
   id: string; origin: string; path: string; publisherToken: string; code: string; codeExpires: number;
   expires: number; attemptWindow: number; attempts: number;
-  paired: { token: string; id: string; address: string }[];
+  paired: { token: string; id: string; address: string }[]; iceServers: PreviewIceServer[];
 };
 const token = () => Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join('');
 const code = () => String(crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000).padStart(6, '0');
 const json = (value: unknown) => JSON.stringify(value);
 const cookieName = 'beutl-preview';
 
-// Only pairing metadata is persisted. Media stays in bounded in-memory queues, never R2 or the database.
+// Pairing and short-lived ICE credentials survive hibernation. This object only relays signaling;
+// audio/video travel over WebRTC (directly or through TURN), never through the Worker.
 export class PreviewSessionDurableObject {
   private session?: Session;
   private creationLimit = { window: 0, count: 0 };
-  private pendingVideo = new Map<string, ArrayBuffer>();
-  private pendingAudio = new Map<string, ArrayBuffer[]>();
-  private recentAudio: ArrayBuffer[] = [];
-  private lastVideo?: ArrayBuffer;
-  constructor(private readonly state: State) {
+  constructor(private readonly state: State, private readonly env: PreviewTurnEnvironment) {
     state.blockConcurrencyWhile(async () => {
       this.session = await state.storage.get<Session>('session');
       this.creationLimit = await state.storage.get<typeof this.creationLimit>('creationLimit') || { window: 0, count: 0 };
@@ -58,15 +56,12 @@ export class PreviewSessionDurableObject {
     if (!host) return;
     const viewers = this.viewers().map(s => s.deserializeAttachment()).filter((a): a is Extract<Attachment, { role: 'viewer' }> => a.role === 'viewer');
     this.send(host, json({ clients: viewers.map(v => ({ id: v.id, address: v.address })) }));
-    this.send(host, viewers.some(v => v.audio) ? 'audio-on' : 'audio-off');
   }
   private closeViewers(id?: string) {
     for (const socket of this.viewers()) {
       const a = socket.deserializeAttachment();
       if (a.role === 'viewer' && (!id || a.id === id)) this.end(socket, 'Sharing ended');
     }
-    if (id) { this.pendingVideo.delete(id); this.pendingAudio.delete(id); }
-    else { this.pendingVideo.clear(); this.pendingAudio.clear(); }
   }
   async fetch(request: Request): Promise<Response> {
     const input = request.method === 'POST' && new URL(request.url).pathname.endsWith('/api/pair')
@@ -80,14 +75,16 @@ export class PreviewSessionDurableObject {
         if (this.creationLimit.count >= 10) return new Response(null, { status: 429, headers: { 'Retry-After': '60' } });
         this.creationLimit.count++;
         await this.state.storage.put('creationLimit', this.creationLimit);
-        const { objectId, origin } = await request.json() as { objectId: string; origin: string };
+        const { objectId, origin, iceServers: suppliedIceServers } = await request.json() as { objectId: string; origin: string; iceServers?: PreviewIceServer[] };
+        let iceServers: PreviewIceServer[];
+        try { iceServers = suppliedIceServers ?? await createPreviewIceServers(this.env); }
+        catch { return new Response('Preview TURN service is unavailable', { status: 503 }); }
         for (const socket of this.state.getWebSockets()) this.end(socket, 'New sharing session');
-        this.pendingAudio.clear(); this.pendingVideo.clear(); this.recentAudio = []; this.lastVideo = undefined;
         const id = crypto.randomUUID();
         this.session = {
           id, origin, path: `/preview/${objectId}/${id}/`, publisherToken: token(), code: code(),
           codeExpires: now + 10 * 60_000, expires: now + 4 * 60 * 60_000,
-          attemptWindow: now, attempts: 0, paired: [],
+          attemptWindow: now, attempts: 0, paired: [], iceServers,
         };
         await this.save();
         // An unclaimed session is removed quickly if the desktop closes during creation.
@@ -96,7 +93,7 @@ export class PreviewSessionDurableObject {
           viewerUrl: `${origin}${this.session.path}`,
           publisherUrl: `${origin.replace(/^http/u, 'ws')}${this.session.path}publisher`,
           publisherToken: this.session.publisherToken, pairingCode: this.session.code,
-          codeExpires: new Date(this.session.codeExpires).toISOString(),
+          codeExpires: new Date(this.session.codeExpires).toISOString(), iceServers,
         }, { headers: { 'Cache-Control': 'no-store' } });
       }
       const s = this.session;
@@ -145,49 +142,24 @@ export class PreviewSessionDurableObject {
       if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return result(426);
       this.closeViewers(paired.id);
       const pair = new WebSocketPair();
-      pair[1].serializeAttachment({ role: 'viewer', session: s.id, id: paired.id, address: paired.address, ready: true, audioReady: true, audio: false });
+      pair[1].serializeAttachment({ role: 'viewer', session: s.id, id: paired.id, address: paired.address });
       this.state.acceptWebSocket(pair[1], ['viewer']);
-      if (this.lastVideo) this.deliver(pair[1], this.lastVideo);
+      this.send(pair[1], json({ type: 'config', iceServers: s.iceServers }));
       this.roster();
       return new Response(null, { status: 101, webSocket: pair[0] } as ResponseInit);
     });
-  }
-  private deliver(socket: Socket, packet: ArrayBuffer) {
-    const a = socket.deserializeAttachment();
-    if (a.role !== 'viewer') return;
-    const audio = new Uint8Array(packet)[0] === 2;
-    if (audio && !a.audio) return;
-    if (audio ? a.audioReady : a.ready) {
-      if (audio) a.audioReady = false; else a.ready = false;
-      socket.serializeAttachment(a);
-      this.send(socket, packet);
-    } else if (audio) {
-      this.pendingAudio.set(a.id, [...(this.pendingAudio.get(a.id) || []), packet].slice(-2));
-    } else this.pendingVideo.set(a.id, packet);
   }
   async webSocketMessage(socket: Socket, message: string | ArrayBuffer): Promise<void> {
     const a = socket.deserializeAttachment();
     if (a.session !== this.session?.id) return;
     if (!this.session || Date.now() >= this.session.expires) { await this.alarm(); return; }
+    if (typeof message !== 'string' || message.length > 64 * 1024) {
+      socket.close(1009, 'Signaling message required'); return;
+    }
+    let control: { type?: string; id?: string; code?: string; expires?: number; signal?: unknown };
+    try { control = JSON.parse(message); } catch { socket.close(1003, 'Invalid signaling'); return; }
     if (a.role === 'publisher') {
       if (socket !== this.publisher()) return;
-      if (typeof message !== 'string') {
-        if (message.byteLength < 24 || message.byteLength > 4 * 1024 * 1024) { socket.close(1009, 'Invalid media packet'); return; }
-        const kind = new Uint8Array(message)[0];
-        if (kind !== 1 && kind !== 2) { socket.close(1003, 'Invalid media type'); return; }
-        if (kind === 1) this.lastVideo = message;
-        else {
-          const id = new DataView(message).getFloat64(16, true);
-          this.recentAudio = this.recentAudio.filter(p => new DataView(p).getFloat64(16, true) === id);
-          this.recentAudio.push(message); this.recentAudio = this.recentAudio.slice(-2);
-        }
-        for (const viewer of this.viewers()) this.deliver(viewer, message);
-        this.send(socket, kind === 1 ? 'ready' : 'audio-ready');
-        return;
-      }
-      if (message.length > 4096) { socket.close(1009, 'Invalid control'); return; }
-      let control: { type?: string; id?: string; code?: string; expires?: number; playing?: boolean };
-      try { control = JSON.parse(message); } catch { socket.close(1003, 'Invalid control'); return; }
       if (control.type === 'pairing' && /^\d{6}$/u.test(control.code || '') && Number.isFinite(control.expires)) {
         this.session.code = control.code!;
         this.session.codeExpires = Math.min(control.expires!, Date.now() + 10 * 60_000);
@@ -198,29 +170,19 @@ export class PreviewSessionDurableObject {
         const id = control.type === 'disconnectAll' ? undefined : control.id;
         this.session.paired = this.session.paired.filter(p => id !== undefined && p.id !== id);
         await this.save(); this.closeViewers(id); this.roster();
-      } else if (control.playing === false) {
-        this.recentAudio = []; this.pendingAudio.clear(); this.pendingVideo.clear(); this.lastVideo = undefined;
-        for (const viewer of this.viewers()) this.send(viewer, message);
+      } else if (control.type === 'signal' && control.signal && typeof control.id === 'string') {
+        const target = this.viewers().find(s => {
+          const viewer = s.deserializeAttachment();
+          return viewer.role === 'viewer' && viewer.id === control.id;
+        });
+        if (target) this.send(target, json(control.signal));
       }
       return;
     }
-    if (typeof message !== 'string' || !['ready', 'audio-ready', 'audio-on', 'audio-off'].includes(message)) {
-      socket.close(1003, 'Read-only preview'); return;
-    }
-    if (message === 'audio-on' || message === 'audio-off') {
-      a.audio = message === 'audio-on';
-      this.pendingAudio.delete(a.id);
-      socket.serializeAttachment(a);
-      if (a.audio) for (const packet of this.recentAudio) this.deliver(socket, packet);
-      this.roster();
-    } else {
-      const audio = message === 'audio-ready';
-      if (audio) a.audioReady = true; else a.ready = true;
-      socket.serializeAttachment(a);
-      const packet = audio ? this.pendingAudio.get(a.id)?.shift() : this.pendingVideo.get(a.id);
-      if (!audio) this.pendingVideo.delete(a.id);
-      if (packet) this.deliver(socket, packet);
-    }
+    // Identity comes from the paired socket, never from a message supplied by a browser.
+    if (control.type !== 'offer' && control.type !== 'candidate') { socket.close(1003, 'Read-only preview'); return; }
+    const host = this.publisher();
+    if (host) this.send(host, json({ type: 'signal', id: a.id, signal: control }));
   }
   async webSocketClose(socket: Socket): Promise<void> {
     // The deployed compatibility date predates automatic close replies.
@@ -231,10 +193,8 @@ export class PreviewSessionDurableObject {
       // The host owns the lifetime. A closed tab or disconnected host ends access immediately.
       this.closeViewers();
       this.session = undefined;
-      this.lastVideo = undefined; this.recentAudio = [];
       await this.state.storage.delete('session');
     } else {
-      this.pendingVideo.delete(a.id); this.pendingAudio.delete(a.id);
       this.roster();
     }
   }
@@ -242,7 +202,6 @@ export class PreviewSessionDurableObject {
   async alarm(): Promise<void> {
     for (const socket of this.state.getWebSockets()) this.end(socket, 'Sharing expired');
     this.session = undefined;
-    this.pendingVideo.clear(); this.pendingAudio.clear(); this.recentAudio = []; this.lastVideo = undefined;
     await this.state.storage.delete('session');
   }
 }
