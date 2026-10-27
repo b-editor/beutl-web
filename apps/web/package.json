@@ -40,7 +40,7 @@
     "better-auth": "^1.7.12",
     "country-to-currency": "^3.0.1",
     "embla-carousel-react": "^8.6.0",
-    "framer-motion": "^14.5.0",
+    "framer-motion": "^14.6.0",
     "hono": "^4.13.13",
     "jose": "^6.2.13",
     "lucide-react": "^1.61.0",
