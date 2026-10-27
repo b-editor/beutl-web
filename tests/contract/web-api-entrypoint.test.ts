@@ -116,10 +116,11 @@ describe("public Web Worker API entrypoint", () => {
   );
 
   it("keeps Web pages and Web auth on OpenNext", async () => {
-    for (const path of ["/ja", "/api/auth/session", "/api/v30/unknown"]) {
+    const preview = `/preview/${"a".repeat(64)}/00000000-0000-0000-0000-000000000001`;
+    for (const path of ["/ja", "/api/auth/session", "/api/v30/unknown", preview, `/en${preview}`]) {
       expect((await web.fetch(new Request(`${env.PUBLIC_ORIGIN}${path}`), env, context())).status).toBe(200);
     }
-    expect(mocks.next).toHaveBeenCalledTimes(3);
+    expect(mocks.next).toHaveBeenCalledTimes(5);
   });
 
   it("passes resolved secrets to OpenNext and refreshes them after initialization", async () => {

@@ -1,3 +1,5 @@
+import en_preview from "./locales/en/preview.json";
+import ja_preview from "./locales/ja/preview.json";
 // 全 locale JSON を静的 import した resource map。
 // i18next-resources-to-backend の動的 import (import(`./locales/${lang}/${ns}.json`)) は
 // Cloudflare Workers バンドラで解決不能なため、静的 import に置換する。
@@ -26,6 +28,7 @@ import ja_translation from "./locales/ja/translation.json";
 
 export const resources = {
   en: {
+    preview: en_preview,
     account: en_account,
     admin: en_admin,
     "api-errors": en_apiErrors,
@@ -39,6 +42,7 @@ export const resources = {
     translation: en_translation,
   },
   ja: {
+    preview: ja_preview,
     account: ja_account,
     admin: ja_admin,
     "api-errors": ja_apiErrors,

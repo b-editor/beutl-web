@@ -50,15 +50,20 @@ try {
       watch: false,
     },
   });
-  for (const [path, expected] of [
+  const pages = [
     ["/en/account/verify-request", "Check your email"],
     ["/en/account/sign-in", 'name="email"'],
-  ]) {
+  ];
+  if (rawConfig.name === "beutl-web") {
+    const preview = `/preview/${"a".repeat(64)}/00000000-0000-0000-0000-000000000001`;
+    pages.push([preview, 'id="viewer"'], [`/en${preview}`, 'aria-label="Mobile preview"']);
+  }
+  for (const [path, expected] of pages) {
     const response = await worker.fetch(path, { redirect: "manual", signal: AbortSignal.timeout(30_000) });
     const html = await response.text();
     assert.equal(response.status, 200, `${path}: ${html.slice(0, 1500)}`);
     assert.match(response.headers.get("content-type") ?? "", /^text\/html/);
-    assert.ok(html.includes(expected), `${path}: missing rendered page content`);
+    assert.ok(html.includes(expected), `${path}: missing rendered page content; labels: ${html.match(/aria-label="[^"]*"/gu)?.join(", ")}`);
     assert.ok(!html.includes('id="__next_error__"'), `${path}: Next.js rendered an error`);
     console.log(`Worker rendered ${path} successfully.`);
   }

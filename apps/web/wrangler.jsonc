@@ -20,6 +20,8 @@
   "keep_vars": true,
   // Create these account secrets before deploying. See docs/deployment.md#secrets-store.
   "secrets_store_secrets": [
+    { "binding": "PREVIEW_TURN_KEY_ID", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "PREVIEW_TURN_KEY_ID" },
+    { "binding": "PREVIEW_TURN_API_TOKEN", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "PREVIEW_TURN_API_TOKEN" },
     { "binding": "BETTER_AUTH_SECRET", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "BETTER_AUTH_SECRET" },
     { "binding": "AUTH_GOOGLE_SECRET", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "AUTH_GOOGLE_SECRET" },
     { "binding": "AUTH_GITHUB_SECRET", "store_id": "de6d4a1dd7db4471aef97c1e0db1ee05", "secret_name": "AUTH_GITHUB_SECRET" },
@@ -48,9 +50,11 @@
   // This Worker owns Web pages and all public APIs, including /api/v{1,2,3}/*.
   // Keep API bindings and scheduled work in this deployment.
   "durable_objects": {
-    "bindings": [{ "name": "BEUTL_GIT_REPOSITORIES", "class_name": "GitRepositoryDurableObject" }]
+    "bindings": [{ "name": "BEUTL_GIT_REPOSITORIES", "class_name": "GitRepositoryDurableObject" },
+      { "name": "BEUTL_PREVIEW_SESSIONS", "class_name": "PreviewSessionDurableObject" }]
   },
-  "migrations": [{ "tag": "hosted-git-v1", "new_sqlite_classes": ["GitRepositoryDurableObject"] }],
+  "migrations": [{ "tag": "hosted-git-v1", "new_sqlite_classes": ["GitRepositoryDurableObject"] },
+    { "tag": "mobile-preview-v1", "new_sqlite_classes": ["PreviewSessionDurableObject"] }],
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS",

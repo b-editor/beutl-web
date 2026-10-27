@@ -66,6 +66,17 @@ describe("contentSecurityPolicy", () => {
     expect(directivesOf(csp).filter((d) => d.startsWith("connect-src "))).toHaveLength(1);
   });
 
+  it("allows the preview's signaling origin without opening other WebSocket origins", () => {
+    const csp = contentSecurityPolicy({
+      NODE_ENV: "production",
+      WEBSOCKET_ORIGIN: "wss://beutl.beditor.net",
+    });
+
+    expect(directive(csp, "connect-src")).toBe(
+      "connect-src 'self' https://cloudflareinsights.com wss://beutl.beditor.net",
+    );
+  });
+
   it("adds eval only for the dev bundle, without duplicating script-src", () => {
     const dev = contentSecurityPolicy({ NODE_ENV: "development" });
 
