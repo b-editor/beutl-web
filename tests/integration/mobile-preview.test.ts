@@ -70,7 +70,7 @@ describe('mobile preview on workerd', () => {
     host.socket.close();
     await expect.poll(async () => (await mf.dispatchFetch(`${session.viewerUrl}api/session`)).status).toBe(410);
   });
-  it('routes offers and ICE by paired socket identity and rejects media relay', async () => {
+  it('routes offers, ICE and playback controls by paired socket identity and rejects media relay', async () => {
     const session = await create(), host = await publisher(session);
     const first = await viewer(session, await pair(session)), second = await viewer(session, await pair(session));
     first.socket.send(JSON.stringify({ type: 'offer', id: 'forged', sdp: 'first-offer', hdr: true }));
@@ -86,6 +86,18 @@ describe('mobile preview on workerd', () => {
     first.socket.send(JSON.stringify({ type: 'candidate', candidate: { candidate: 'ice' } }));
     await expect.poll(() => signals().length).toBe(3);
     expect(signals()[2].id).toBe(one.id);
+    first.socket.send(JSON.stringify({ type: 'control', id: two.id, action: 'seek', position: 2.5, requestId: 1 }));
+    await expect.poll(() => signals().length).toBe(4);
+    expect(signals()[3].id).toBe(one.id);
+    expect(signals()[3].signal).toMatchObject({ action: 'seek', position: 2.5, requestId: 1 });
+    host.socket.send(JSON.stringify({ type: 'signal', id: one.id, signal: { type: 'control-result', requestId: 1, ok: true } }));
+    await expect.poll(() => first.received.some(x => typeof x === 'string' && JSON.parse(x).type === 'control-result')).toBe(true);
+    expect(second.received.some(x => typeof x === 'string' && JSON.parse(x).type === 'control-result')).toBe(false);
+    host.socket.send(JSON.stringify({ type: 'disconnect', id: one.id }));
+    await expect.poll(() => first.socket.readyState).toBeGreaterThanOrEqual(WebSocket.CLOSING);
+    second.socket.send(JSON.stringify({ type: 'control', action: 'play', requestId: 2 }));
+    await expect.poll(() => signals().length).toBe(5);
+    expect(signals()[4].id).toBe(two.id);
     host.socket.send(new Uint8Array([1, 2, 3]));
     await expect.poll(() => host.socket.readyState).toBeGreaterThanOrEqual(WebSocket.CLOSING);
   });

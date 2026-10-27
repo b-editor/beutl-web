@@ -180,7 +180,9 @@ export class PreviewSessionDurableObject {
       return;
     }
     // Identity comes from the paired socket, never from a message supplied by a browser.
-    if (control.type !== 'offer' && control.type !== 'candidate') { socket.close(1003, 'Read-only preview'); return; }
+    if (control.type !== 'offer' && control.type !== 'candidate' && control.type !== 'control') {
+      socket.close(1003, 'Unsupported preview message'); return;
+    }
     const host = this.publisher();
     if (host) this.send(host, json({ type: 'signal', id: a.id, signal: control }));
   }

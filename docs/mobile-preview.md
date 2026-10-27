@@ -6,6 +6,22 @@ mixed audio, not microphone or system capture. Sharing stops when the editor tab
 changes or closes. Local sharing requires the same network; Internet sharing uses
 the existing Beutl Web Worker for pairing and WebRTC signaling.
 
+The viewer keeps the video full size, with a compact overlay for play/pause,
+previous/next frame, seeking, local audio and full screen. Controls hide after three
+seconds during playback; tapping the video or using the keyboard shows them again.
+The six-digit pairing code grants playback control of the shared editor tab.
+Disconnecting a device revokes its access. No project editing is exposed.
+
+Playback commands use the authenticated signaling socket (`type: "control"`,
+`requestId`, `action`, and `position` in seconds for `seek`). The desktop serializes
+commands and replies with `control-result` and the matching request ID. It publishes
+authoritative `playback` state (playing, position, minimum, duration, frameRate,
+enabled), including changes made on the PC. The viewer waits for acknowledgement
+before accepting another command. Seeking and frame stepping first await pause and
+leave playback paused, as the desktop timecode field does. They use the desktop's
+frame rate, seek range and frame-step commands. Controls are unavailable while the
+editor is busy or the connection is down.
+
 ## Media and HDR
 
 The desktop's Pion WebRTC worker sends encrypted audio/video directly to each
@@ -30,7 +46,7 @@ separate FFmpeg worker. The installed FFmpeg must include `libvpx`, `libvpx-vp9`
   WebRTC stream. The phone's audio button satisfies browser autoplay requirements.
 
 The Durable Object carries JSON signaling only (offer, answer, ICE candidates,
-playback state and session controls). It rejects binary media. No video or audio is
+playback state, playback commands and session controls). It rejects binary media. No video or audio is
 recorded or stored by the Worker. TURN forwards encrypted WebRTC media.
 
 ## Deployment and TURN configuration
@@ -83,7 +99,7 @@ usage before enabling public Internet sharing.
   the publisher connection ends sharing. A room also ends after four hours.
   Viewer-only interruptions can reconnect with their cookie.
 - Pairing and expiring ICE credentials persist in the Durable Object across hibernation.
-  SDP/candidates are routed to the authenticated viewer identity; a viewer cannot
+  SDP/candidates and playback commands are routed to the authenticated viewer identity; a viewer cannot
   impersonate another viewer or publish media to the desktop.
 - Each profile shares one encoder across viewers. Only the latest source frame is
   retained. RTP packetization, NACK recovery and encryption are handled by the WebRTC
@@ -109,7 +125,7 @@ vp exec tsc --noEmit -p packages/api/tsconfig.json
 
 The integration suite uses real workerd Durable Objects and TCP WebSockets. Test-only
 session creation in `tests/fixtures/preview/worker.ts` is never used by the production
-Worker. Desktop tests cover clean-frame conversion and playback lifetime; FFmpeg worker
+Worker. Desktop tests cover clean-frame conversion, real-player controls and playback lifetime; FFmpeg worker
 tests decode the encoded VP8/10-bit VP9 frames and exercise immediate Opus output.
 Pion tests check negotiated profiles and HDR color metadata. Browser validation should
 launch Playwright with `headless: true` and save screenshots without opening a window.
