@@ -82,6 +82,8 @@ it('tries LAN, STUN, then TURN; ignores old answers and stops fallback after con
     close = vi.fn(); addIceCandidate = vi.fn();
     setRemoteDescription = vi.fn(async value => { this.remoteDescription = value; });
     addTransceiver = vi.fn(() => ({ setCodecPreferences: vi.fn() }));
+    playback = { onmessage: undefined as ((event: { data: string }) => void) | undefined };
+    createDataChannel = vi.fn(() => this.playback);
     createOffer = vi.fn(async () => ({ type: 'offer', sdp: 'offer' }));
     setLocalDescription = vi.fn(async () => {});
     onconnectionstatechange?: () => void;
@@ -109,6 +111,7 @@ it('tries LAN, STUN, then TURN; ignores old answers and stops fallback after con
       return request.connectionId;
     };
     const lan = await configure('lan', []);
+    expect(peers[0].createDataChannel).toHaveBeenCalledWith('beutl-playback', { negotiated: true, id: 0 });
     expect(peers[0].config).toEqual({ iceServers: [], iceTransportPolicy: 'all' });
     await vi.advanceTimersByTimeAsync(3000);
     const stunServers = [{ urls: ['stun:stun.cloudflare.com:3478'] }];
@@ -127,5 +130,14 @@ it('tries LAN, STUN, then TURN; ignores old answers and stops fallback after con
     expect(configurations().map(c => c.phase)).toEqual(['lan', 'stun', 'turn']);
     expect(state).toHaveBeenLastCalledWith({ type: 'connected' });
     expect(new Set(configurations().map(c => c.connectionId)).size).toBe(3);
+    const messagesAfterConnect = sent().length;
+    const playback = { type: 'playback', playing: true, position: 0, duration: 30, frameRate: 30, enabled: true };
+    for (let i = 0; i < 100; i++) peers[2].playback.onmessage!({ data: JSON.stringify({ ...playback, position: i / 10 }) });
+    expect(state).toHaveBeenLastCalledWith({ ...playback, position: 9.9 });
+    state.mockClear();
+    peers[0].playback.onmessage!({ data: JSON.stringify(playback) });
+    peers[2].playback.onmessage!({ data: 'malformed' });
+    expect(state).not.toHaveBeenCalled();
+    expect(sent()).toHaveLength(messagesAfterConnect);
   } finally { connection.close(); vi.useRealTimers(); vi.unstubAllGlobals(); }
 });

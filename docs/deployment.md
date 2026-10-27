@@ -876,3 +876,15 @@ Desktop networks that block all outbound UDP are not supported by this backend;
 TCP/TLS TURN URLs remain available to browsers. Test a LAN connection, a direct
 connection across networks and a relayed connection before production rollout;
 passing local tests does not verify the account's deployed TURN credentials.
+
+The 100 ms playhead updates use a WebRTC DataChannel, not the Durable Object.
+The signaling sockets use the Hibernation API; they have no application heartbeat
+or periodic storage writes. Protocol ping/pong is handled by Cloudflare without
+waking the object. Session creation, pairing, negotiation, playback commands and
+revocation still invoke it. Hibernation-eligible idle time is not duration-billed,
+but requests, handler execution and storage operations can be billed; see
+[Cloudflare's pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/).
+Stopping a session removes its stored data and expiry alarm. A still-active
+creation-rate counter is retained only until its one-minute window ends, when a
+single cleanup alarm deletes the remaining data. TURN bandwidth is a separate
+service charge; avoiding DO traffic does not make TURN usage free.

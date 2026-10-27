@@ -153,6 +153,15 @@ export class PreviewConnection {
     const peer = this.peer = new RTCPeerConnection({ iceServers, iceTransportPolicy: this.phase === 'turn' ? 'relay' : 'all' });
     const current = () => generation === this.generation && connectionId === this.connectionId && peer === this.peer;
     this.remoteCandidates = [];
+    // Frequent playhead updates use the peer connection, so they do not wake/bill the relay.
+    const playback = peer.createDataChannel('beutl-playback', { negotiated: true, id: 0 });
+    playback.onmessage = ({ data }) => {
+      if (!current() || typeof data !== 'string') return;
+      try {
+        const update = JSON.parse(data) as PreviewUpdate;
+        if (update.type === 'playback') this.state(update);
+      } catch { /* A malformed state update must not interrupt video playback. */ }
+    };
     const stream = new MediaStream();
     this.video.srcObject = stream;
     peer.ontrack = ({ track }) => {

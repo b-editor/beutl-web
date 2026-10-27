@@ -10,6 +10,8 @@ interface State {
     get<T>(key: string): Promise<T | undefined>;
     put<T>(key: string, value: T): Promise<void>;
     delete(key: string): Promise<boolean>;
+    deleteAll(): Promise<void>;
+    deleteAlarm(): Promise<void>;
     setAlarm(time: number): Promise<void>;
   };
   blockConcurrencyWhile<T>(work: () => Promise<T>): Promise<T>;
@@ -36,11 +38,10 @@ const cookieName = 'beutl-preview';
 export class PreviewSessionDurableObject {
   private session?: Session;
   private turnRequest?: Promise<PreviewIceServer[]>;
-  private creationLimit = { window: 0, count: 0 };
+  private creationLimit?: { window: number; count: number };
   constructor(private readonly state: State, private readonly env: PreviewTurnEnvironment) {
     state.blockConcurrencyWhile(async () => {
       this.session = await state.storage.get<Session>('session');
-      this.creationLimit = await state.storage.get<typeof this.creationLimit>('creationLimit') || { window: 0, count: 0 };
     });
   }
   private publisher() { return this.state.getWebSockets('publisher').find(s => s.readyState === 1 && s.deserializeAttachment().session === this.session?.id); }
@@ -80,6 +81,7 @@ export class PreviewSessionDurableObject {
       if (url.origin === 'https://preview.internal' && url.pathname === '/init' && request.method === 'POST') {
         // A burst permits stop/start while a persistent per-account limit bounds creation work.
         // Keep the counter after the host disconnects so repeated stop/start cannot reset it.
+        this.creationLimit ??= await this.state.storage.get<NonNullable<typeof this.creationLimit>>('creationLimit') || { window: 0, count: 0 };
         if (now - this.creationLimit.window >= 60_000) this.creationLimit = { window: now, count: 0 };
         if (this.creationLimit.count >= 10) return new Response(null, { status: 429, headers: { 'Retry-After': '60' } });
         this.creationLimit.count++;
@@ -129,12 +131,12 @@ export class PreviewSessionDurableObject {
       if (path === '/api/pair' && request.method === 'POST') {
         if (origin !== s.origin) return result(403);
         if (now - s.attemptWindow >= 60_000) { s.attemptWindow = now; s.attempts = 0; }
-        // Count before reading the body; persist across hibernation and concurrent requests.
-        if (s.attempts++ >= 10) { await this.save(); return result(429); }
-        await this.save();
-        if (input !== s.code || now >= s.codeExpires) return result(401);
-        if (paired) return result(204);
-        if (s.paired.length >= 4) return result(409);
+        // Persist each counted attempt once; requests already over the limit need no write.
+        if (s.attempts >= 10) return result(429);
+        s.attempts++;
+        if (input !== s.code || now >= s.codeExpires) { await this.save(); return result(401); }
+        if (paired) { await this.save(); return result(204); }
+        if (s.paired.length >= 4) { await this.save(); return result(409); }
         paired = { token: token(), id: crypto.randomUUID(), address: request.headers.get('CF-Connecting-IP') || 'Browser' };
         s.paired.push(paired);
         await this.save();
@@ -240,7 +242,7 @@ export class PreviewSessionDurableObject {
     const request = this.turnRequest;
     try {
       const servers = await request;
-      if (this.session === session) {
+      if (this.session === session && !session.turnServers) {
         session.turnServers = servers;
         await this.save();
       }
@@ -256,8 +258,7 @@ export class PreviewSessionDurableObject {
     if (a.role === 'publisher') {
       // The host owns the lifetime. A closed tab or disconnected host ends access immediately.
       this.closeViewers();
-      this.session = undefined;
-      await this.state.storage.delete('session');
+      await this.clearSession();
     } else {
       this.roster();
     }
@@ -265,8 +266,21 @@ export class PreviewSessionDurableObject {
   async webSocketError(socket: Socket): Promise<void> { socket.close(1011, 'Connection lost'); await this.webSocketClose(socket); }
   async alarm(): Promise<void> {
     for (const socket of this.state.getWebSockets()) this.end(socket, 'Sharing expired');
+    await this.clearSession();
+  }
+  private async clearSession(): Promise<void> {
     this.session = undefined;
-    await this.state.storage.delete('session');
+    this.creationLimit ??= await this.state.storage.get<NonNullable<typeof this.creationLimit>>('creationLimit');
+    const limitExpires = (this.creationLimit?.window || 0) + 60_000;
+    if (Date.now() < limitExpires) {
+      // Preserve the existing start/stop rate limit, then remove its last stored row.
+      await this.state.storage.delete('session');
+      await this.state.storage.setAlarm(limitExpires);
+    } else {
+      this.creationLimit = undefined;
+      await this.state.storage.deleteAll();
+      await this.state.storage.deleteAlarm();
+    }
   }
 }
 
