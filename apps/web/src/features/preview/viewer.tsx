@@ -163,7 +163,8 @@ export function PreviewViewer({ lang, basePath }: { lang: string; basePath: stri
       </form>
     </main>}
     <section id="viewer" ref={viewer} hidden={status === "pair"} aria-label={t("preview:title")}
-      className={cn("relative h-dvh overflow-hidden bg-black text-white", immersive && "fixed inset-0 z-50")}
+      tabIndex={0} onFocus={event => { if (event.currentTarget.matches(":focus-visible")) showControls(); }}
+      className={cn("relative h-dvh overflow-hidden bg-black text-white focus-visible:outline-2 focus-visible:-outline-offset-2", immersive && "fixed inset-0 z-50")}
       onPointerMove={event => { if (event.pointerType === "mouse") showControls(); }}
       onKeyDown={event => {
         showControls();
