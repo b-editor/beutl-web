@@ -23,10 +23,17 @@ export function middleware(request: NextRequest) {
   const oversized = refuseOversizedAiUpload(request);
   // 413 の応答にも同じヘッダーを付けるため、localeMiddleware の戻り値だけで
   // なく置き換わりの応答にも通す。
-  return applySecurityHeaders(oversized ?? localeMiddleware(request), {
+  const preview = /^\/(?:en\/|ja\/)?preview\//u.test(request.nextUrl.pathname);
+  const response = applySecurityHeaders(oversized ?? localeMiddleware(request), {
     NODE_ENV: process.env.NODE_ENV,
     STORAGE_ORIGIN: storageOrigin(),
+    WEBSOCKET_ORIGIN: preview ? request.nextUrl.origin.replace(/^http/u, "ws") : undefined,
   });
+  if (preview) {
+    response.headers.set("Referrer-Policy", "no-referrer");
+    response.headers.set("Cache-Control", "no-store");
+  }
+  return response;
 }
 
 export const config = {

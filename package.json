@@ -33,12 +33,16 @@
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
     "@types/node": "^24.19.2",
+    "@types/ws": "8.18.2",
+    "esbuild": "0.28.2",
     "fflate": "^0.8.3",
     "happy-dom": "21.0.4",
     "hono": "^4.13.13",
+    "miniflare": "5.20261019.1-beta",
     "typescript": "^6.0.3",
     "vite": "8.3.5",
-    "vitest": "^5.0.5"
+    "vitest": "^5.0.5",
+    "ws": "8.22.0"
   },
   "pnpm": {
     "overrides": {

@@ -22,6 +22,7 @@ export const namespaces = [
   "developer",
   "dashboard",
   "admin",
+  "preview",
 ];
 
 export function getOptions(lng = defaultLanguage) {

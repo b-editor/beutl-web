@@ -12,6 +12,10 @@ declare namespace Cloudflare {
 		WORKER_SELF_REFERENCE: Fetcher /* beutl-web */;
 		BEUTL_DATABASE_HYPERDRIVE: Hyperdrive;
 		BEUTL_GIT_REPOSITORIES: DurableObjectNamespace;
+		BEUTL_PREVIEW_SESSIONS: DurableObjectNamespace;
+		// TURN credentials are resolved lazily by the preview Durable Object.
+		PREVIEW_TURN_KEY_ID?: string | { get(): Promise<string> };
+		PREVIEW_TURN_API_TOKEN?: string | { get(): Promise<string> };
 		BEUTL_GIT_ENABLED?: string;
 		BEUTL_S3_ENDPOINT?: string;
 		BEUTL_S3_REGION?: string;

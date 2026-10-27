@@ -837,3 +837,42 @@ are excluded from the report.
 Validate locally with `vp exec vitest run tests/contract/desktop-usage*.test.ts tests/contract/desktop-errors*.test.ts`
 and `vp run --filter @beutl/admin typecheck`. Deploying this code does not itself
 configure Grafana credentials or change backend retention/sampling.
+
+## Mobile preview
+
+Beutl serves the receiver as a localized Next.js page at `/preview/<room>/<session>`.
+The desktop connects out to the same Worker for pairing, signaling and playback
+controls. Video (VP8 or 10-bit VP9) and audio (Opus) travel over encrypted WebRTC;
+media is not sent through the Durable Object. Desktop and Web releases must use
+the same signaling protocol (`configure`, `connectionId`, `offer`, `answer`, `candidate`).
+
+The viewer tries host candidates for 3 seconds, STUN-assisted direct connectivity
+for 6 seconds, then TURN with relay-only ICE for 15 seconds. STUN discovers public
+addresses; it does not relay media. Each attempt replaces the peer connection and
+has a new ID so delayed signaling cannot affect the next attempt. A failed final
+attempt retries with backoff. These limits include signaling/setup time.
+
+`apps/web/wrangler.jsonc` binds both `PREVIEW_TURN_KEY_ID` and
+`PREVIEW_TURN_API_TOKEN` from the existing account Secrets Store. Before deploying,
+create entries with those exact names and the `workers` scope. Use a Cloudflare
+Realtime TURN key ID and its API token, not an account-wide token. For example,
+from `apps/web`, run the following commands and enter each value at the prompt:
+
+```sh
+vp exec wrangler secrets-store secret create de6d4a1dd7db4471aef97c1e0db1ee05 --name PREVIEW_TURN_KEY_ID --scopes workers --remote
+vp exec wrangler secrets-store secret create de6d4a1dd7db4471aef97c1e0db1ee05 --name PREVIEW_TURN_API_TOKEN --scopes workers --remote
+```
+
+For local Worker development, omit `--remote`. Both string secrets and binding
+objects with `get()` are supported. These two values are resolved only when a
+paired viewer reaches the TURN stage, never copied to `process.env` or returned
+to clients. The room caches the generated short-lived ICE credentials until its
+four-hour expiry. New rooms read the current store values, allowing rotation.
+Missing secrets or provisioning errors affect TURN only: LAN/STUN setup and other
+pages still work. The viewer reports the failure and permits retry.
+
+The packaged libdatachannel/libjuice backend uses UDP for TURN on the desktop.
+Desktop networks that block all outbound UDP are not supported by this backend;
+TCP/TLS TURN URLs remain available to browsers. Test a LAN connection, a direct
+connection across networks and a relayed connection before production rollout;
+passing local tests does not verify the account's deployed TURN credentials.
