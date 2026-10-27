@@ -158,7 +158,8 @@ export function PreviewViewer({ lang, basePath }: { lang: string; basePath: stri
       else if (media?.webkitEnterFullscreen) media.webkitEnterFullscreen();
       else throw new Error("Fullscreen is unavailable");
       setNotice("");
-    } catch {
+    } catch (error) {
+      console.warn("Failed to change preview fullscreen mode", error);
       setNotice("fullscreenFailed");
     }
     showControls();
