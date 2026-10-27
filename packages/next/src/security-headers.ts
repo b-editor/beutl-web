@@ -39,6 +39,8 @@ export type SecurityEnvironment = {
   NODE_ENV?: string | undefined;
   /** Public origin of the S3 endpoint, allowed for direct multipart PUTs. */
   STORAGE_ORIGIN?: string | undefined;
+  /** Same-origin WebSocket endpoint used by a page, with an explicit ws(s) scheme. */
+  WEBSOCKET_ORIGIN?: string | undefined;
 };
 
 const DIRECTIVES = [
@@ -68,6 +70,7 @@ const DIRECTIVES = [
 export function contentSecurityPolicy({
   NODE_ENV = "production",
   STORAGE_ORIGIN,
+  WEBSOCKET_ORIGIN,
 }: SecurityEnvironment = {}): string {
   // static.cloudflareinsights.com は Cloudflare の Web Analytics (RUM) のビーコン。
   // ゾーン設定でエッジから HTML に注入されるためコード側では出せない。許可しないと
@@ -82,6 +85,7 @@ export function contentSecurityPolicy({
     "'self'",
     "https://cloudflareinsights.com",
     ...(STORAGE_ORIGIN ? [STORAGE_ORIGIN] : []),
+    ...(WEBSOCKET_ORIGIN ? [WEBSOCKET_ORIGIN] : []),
   ].join(" ");
   return [DIRECTIVES[0], scriptSrc, ...DIRECTIVES.slice(1), `connect-src ${connectSrc}`].join("; ");
 }
@@ -89,9 +93,10 @@ export function contentSecurityPolicy({
 export function securityHeaders({
   NODE_ENV = "production",
   STORAGE_ORIGIN,
+  WEBSOCKET_ORIGIN,
 }: SecurityEnvironment = {}): Readonly<Record<string, string>> {
   return {
-    "Content-Security-Policy": contentSecurityPolicy({ NODE_ENV, STORAGE_ORIGIN }),
+    "Content-Security-Policy": contentSecurityPolicy({ NODE_ENV, STORAGE_ORIGIN, WEBSOCKET_ORIGIN }),
     // サイトはすべて Cloudflare の HTTPS (カスタムドメイン) で配信され、
     // サブドメイン (admin.beutl.beditor.net) も HTTPS のため includeSubDomains は
     // 安全。preload は HSTS preload リストへの登録 (抜け出すのが難しい) を伴う

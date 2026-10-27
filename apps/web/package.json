@@ -6,7 +6,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "node ../../scripts/sync-preview-client.mjs && next build --webpack",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "oxlint",
     "typecheck": "tsc --noEmit",

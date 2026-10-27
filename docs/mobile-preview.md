@@ -3,8 +3,15 @@
 Phones open the room URL in their browser, enter Beutl's six-digit code and tap
 **Enable audio**. The clean preview excludes editing handles and uses the scene's
 mixed audio, not microphone or system capture. Sharing stops when the editor tab
-changes or closes. Local sharing requires the same network; Internet sharing uses
-the existing Beutl Web Worker for pairing and WebRTC signaling.
+changes or closes. The page is a Next.js route on `beutl.beditor.net`; the desktop
+does not embed or serve HTML, JavaScript or CSS. Starting a session requires signing
+in to Beutl Web, which handles pairing and WebRTC signaling.
+
+The page's origin does not determine the media destination. ICE can connect a phone
+directly to the desktop's local address on the same LAN. Across networks it also
+tries direct connectivity, with TURN as a fallback. The viewer uses
+`iceTransportPolicy: "all"`; it does not force media through the relay. Loading the
+page and establishing the signaling session still require access to Beutl Web.
 
 The viewer keeps the video full size, with a compact overlay for play/pause,
 previous/next frame, seeking, local audio and full screen. Controls hide after three
@@ -56,7 +63,7 @@ recorded or stored by the Worker. TURN forwards encrypted WebRTC media.
 ## Deployment and TURN configuration
 
 The Web deployment includes `BEUTL_PREVIEW_SESSIONS`, the `mobile-preview-v1` SQLite
-Durable Object migration and the assets in `apps/web/public/preview-client/`. No SQL
+Durable Object migration and the Next.js preview route. No SQL
 application database migration is needed. Use [deployment.md](deployment.md) for the
 normal deployment and existing Secrets Store conventions; preserve unrelated secrets.
 `PUBLIC_ORIGIN` must be the canonical HTTPS origin.
@@ -116,15 +123,19 @@ embedding. The preview has no editing-command or project-file API.
 
 ## Client source and verification
 
-The canonical client is `apps/web/public/preview-client/`. Its theme comes from
-`packages/ui/src/styles/theme.css`, also imported by the Web application, and its logo
-is the existing `logo_dark.svg`. The Web build refreshes those assets. After a client
-change, synchronize the desktop's embedded local client:
+The page lives at `apps/web/src/app/[lang]/(preview)/preview/[room]/[session]/page.tsx`.
+`apps/web/src/features/preview/viewer.tsx` uses the shared Beutl UI components, theme,
+logo and English/Japanese translation resources. `connection.ts` owns the WebRTC
+and signaling lifecycle. There is no separate static client or desktop asset copy.
+
+Localized pages always use the unlocalized `/preview/<room>/<session>/` base for
+pairing and signaling, so the room-scoped cookie works across language changes.
+The Web Worker forwards those API/socket requests to the Durable Object and leaves
+page rendering to OpenNext. The page's CSP permits its own signaling WebSocket origin.
 
 ```sh
-vp exec node scripts/sync-preview-client.mjs /path/to/beutl
-vp exec vitest run tests/integration/mobile-preview.test.ts tests/contract/mobile-preview-api.test.ts tests/contract/preview-connection.test.ts tests/contract/preview-turn.test.ts tests/contract/web-api-entrypoint.test.ts
-vp exec tsc --noEmit -p packages/api/tsconfig.json
+vp test tests/integration/mobile-preview.test.ts tests/contract/mobile-preview-api.test.ts tests/contract/preview-connection.test.ts tests/contract/preview-turn.test.ts tests/contract/web-api-entrypoint.test.ts tests/contract/security-headers.test.ts
+vp run --filter @beutl/web typecheck
 ```
 
 The integration suite uses real workerd Durable Objects and TCP WebSockets. Test-only
