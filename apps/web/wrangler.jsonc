@@ -48,9 +48,11 @@
   // This Worker owns Web pages and all public APIs, including /api/v{1,2,3}/*.
   // Keep API bindings and scheduled work in this deployment.
   "durable_objects": {
-    "bindings": [{ "name": "BEUTL_GIT_REPOSITORIES", "class_name": "GitRepositoryDurableObject" }]
+    "bindings": [{ "name": "BEUTL_GIT_REPOSITORIES", "class_name": "GitRepositoryDurableObject" },
+      { "name": "BEUTL_PREVIEW_SESSIONS", "class_name": "PreviewSessionDurableObject" }]
   },
-  "migrations": [{ "tag": "hosted-git-v1", "new_sqlite_classes": ["GitRepositoryDurableObject"] }],
+  "migrations": [{ "tag": "hosted-git-v1", "new_sqlite_classes": ["GitRepositoryDurableObject"] },
+    { "tag": "mobile-preview-v1", "new_sqlite_classes": ["PreviewSessionDurableObject"] }],
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS",

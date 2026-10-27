@@ -2,6 +2,9 @@
 // Public APIs and their scheduled work deploy together with beutl-web. This
 // entry owns bindings, body limits, the execution context and cron; Hono owns
 // every API route, including Hosted Git (v3/repos, v3/git).
+export { PreviewSessionDurableObject } from "./preview/session";
+export { handlePreviewRequest } from "./preview/environment";
+import type { PreviewEnvironment } from "./preview/environment";
 export { GitRepositoryDurableObject } from "./git/repo-durable-object";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -35,7 +38,7 @@ import {
   reconcileGitRepositoryDeletions,
 } from "./git/maintenance";
 
-export interface Env extends GitEnvironment {
+export interface Env extends GitEnvironment, PreviewEnvironment {
   BEUTL_DATABASE_HYPERDRIVE: {
     connectionString: string;
   };

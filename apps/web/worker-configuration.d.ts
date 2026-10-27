@@ -12,6 +12,7 @@ declare namespace Cloudflare {
 		WORKER_SELF_REFERENCE: Fetcher /* beutl-web */;
 		BEUTL_DATABASE_HYPERDRIVE: Hyperdrive;
 		BEUTL_GIT_REPOSITORIES: DurableObjectNamespace;
+		BEUTL_PREVIEW_SESSIONS: DurableObjectNamespace;
 		BEUTL_GIT_ENABLED?: string;
 		BEUTL_S3_ENDPOINT?: string;
 		BEUTL_S3_REGION?: string;

@@ -15,9 +15,9 @@
 import { fetchWithBodyLimit } from "./src/lib/worker-body-limit";
 import { keepRenderingAfterDisconnect } from "./src/lib/worker-render-disconnect";
 import { freeImageTransformsEnabled, isContentImageTransformRequest } from "./src/lib/image-transform-policy";
-import apiRuntime, { isApiRequest } from "@beutl/api/runtime";
+import apiRuntime, { isApiRequest, handlePreviewRequest } from "@beutl/api/runtime";
 import { resolveWorkerSecrets } from "@beutl/api/worker-secrets";
-export { GitRepositoryDurableObject } from "@beutl/api/runtime";
+export { GitRepositoryDurableObject, PreviewSessionDurableObject } from "@beutl/api/runtime";
 //@ts-expect-error: Will be resolved by wrangler build
 import openNext from "./.open-next/worker.js";
 
@@ -32,6 +32,8 @@ export default {
   async fetch(request, env, ctx) {
     // Versioned APIs include streaming Git/LFS and storage uploads. Route them
     // before OpenNext buffers request bodies or applies the Web upload cap.
+    const preview = await handlePreviewRequest(request, env);
+    if (preview) return preview;
     if (isApiRequest(request)) return apiRuntime.fetch(request, env, ctx);
     // Only the content route can use the bounded presets. The generic
     // /_next/image optimizer must not spend the shared transformation quota.
