@@ -37,9 +37,11 @@ it('waits for the matching control acknowledgement and releases pending controls
     const request = JSON.parse(socket.send.mock.calls[0][0]);
     expect(request).toMatchObject({ type: 'control', action: 'seek', position: 2.5 });
     await expect(connection.control('next')).resolves.toBe(false);
-    socket.onmessage({ data: JSON.stringify({ type: 'control-result', requestId: request.requestId + 1, ok: true }) });
-    await vi.advanceTimersByTimeAsync(1);
-    expect(completed).not.toHaveBeenCalled();
+    for (const requestId of [undefined, request.requestId + 1]) {
+      socket.onmessage({ data: JSON.stringify({ type: 'control-result', requestId, ok: true }) });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(completed).not.toHaveBeenCalled();
+    }
     const playback = { type: 'playback', playing: false, position: 2.5, minimum: 0, duration: 10, frameRate: 30, enabled: true };
     socket.onmessage({ data: JSON.stringify(playback) });
     socket.onmessage({ data: JSON.stringify({ type: 'control-result', requestId: request.requestId, ok: true }) });
@@ -54,5 +56,20 @@ it('waits for the matching control acknowledgement and releases pending controls
     await expect(stopped).resolves.toBe(false);
     await expect(connection.control('next')).resolves.toBe(false);
     expect(state).toHaveBeenLastCalledWith('disconnected');
+
+    await connection.connect();
+    connection.peer = { connectionState: 'connected', close: vi.fn() };
+    const resumed = connection.control('play'), resumedCallback = vi.fn();
+    resumed.then(resumedCallback);
+    const resumedRequest = JSON.parse(connection.socket.send.mock.calls[0][0]);
+    state.mockClear();
+    // Delayed messages from the previous socket must not update a reconnected viewer.
+    socket.onmessage({ data: JSON.stringify(playback) });
+    socket.onmessage({ data: JSON.stringify({ type: 'control-result', requestId: resumedRequest.requestId, ok: true }) });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(state).not.toHaveBeenCalled();
+    expect(resumedCallback).not.toHaveBeenCalled();
+    connection.socket.onmessage({ data: JSON.stringify({ type: 'control-result', requestId: resumedRequest.requestId, ok: true }) });
+    await expect(resumed).resolves.toBe(true);
   } finally { connection.close(); vi.useRealTimers(); vi.unstubAllGlobals(); }
 });
