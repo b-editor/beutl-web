@@ -53,6 +53,15 @@ async function viewer(session: Awaited<ReturnType<typeof create>>, cookie: strin
   return { socket, received };
 }
 describe('mobile preview on workerd', () => {
+  it('returns 404 for a hex room ID outside the Durable Object namespace', async () => {
+    const session = await create();
+    const invalid = session.viewerUrl.replace(/\/preview\/[a-f0-9]{64}\//u, `/preview/${'0'.repeat(64)}/`);
+    expect((await mf.dispatchFetch(`${invalid}api/session`)).status).toBe(404);
+    const host = await publisher(session);
+    const cookie = await pair(session);
+    expect((await mf.dispatchFetch(`${session.viewerUrl}api/session`, { headers: { Cookie: cookie } })).status).toBe(204);
+    host.socket.close();
+  });
   it('requires credentials, code and same origin; revokes devices and expires when the host closes', async () => {
     const session = await create();
     expect((await mf.dispatchFetch(session.publisherUrl.replace(/^ws/u, 'http'), { headers: { Upgrade: 'websocket' } })).status).toBe(401);
@@ -122,6 +131,38 @@ describe('mobile preview on workerd', () => {
     host.socket.send(JSON.stringify({ type: 'disconnectAll' }));
     await expect.poll(async () => (await attempt('123456')).status).toBe(204);
     host.socket.close();
+  });
+  it('lists offline pairings without tokens and lets the host revoke one to free a slot', async () => {
+    const session = await create(), host = await publisher(session);
+    const cookies: string[] = [];
+    const roster = () => host.received.filter((x): x is string => typeof x === 'string')
+      .map(x => JSON.parse(x)).filter(x => Array.isArray(x.clients)).at(-1);
+    for (let i = 0; i < 4; i++) {
+      const cookie = await pair(session);
+      cookies.push(cookie);
+      const phone = await viewer(session, cookie);
+      await expect.poll(() => roster()?.clients.length).toBe(1);
+      phone.socket.close();
+      await expect.poll(() => roster()?.clients.length).toBe(0);
+    }
+    expect(roster().paired).toHaveLength(4);
+    expect(roster().paired.every((p: object) => Object.keys(p).sort().join(',') === 'address,id')).toBe(true);
+    expect((await mf.dispatchFetch(`${session.viewerUrl}api/pair`, {
+      method: 'POST', headers: { Origin: origin }, body: session.pairingCode,
+    })).status).toBe(409);
+    const reconnect = await viewer(session, cookies[0]);
+    await expect.poll(() => roster()?.clients.length).toBe(1);
+    const id = roster().clients[0].id;
+    reconnect.socket.close();
+    await expect.poll(() => roster()?.clients.length).toBe(0);
+    host.socket.send(JSON.stringify({ type: 'disconnect', id }));
+    await expect.poll(() => roster()?.paired.length).toBe(3);
+    expect((await mf.dispatchFetch(`${session.viewerUrl}api/session`, { headers: { Cookie: cookies[0] } })).status).toBe(401);
+    await pair(session);
+    const remaining = await viewer(session, cookies[1]);
+    await expect.poll(() => roster()?.clients.length).toBe(1);
+    expect(roster().paired).toHaveLength(4);
+    remaining.socket.close();
   });
   it('keeps the per-account creation limit after stopping a session', async () => {
     for (let i = 0; i < 10; i++) {

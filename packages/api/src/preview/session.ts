@@ -45,7 +45,11 @@ export class PreviewSessionDurableObject {
   private viewers() { return this.state.getWebSockets('viewer').filter(s => s.readyState === 1 && s.deserializeAttachment().session === this.session?.id); }
   private save() { return this.state.storage.put('session', this.session!); }
   private send(socket: Socket, message: string | ArrayBuffer) {
-    try { socket.send(message); } catch { socket.close(1011, 'Connection lost'); }
+    try { socket.send(message); }
+    catch {
+      // The peer can close between the ready-state check and send; close only that connection.
+      socket.close(1011, 'Connection lost');
+    }
   }
   private end(socket: Socket, reason: string) {
     this.send(socket, '{"ended":true}');
@@ -55,7 +59,10 @@ export class PreviewSessionDurableObject {
     const host = this.publisher();
     if (!host) return;
     const viewers = this.viewers().map(s => s.deserializeAttachment()).filter((a): a is Extract<Attachment, { role: 'viewer' }> => a.role === 'viewer');
-    this.send(host, json({ clients: viewers.map(v => ({ id: v.id, address: v.address })) }));
+    this.send(host, json({
+      clients: viewers.map(v => ({ id: v.id, address: v.address })),
+      paired: this.session!.paired.map(p => ({ id: p.id, address: p.address })),
+    }));
   }
   private closeViewers(id?: string) {
     for (const socket of this.viewers()) {
@@ -78,7 +85,15 @@ export class PreviewSessionDurableObject {
         const { objectId, origin, iceServers: suppliedIceServers } = await request.json() as { objectId: string; origin: string; iceServers?: PreviewIceServer[] };
         let iceServers: PreviewIceServer[];
         try { iceServers = suppliedIceServers ?? await createPreviewIceServers(this.env); }
-        catch { return new Response('Preview TURN service is unavailable', { status: 503 }); }
+        catch (error) {
+          const reason = error instanceof Error && [
+            'Preview TURN service is not configured',
+            'Preview TURN credentials could not be created',
+            'Preview TURN service returned no relay servers',
+          ].includes(error.message) ? error.message : 'Unknown TURN service error';
+          console.error('Preview TURN provisioning failed', reason);
+          return new Response('Preview TURN service is unavailable', { status: 503 });
+        }
         for (const socket of this.state.getWebSockets()) this.end(socket, 'New sharing session');
         const id = crypto.randomUUID();
         this.session = {
@@ -131,6 +146,7 @@ export class PreviewSessionDurableObject {
         paired = { token: token(), id: crypto.randomUUID(), address: request.headers.get('CF-Connecting-IP') || 'Browser' };
         s.paired.push(paired);
         await this.save();
+        this.roster();
         const response = result(204);
         response.headers.set('Set-Cookie', `${cookieName}=${paired.token}; Path=${s.path}; HttpOnly; SameSite=Strict${url.protocol === 'https:' ? '; Secure' : ''}`);
         return response;
@@ -157,7 +173,11 @@ export class PreviewSessionDurableObject {
       socket.close(1009, 'Signaling message required'); return;
     }
     let control: { type?: string; id?: string; code?: string; expires?: number; signal?: unknown };
-    try { control = JSON.parse(message); } catch { socket.close(1003, 'Invalid signaling'); return; }
+    try { control = JSON.parse(message); }
+    catch {
+      // Invalid client input ends this socket, without failing the shared session.
+      socket.close(1003, 'Invalid signaling'); return;
+    }
     if (a.role === 'publisher') {
       if (socket !== this.publisher()) return;
       if (control.type === 'pairing' && /^\d{6}$/u.test(control.code || '') && Number.isFinite(control.expires)) {

@@ -44,5 +44,11 @@ export async function handlePreviewRequest(request: Request, env: PreviewEnviron
   if (!['/api/pair', '/api/session', '/stream', '/publisher'].includes(match[3]))
     return new Response(null, { status: 404 });
   const namespace = env.BEUTL_PREVIEW_SESSIONS;
-  return namespace.get(namespace.idFromString(match[1])).fetch(request);
+  let id: PreviewObjectId;
+  try { id = namespace.idFromString(match[1]); }
+  catch {
+    // A 64-character hex string can still be invalid for this Durable Object namespace.
+    return new Response(null, { status: 404 });
+  }
+  return namespace.get(id).fetch(request);
 }
