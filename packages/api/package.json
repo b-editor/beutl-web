@@ -76,7 +76,7 @@
     "country-to-currency": "^3.0.1",
     "fast-xml-parser": "5.11.2",
     "hono": "^4.13.13",
-    "isomorphic-git": "1.44.3",
+    "isomorphic-git": "1.44.4",
     "music-metadata": "^12.2.3",
     "negotiator": "^1.1.0",
     "semver": "^7.8.5",
