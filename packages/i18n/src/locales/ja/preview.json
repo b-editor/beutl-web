@@ -9,6 +9,7 @@
   "seek": "再生位置",
   "fullscreen": "全画面",
   "exitFullscreen": "全画面を終了",
+  "fullscreenFailed": "全画面に切り替えられませんでした。映像が表示されてから再度お試しください。",
   "connecting": "接続しています…",
   "reconnecting": "再接続しています…",
   "invalid": "コードが違うか、有効期限が切れています。",

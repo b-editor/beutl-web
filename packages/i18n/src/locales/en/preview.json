@@ -9,6 +9,7 @@
   "seek": "Playback position",
   "fullscreen": "Full screen",
   "exitFullscreen": "Exit full screen",
+  "fullscreenFailed": "Could not enter full screen. Please try again after the video starts.",
   "connecting": "Connecting…",
   "reconnecting": "Reconnecting…",
   "invalid": "The code is incorrect or expired.",
