@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Expand, Minimize, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
 import { cn } from "@beutl/core";
 import { Button } from "@beutl/ui/ui/button";
@@ -8,6 +8,12 @@ import { Input } from "@beutl/ui/ui/input";
 import { Slider } from "@beutl/ui/ui/slider";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { PreviewConnection, type ConnectionStatus, type PlaybackState, type PreviewAction } from "./connection";
+
+type SafariVideoElement = HTMLVideoElement & {
+  webkitEnterFullscreen?: () => void;
+  webkitExitFullscreen?: () => void;
+  webkitDisplayingFullscreen?: boolean;
+};
 
 function time(seconds: number, fraction = false) {
   const ticks = Math.round(Math.abs(seconds) * 100), minutes = Math.floor(ticks / 6000);
@@ -19,7 +25,7 @@ export function PreviewViewer({ lang, basePath }: { lang: string; basePath: stri
   const { i18n } = useTranslation(lang);
   // The initial server render must use the URL language before client effects run.
   const t = i18n.getFixedT(lang);
-  const video = useRef<HTMLVideoElement>(null);
+  const video = useRef<SafariVideoElement>(null);
   const viewer = useRef<HTMLElement>(null);
   const controls = useRef<HTMLDivElement>(null);
   const connection = useRef<PreviewConnection | null>(null);
@@ -33,7 +39,6 @@ export function PreviewViewer({ lang, basePath }: { lang: string; basePath: stri
   const [wantsAudio, setWantsAudio] = useState(false);
   const [seeking, setSeeking] = useState<number | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
-  const [immersive, setImmersive] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [activity, setActivity] = useState(0);
   const [playback, setPlayback] = useState<PlaybackState>({
@@ -43,7 +48,15 @@ export function PreviewViewer({ lang, basePath }: { lang: string; basePath: stri
   const canControl = connected && playback.enabled && !busy;
   const position = seeking ?? playback.position;
   const message = notice || (connected || status === "pair" ? "" : status === "disconnected" ? "connecting" : status);
-  const showControls = () => { setControlsVisible(true); setActivity(value => value + 1); };
+  const canHideControls = connected && !busy && seeking === null;
+  const showControls = useCallback(() => { setControlsVisible(true); setActivity(value => value + 1); }, []);
+  const hideControls = useCallback(() => {
+    if (canHideControls) {
+      // Move focus out before making the controls inert; the viewer can reveal them by keyboard.
+      if (controls.current?.contains(document.activeElement)) viewer.current?.focus({ preventScroll: true });
+      setControlsVisible(false);
+    }
+  }, [canHideControls]);
 
   useEffect(() => {
     let active = true;
@@ -51,7 +64,7 @@ export function PreviewViewer({ lang, basePath }: { lang: string; basePath: stri
       if (!active) return;
       if (update.type === "playback") setPlayback(current => ({ ...current, ...update }));
       else if (update.type === "range") setRange(update.range);
-      else if (update.type === "audioFailed") { setNotice("audioFailed"); setControlsVisible(true); }
+      else if (update.type === "audioFailed") { setNotice("audioFailed"); showControls(); }
       else {
         setStatus(update.type);
         setNotice("");
@@ -74,22 +87,30 @@ export function PreviewViewer({ lang, basePath }: { lang: string; basePath: stri
       session.close();
       connection.current = null;
     };
-  }, [basePath]);
+  }, [basePath, showControls]);
 
   useEffect(() => {
-    setControlsVisible(true);
-    if (!connected || !playback.playing || busy || seeking !== null || message) return;
+    if (!canHideControls) { setControlsVisible(true); return; }
     const timer = setTimeout(() => {
-      if (!controls.current?.querySelector(":focus-visible")) setControlsVisible(false);
+      if (!controls.current?.querySelector(":focus-visible")) hideControls();
     }, 3000);
     return () => clearTimeout(timer);
-  }, [connected, playback.playing, busy, seeking, message, activity]);
+  }, [canHideControls, activity, hideControls]);
 
   useEffect(() => {
-    const onFullscreen = () => setFullscreen(Boolean(document.fullscreenElement));
+    const media = video.current;
+    const onFullscreen = () => { setFullscreen(document.fullscreenElement === viewer.current); showControls(); };
+    const onVideoFullscreen = () => setFullscreen(true);
+    const onVideoInline = () => { setFullscreen(false); showControls(); };
     document.addEventListener("fullscreenchange", onFullscreen);
-    return () => document.removeEventListener("fullscreenchange", onFullscreen);
-  }, []);
+    media?.addEventListener("webkitbeginfullscreen", onVideoFullscreen);
+    media?.addEventListener("webkitendfullscreen", onVideoInline);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFullscreen);
+      media?.removeEventListener("webkitbeginfullscreen", onVideoFullscreen);
+      media?.removeEventListener("webkitendfullscreen", onVideoInline);
+    };
+  }, [showControls]);
 
   async function pair(event: FormEvent) {
     event.preventDefault();
@@ -129,20 +150,21 @@ export function PreviewViewer({ lang, basePath }: { lang: string; basePath: stri
 
   async function toggleFullscreen() {
     try {
-      if (immersive) setImmersive(false);
-      else if (document.fullscreenElement) await document.exitFullscreen();
-      else await viewer.current!.requestFullscreen();
-    } catch {
-      // iOS and embedded browsers may only support a viewport-filling fallback.
-      setImmersive(value => !value);
+      const media = video.current;
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else if (media?.webkitDisplayingFullscreen && media.webkitExitFullscreen) media.webkitExitFullscreen();
+      else if (viewer.current?.requestFullscreen && document.fullscreenEnabled !== false) await viewer.current.requestFullscreen();
+      // iPhone only exposes video fullscreen. Call it directly in the tap's user activation.
+      else if (media?.webkitEnterFullscreen) media.webkitEnterFullscreen();
+      else throw new Error("Fullscreen is unavailable");
+      setNotice("");
+    } catch (error) {
+      console.warn("Failed to change preview fullscreen mode", error);
+      setNotice("fullscreenFailed");
     }
     showControls();
   }
 
-  const hideControls = () => {
-    if (connected && playback.playing && !busy && seeking === null && !message
-      && !controls.current?.querySelector(":focus-visible")) setControlsVisible(false);
-  };
   const buttonClass = "size-11 text-white hover:bg-white/10 hover:text-white [&_svg]:size-5";
   return <>
     {status === "pair" && <main id="pairing" className="grid min-h-dvh place-items-center px-7 py-6">
@@ -164,11 +186,10 @@ export function PreviewViewer({ lang, basePath }: { lang: string; basePath: stri
     </main>}
     <section id="viewer" ref={viewer} hidden={status === "pair"} aria-label={t("preview:title")}
       tabIndex={0} onFocus={event => { if (event.currentTarget.matches(":focus-visible")) showControls(); }}
-      className={cn("relative h-dvh overflow-hidden bg-black text-white focus-visible:outline-2 focus-visible:-outline-offset-2", immersive && "fixed inset-0 z-50")}
+      className="relative h-dvh overflow-hidden bg-black text-white focus-visible:outline-2 focus-visible:-outline-offset-2"
       onPointerMove={event => { if (event.pointerType === "mouse") showControls(); }}
       onKeyDown={event => {
         showControls();
-        if (event.key === "Escape") setImmersive(false);
         if (event.code === "Space" && !(event.target as Element).closest("input,button,[role=slider]")) {
           event.preventDefault(); void control(playback.playing ? "pause" : "play");
         }
@@ -202,7 +223,7 @@ export function PreviewViewer({ lang, basePath }: { lang: string; basePath: stri
             <Button id="next" type="button" variant="ghost" size="icon" className={buttonClass} aria-label={t("preview:next")} disabled={!canControl} onClick={() => void control("next")}><SkipForward /></Button>
           </div>
           <Button id="audio" type="button" variant="ghost" size="icon" className={buttonClass} aria-label={t(wantsAudio ? "preview:audioOff" : "preview:audioOn")} aria-pressed={wantsAudio} disabled={!connected} onClick={() => void toggleAudio()}>{wantsAudio ? <Volume2 /> : <VolumeX />}</Button>
-          <Button id="fullscreen" type="button" variant="ghost" size="icon" className={buttonClass} aria-label={t(fullscreen || immersive ? "preview:exitFullscreen" : "preview:fullscreen")} onClick={() => void toggleFullscreen()}>{fullscreen || immersive ? <Minimize /> : <Expand />}</Button>
+          <Button id="fullscreen" type="button" variant="ghost" size="icon" className={buttonClass} aria-label={t(fullscreen ? "preview:exitFullscreen" : "preview:fullscreen")} onClick={() => void toggleFullscreen()}>{fullscreen ? <Minimize /> : <Expand />}</Button>
         </div>
       </div>
     </section>
