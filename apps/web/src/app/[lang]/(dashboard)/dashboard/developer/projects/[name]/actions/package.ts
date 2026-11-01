@@ -152,10 +152,20 @@ export async function retrievePackage(name: string) {
     }),
   );
 
+  // ダウンロード数は表示専用。リリース編集の state は件数を持たない保存応答で
+  // 置き換わるため、編集用の行からは外して別に渡す。
+  const { Release, ...rest } = pkg;
   return {
-    ...pkg,
+    ...rest,
     iconFileUrl: pkg.iconFile && contentPath(pkg.iconFile.id),
     PackageScreenshot: screenshots,
+    Release: Release.map(({ downloads: _downloads, ...release }) => release),
+    releaseDownloads: Release.map((release) => ({
+      id: release.id,
+      version: release.version,
+      published: release.published,
+      downloads: Number(release.downloads),
+    })),
   };
 }
 

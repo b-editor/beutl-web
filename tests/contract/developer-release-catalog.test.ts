@@ -16,6 +16,7 @@ vi.mock("../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/projects/
 vi.mock("../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/projects/[name]/package-info-form", () => ({ PackageInfoForm: () => null }));
 vi.mock("../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/projects/[name]/package-description-form", () => ({ PackageDescriptionForm: () => null }));
 vi.mock("../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/projects/[name]/package-details-form", () => ({ PackageDetailsForm: () => null }));
+vi.mock("../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/projects/[name]/package-downloads", () => ({ PackageDownloads: () => null }));
 vi.mock("../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/projects/[name]/package-pricing-form", () => ({ PackagePricingForm: () => null }));
 vi.mock("../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/projects/[name]/release-form", () => ({ ReleaseForm: mocks.releaseForm }));
 

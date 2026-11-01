@@ -3,7 +3,7 @@ import { Button } from "@beutl/ui/ui/button";
 import { Card, CardContent } from "@beutl/ui/ui/card";
 import { authOrSignIn } from "@/lib/auth-guard";
 import { getTranslation } from "@beutl/i18n";
-import { Eye, EyeOff } from "lucide-react";
+import { Download, Eye, EyeOff } from "lucide-react";
 import { retrievePackages } from "./actions";
 import Link from "next/link";
 
@@ -76,6 +76,10 @@ export default async function Page(props: { params: Promise<{ lang: string }> })
                       </Badge>
                     </div>
                   </div>
+                  <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                    <Download className="w-4 h-4" />
+                    {t("developer:downloads.count", { count: item.downloads })}
+                  </p>
                 </CardContent>
               </Card>
             </Link>

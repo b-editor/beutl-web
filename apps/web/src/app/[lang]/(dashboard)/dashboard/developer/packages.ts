@@ -12,6 +12,7 @@ export type Package = {
   iconFileUrl?: string;
   latestVersion?: string;
   published: boolean;
+  downloads: number;
 };
 
 type DevPackageRow = Awaited<
@@ -35,6 +36,11 @@ export function toPackages(rows: DevPackageRow[]): Package[] {
       iconFileUrl: (pkg.iconFile && contentPath(pkg.iconFile.id)) || undefined,
       latestVersion: releases[0]?.version,
       published: pkg.published,
+      // 全バージョンの合計。非公開にしたリリースの分も含める。
+      downloads: pkg.Release.reduce(
+        (sum, release) => sum + Number(release.downloads),
+        0,
+      ),
     };
   });
 }
