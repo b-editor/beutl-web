@@ -13,6 +13,8 @@ vi.mock("../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/projects/
   updateDisplayNameAndShortDescription: vi.fn(), updateDescription: vi.fn(), deletePackage: vi.fn(),
   changePackageVisibility: vi.fn(), uploadIcon: vi.fn(),
 }));
+// The async downloads summary is a Server Component; this suite renders on the client.
+vi.mock("../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/projects/[name]/package-downloads", () => ({ PackageDownloads: () => null }));
 import Page from "../../apps/web/src/app/[lang]/(dashboard)/dashboard/developer/projects/[name]/page";
 
 describe("nuspec-owned SDK metadata", () => {

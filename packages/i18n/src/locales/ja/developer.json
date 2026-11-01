@@ -91,6 +91,14 @@
     "packageTypeDescriptionTemplate": "テンプレートは templates/ 以下のオブジェクトテンプレート（JSON）を配布します。",
     "packageTypeDescriptionBoth": "materials/ 以下のメディアファイルと templates/ 以下のオブジェクトテンプレートの両方を配布します。"
   },
+  "downloads": {
+    "title": "ダウンロード数",
+    "total": "すべてのバージョンの合計",
+    "since": "2026 年 10 月から集計しています。",
+    "count_one": "{{count, number}} ダウンロード",
+    "count_other": "{{count, number}} ダウンロード",
+    "unpublished": "非公開"
+  },
   "screenshots": {
     "alreadyFirst": "既に先頭です",
     "alreadyLast": "既に末尾です",

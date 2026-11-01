@@ -188,6 +188,7 @@ export async function retrieveDevPackagesByUserId({
       Release: {
         select: {
           version: true,
+          downloads: true,
         },
       },
     },
@@ -459,6 +460,7 @@ export async function retrieveDevPackageByName({
           id: true,
           published: true,
           artifactLocked: true,
+          downloads: true,
           ReleaseTranslation: {
             select: {
               lang: true,

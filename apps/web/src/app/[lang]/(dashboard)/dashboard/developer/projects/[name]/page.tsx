@@ -4,6 +4,7 @@ import { retrievePackage } from "./actions/package";
 import { PackageInfoForm } from "./package-info-form";
 import { PackageDescriptionForm } from "./package-description-form";
 import { PackageDetailsForm } from "./package-details-form";
+import { PackageDownloads } from "./package-downloads";
 import { PackagePricingForm } from "./package-pricing-form";
 import { ReleaseForm } from "./release-form";
 import { TranslationModeProvider } from "./translation-mode";
@@ -68,6 +69,7 @@ export default async function Page(props: {
             <ReleaseForm pkg={pkg} lang={lang} languages={languages} beutlVersions={beutlVersions} ownerId={session.user.id} />
           </div>
           <div className="lg:basis-1/3">
+            <PackageDownloads pkg={pkg} lang={lang} />
             <PackageDetailsForm pkg={pkg} lang={lang} />
             {isAdminUser && pkg.audience === "USER" && <PackagePricingForm pkg={pkg} lang={lang} />}
           </div>

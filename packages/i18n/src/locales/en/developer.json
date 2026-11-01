@@ -91,6 +91,14 @@
     "packageTypeDescriptionTemplate": "Templates ship object templates (JSON) under templates/.",
     "packageTypeDescriptionBoth": "Ships both media files under materials/ and object templates under templates/."
   },
+  "downloads": {
+    "title": "Downloads",
+    "total": "Total across all versions",
+    "since": "Counted since October 2026.",
+    "count_one": "{{count, number}} download",
+    "count_other": "{{count, number}} downloads",
+    "unpublished": "Unpublished"
+  },
   "screenshots": {
     "alreadyFirst": "Already first",
     "alreadyLast": "Already last",
