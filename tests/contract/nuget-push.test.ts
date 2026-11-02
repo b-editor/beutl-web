@@ -124,6 +124,10 @@ describe("NuGet push target version", () => {
     await push("2.0.0", '<dependency id="Beutl.Extensibility" />');
     expect(targetVersions()).toEqual(["2.0.0-preview.9", "2.0.0-preview.9"]);
   });
+  it("keeps the previous target for a range the dashboard's release form would reject", async () => {
+    await push("2.0.0", '<dependency id="Beutl.Extensibility" version="[2.0.0-preview.10]" />');
+    expect(targetVersions()).toEqual(["2.0.0-preview.9", "2.0.0-preview.9"]);
+  });
   it("leaves a development library without a target", async () => {
     tx.package.findFirst.mockResolvedValue(existing);
     await push("2.0.0", '<dependency id="Beutl.Extensibility" version="2.0.0-preview.10" />');

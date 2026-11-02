@@ -1,5 +1,6 @@
 import { assertPackageIdNotReserved, packageNameFilter, nugetSearchableMetadata } from "@beutl/db";
-import { boundedBody, compareNugetVersions, normalizeNugetId, normalizeNugetVersion, type NugetMetadata } from "@beutl/core";
+import semver from "semver";
+import { boundedBody, compareNugetVersions, isValidNuGetVersionRange, normalizeNugetId, normalizeNugetVersion, type NugetMetadata } from "@beutl/core";
 import { createRelease, getDb, ReleaseIdentityConflictError, updateRelease, type PrismaTransaction } from "@beutl/db";
 import { createStorageOperations } from "../storage/files";
 import { blobReader, InvalidNugetPackageError, readNugetPackage } from "./archive";
@@ -62,12 +63,13 @@ async function checkIdentity(tx: PrismaTransaction, name: string, version: strin
 }
 
 // The Beutl versions a package says it runs on, read as Beutl's own package loader reads them (LocalPackage.cs).
-// A dependency with no version says nothing: NuGet reads it as the open range "(, )".
+// A dependency with no version says nothing: NuGet reads it as the open range "(, )". A range the dashboard's release
+// form would reject is skipped too, so that the release stays editable.
 function declaredTargetVersion(metadata: NugetMetadata): string | undefined {
   const dependencies = metadata.dependencyGroups.flatMap((group) => group.dependencies);
   const range = (id: string) => dependencies.find((dependency) => normalizeNugetId(dependency.id) === id)?.range.trim();
   const declared = range("beutl.sdk") ?? range("beutl.extensibility");
-  return declared && /\d/u.test(declared) ? declared : undefined;
+  return declared && /\d/u.test(declared) && (semver.valid(declared) || isValidNuGetVersionRange(declared)) ? declared : undefined;
 }
 
 export async function pushNugetPackage(request: Request, userId: string, execution?: Parameters<typeof createStorageOperations>[0]) {
