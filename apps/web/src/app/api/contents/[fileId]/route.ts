@@ -87,14 +87,15 @@ async function serveContent(
         ...contentCacheHeaders(false), "Referrer-Policy": "no-referrer" } });
     }
     const etag = contentEntityTag(file);
+    const download = new URL(request.url).searchParams.get("download") === "1";
     const deliveryHeaders = contentDeliveryHeaders(file.mimeType);
     const headers = {
       ...deliveryHeaders,
-      "Content-Disposition": contentDisposition(deliveryHeaders["Content-Disposition"], file.name),
+      "Content-Disposition": contentDisposition(download ? "attachment" : deliveryHeaders["Content-Disposition"], file.name),
       ...contentCacheHeaders(access.canUsePublicCache),
       ETag: etag,
     };
-    const variant = getContentImageVariant(request, file);
+    const variant = download ? null : getContentImageVariant(request, file);
     const variantHeaders = variant ? {
       ...headers,
       "Content-Type": "image/webp",

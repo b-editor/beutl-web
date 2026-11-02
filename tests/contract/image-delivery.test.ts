@@ -114,6 +114,28 @@ afterEach(async () => {
 });
 
 describe("image delivery", () => {
+  it("downloads original bytes even when the URL requests a cached preview", async () => {
+    await (await request(undefined, "?image=preview-1024")).arrayBuffer();
+    await Promise.all(pending);
+
+    const response = await request(undefined, "?image=preview-1024&download=1");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(response.headers.get("Content-Disposition")).toBe(
+      "attachment; filename=\"image.png\"; filename*=UTF-8''image.png",
+    );
+    expect(response.headers.get("ETag")).toBe(contentEntityTag(file()));
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES);
+
+    const metadata = await head(undefined, "?image=preview-1024&download=1");
+    expect(await metadata.text()).toBe("");
+    for (const name of ["Content-Type", "Content-Length", "Content-Disposition", "ETag"]) {
+      expect(metadata.headers.get(name)).toBe(response.headers.get(name));
+    }
+    expect(mocks.input).toHaveBeenCalledTimes(1);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["PUBLIC", "PRIVATE"] as const)("HEAD matches cached WebP GET metadata for %s images without encoding", async (visibility) => {
     mocks.findFileForContentAccess.mockResolvedValue({ ...file(), visibility });
     mocks.getSession.mockResolvedValue({ user: { id: "owner" } });
