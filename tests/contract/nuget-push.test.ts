@@ -32,10 +32,11 @@ beforeEach(() => {
   });
 });
 
-async function push(version = "2.0.0") {
+async function push(version = "2.0.0", dependencies = "") {
   const nuspec = `<package><metadata><id>Library</id><version>${version}</version><title>New title</title>
     <authors>Author</authors><description>New searchable description</description><summary>New summary</summary>
-    <tags>newtag sdk</tags><projectUrl>https://example.test/new</projectUrl></metadata></package>`;
+    <tags>newtag sdk</tags><projectUrl>https://example.test/new</projectUrl>
+    ${dependencies && `<dependencies><group targetFramework="net10.0">${dependencies}</group></dependencies>`}</metadata></package>`;
   return pushNugetPackage(new Request("https://nuget.example/api/v2/package", {
     method: "PUT", body: new Blob([zipSync({ "Library.nuspec": strToU8(nuspec) })]),
   }), "owner");
@@ -93,5 +94,43 @@ describe("NuGet push searchable metadata", () => {
     tx.package.findFirst.mockResolvedValueOnce({ ...existing, audience: "USER" }).mockResolvedValueOnce({ ...existing, audience: "USER" });
     await push();
     expect(tx.package.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("NuGet push target version", () => {
+  const user = { ...existing, audience: "USER", Release: [
+    { version: "1.0.0", targetVersion: "2.0.0-preview.9", published: true, nugetListed: true },
+  ] };
+  const targetVersions = () => [publication.createRelease, publication.updateRelease]
+    .map((publish) => publish.mock.calls[0]?.[0].targetVersion);
+
+  beforeEach(() => {
+    tx.package.findFirst.mockResolvedValue(user);
+  });
+
+  it("takes a user package's target from the Beutl version it depends on", async () => {
+    await push("2.0.0", '<dependency id="Beutl.Api" version="9.9.9" /><dependency id="Beutl.Extensibility" version="2.0.0-preview.10" />');
+    expect(targetVersions()).toEqual(["2.0.0-preview.10", "2.0.0-preview.10"]);
+  });
+  it("prefers Beutl.Sdk over Beutl.Extensibility, as Beutl's package loader does", async () => {
+    await push("2.0.0", '<dependency id="Beutl.Extensibility" version="2.0.0-preview.10" /><dependency id="beutl.sdk" version="[2.0.0-preview.11, )" />');
+    expect(targetVersions()).toEqual(["[2.0.0-preview.11, )", "[2.0.0-preview.11, )"]);
+  });
+  it("keeps the previous target when the package names no Beutl dependency", async () => {
+    await push("2.0.0", '<dependency id="Other.Library" version="2.0.0-preview.10" />');
+    expect(targetVersions()).toEqual(["2.0.0-preview.9", "2.0.0-preview.9"]);
+  });
+  it("keeps the previous target when the Beutl dependency names no version", async () => {
+    await push("2.0.0", '<dependency id="Beutl.Extensibility" />');
+    expect(targetVersions()).toEqual(["2.0.0-preview.9", "2.0.0-preview.9"]);
+  });
+  it("keeps the previous target for a range the dashboard's release form would reject", async () => {
+    await push("2.0.0", '<dependency id="Beutl.Extensibility" version="[2.0.0-preview.10]" />');
+    expect(targetVersions()).toEqual(["2.0.0-preview.9", "2.0.0-preview.9"]);
+  });
+  it("leaves a development library without a target", async () => {
+    tx.package.findFirst.mockResolvedValue(existing);
+    await push("2.0.0", '<dependency id="Beutl.Extensibility" version="2.0.0-preview.10" />');
+    expect(targetVersions()).toEqual(["", ""]);
   });
 });

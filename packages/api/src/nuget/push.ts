@@ -1,5 +1,6 @@
 import { assertPackageIdNotReserved, packageNameFilter, nugetSearchableMetadata } from "@beutl/db";
-import { boundedBody, compareNugetVersions, normalizeNugetId, normalizeNugetVersion } from "@beutl/core";
+import semver from "semver";
+import { boundedBody, compareNugetVersions, isValidNuGetVersionRange, normalizeNugetId, normalizeNugetVersion, type NugetMetadata } from "@beutl/core";
 import { createRelease, getDb, ReleaseIdentityConflictError, updateRelease, type PrismaTransaction } from "@beutl/db";
 import { createStorageOperations } from "../storage/files";
 import { blobReader, InvalidNugetPackageError, readNugetPackage } from "./archive";
@@ -61,6 +62,16 @@ async function checkIdentity(tx: PrismaTransaction, name: string, version: strin
   return pkg;
 }
 
+// The Beutl versions a package says it runs on, read as Beutl's own package loader reads them (LocalPackage.cs).
+// A dependency with no version says nothing: NuGet reads it as the open range "(, )". A range the dashboard's release
+// form would reject is skipped too, so that the release stays editable.
+function declaredTargetVersion(metadata: NugetMetadata): string | undefined {
+  const dependencies = metadata.dependencyGroups.flatMap((group) => group.dependencies);
+  const range = (id: string) => dependencies.find((dependency) => normalizeNugetId(dependency.id) === id)?.range.trim();
+  const declared = range("beutl.sdk") ?? range("beutl.extensibility");
+  return declared && /\d/u.test(declared) && (semver.valid(declared) || isValidNuGetVersionRange(declared)) ? declared : undefined;
+}
+
 export async function pushNugetPackage(request: Request, userId: string, execution?: Parameters<typeof createStorageOperations>[0]) {
   const body = await readPushBody(request);
   const nuget = await readNugetPackage(blobReader(body));
@@ -80,7 +91,7 @@ export async function pushNugetPackage(request: Request, userId: string, executi
       pkg ??= await tx.package.create({ data: { name: metadata.id, userId, audience: "DEVELOPMENT", published: true,
         ...searchable }, include: { Release: { orderBy: { createdAt: "desc" }, select: { version: true, targetVersion: true, published: true, nugetListed: true } } } });
       const targetVersion = pkg.audience === "USER"
-        ? pkg.Release.find((r) => r.targetVersion)?.targetVersion || "1.0.0-preview.10"
+        ? declaredTargetVersion(metadata) || pkg.Release.find((r) => r.targetVersion)?.targetVersion || "1.0.0-preview.10"
         : "";
       const release = await createRelease({ packageId: pkg.id, version: metadata.version, title: metadata.title,
         description: metadata.releaseNotes, targetVersion, published: false, prisma: tx });
