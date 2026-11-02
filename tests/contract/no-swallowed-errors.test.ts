@@ -1,14 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type * as TypeScript from "typescript";
-
-// typescript は apps/web の devDependency にしか無い。
-const ts = createRequire(
-  path.resolve(__dirname, "../../apps/web/package.json"),
-)("typescript") as typeof TypeScript;
+// TypeScript 7 はコンパイラ API を同梱しないので、公式の TS 6 パッケージで構文解析する。
+import ts from "@typescript/typescript6";
+import type * as TypeScript from "@typescript/typescript6";
 
 const root = path.resolve(__dirname, "../..");
 

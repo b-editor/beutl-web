@@ -1,7 +1,8 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+// TypeScript 7 does not ship the compiler API; this is the official TS 6 package for it.
+import ts from "@typescript/typescript6";
 import { describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));

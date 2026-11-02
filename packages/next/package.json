@@ -22,12 +22,12 @@
     "@beutl/db": "workspace:*",
     "@beutl/email": "workspace:*",
     "@beutl/i18n": "workspace:*",
-    "better-auth": "^1.7.12",
+    "better-auth": "^1.7.15",
     "server-only": "^0.0.1"
   },
   "devDependencies": {
-    "next": "16.4.2",
-    "typescript": "^6.0.3"
+    "next": "16.4.3",
+    "typescript": "^7.0.2"
   },
   "peerDependencies": {
     "next": "^15.5.0 || ^16.0.0"
