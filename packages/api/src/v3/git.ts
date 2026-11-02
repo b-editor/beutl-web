@@ -92,7 +92,7 @@ const git = new Hono<Routes>()
   .options(`${LFS_OBJECT}/tus/:resource{${UUID}}?`, authorize("write"), () => tusOptions())
   .post(`${LFS_OBJECT}/tus`, authorize("write"), tusVersion, (c) => createTusUpload(c.req.raw, lfsObject(c)))
   // Hono serves HEAD through GET routes; a tus resource has no GET representation.
-  .get(TUS_UPLOAD, authorize("write"), tusVersion, (c) => c.req.method === "HEAD"
+  .get(TUS_UPLOAD, authorize("write"), tusVersion, (c): Response | Promise<Response> => c.req.method === "HEAD"
     ? readTusUpload(lfsObject(c), c.req.param("resource"))
     : c.body(null, 405, { "Cache-Control": "no-store" }))
   .patch(TUS_UPLOAD, authorize("write"), tusVersion, (c) =>

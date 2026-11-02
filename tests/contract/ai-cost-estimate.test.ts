@@ -28,6 +28,7 @@ function modelPayload(id: string, pricing: Record<string, string>) {
         instruct_type: null,
       },
       links: { details: `/api/v1/models/${id}/endpoints` },
+      endpoints: ["/api/v1/chat/completions"],
       per_request_limits: null,
       default_parameters: {},
       supported_parameters: [],

@@ -1,7 +1,7 @@
 diff --git a/dist/esm/server/web/adapter.js b/dist/esm/server/web/adapter.js
 --- a/dist/esm/server/web/adapter.js
 +++ b/dist/esm/server/web/adapter.js
-@@ -326,7 +326,7 @@
+@@ -377,7 +377,7 @@
     * the external server does not have access to the original URL or its search parameters.
     * In these cases, forwarding the `_rsc` parameter is essential so that the external server
     * can perform the correct RSC hash validation.
@@ -13,7 +13,7 @@ diff --git a/dist/esm/server/web/adapter.js b/dist/esm/server/web/adapter.js
 diff --git a/dist/server/web/adapter.js b/dist/server/web/adapter.js
 --- a/dist/server/web/adapter.js
 +++ b/dist/server/web/adapter.js
-@@ -347,7 +347,7 @@
+@@ -398,7 +398,7 @@
     * the external server does not have access to the original URL or its search parameters.
     * In these cases, forwarding the `_rsc` parameter is essential so that the external server
     * can perform the correct RSC hash validation.

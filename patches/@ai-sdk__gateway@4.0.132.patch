@@ -1,7 +1,7 @@
 diff --git a/dist/index.js b/dist/index.js
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -1389,7 +1389,7 @@
+@@ -1403,7 +1403,7 @@
  					n,
  					...size && { size },
  					...aspectRatio && { aspectRatio },
@@ -10,7 +10,7 @@ diff --git a/dist/index.js b/dist/index.js
  					...providerOptions && { providerOptions },
  					...files && { files: files.map((file) => maybeEncodeImageFile(file)) },
  					...mask && { mask: maybeEncodeImageFile(mask) }
-@@ -1660,7 +1660,7 @@
+@@ -1674,7 +1674,7 @@
  			...resolution && { resolution },
  			...duration && { duration },
  			...fps && { fps },
@@ -22,7 +22,7 @@ diff --git a/dist/index.js b/dist/index.js
 diff --git a/src/gateway-image-model.ts b/src/gateway-image-model.ts
 --- a/src/gateway-image-model.ts
 +++ b/src/gateway-image-model.ts
-@@ -85,7 +85,7 @@
+@@ -87,7 +87,7 @@
            n,
            ...(size && { size }),
            ...(aspectRatio && { aspectRatio }),
@@ -34,7 +34,7 @@ diff --git a/src/gateway-image-model.ts b/src/gateway-image-model.ts
 diff --git a/src/gateway-video-model.ts b/src/gateway-video-model.ts
 --- a/src/gateway-video-model.ts
 +++ b/src/gateway-video-model.ts
-@@ -352,7 +352,7 @@
+@@ -354,7 +354,7 @@
        ...(resolution && { resolution }),
        ...(duration && { duration }),
        ...(fps && { fps }),

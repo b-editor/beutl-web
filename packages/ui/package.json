@@ -40,9 +40,9 @@
     "@radix-ui/react-toggle-group": "^1.2.1",
     "@radix-ui/react-tooltip": "^1.4.1",
     "class-variance-authority": "^0.7.1",
-    "i18next": "^26.5.6",
-    "lucide-react": "^1.61.0",
-    "react-i18next": "^17.1.0",
+    "i18next": "^26.7.1",
+    "lucide-react": "^1.66.0",
+    "react-i18next": "^17.1.11",
     "react-markdown": "^10.1.0",
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1"
@@ -50,8 +50,8 @@
   "devDependencies": {
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
-    "next": "16.4.2",
-    "typescript": "^6.0.3"
+    "next": "16.4.3",
+    "typescript": "^7.0.2"
   },
   "peerDependencies": {
     "next": "^15.5.0 || ^16.0.0",
