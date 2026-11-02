@@ -1276,12 +1276,13 @@ export function downloadTextFile(
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-// Generated media is served from this origin's authenticated content route, so
-// the browser honours `download` and the file lands with a usable name instead
-// of opening in a tab.
+// Request an attachment too, so the content route does not tell the browser to
+// display generated media inline when the user wants to save it.
 export function downloadFromUrl(url: string, filename: string) {
+  const downloadUrl = new URL(url, window.location.href);
+  downloadUrl.searchParams.set("download", "1");
   const anchor = document.createElement("a");
-  anchor.href = url;
+  anchor.href = downloadUrl.toString();
   anchor.download = filename;
   anchor.click();
 }

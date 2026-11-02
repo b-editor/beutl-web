@@ -59,9 +59,9 @@ function publicFile(mimeType: string) {
   };
 }
 
-async function requestContent(headers?: HeadersInit) {
+async function requestContent(headers?: HeadersInit, query = "") {
   return await GET(
-    new Request("http://localhost/api/contents/file-1", { headers }) as Parameters<
+    new Request(`http://localhost/api/contents/file-1${query}`, { headers }) as Parameters<
       typeof GET
     >[0],
     { params: Promise.resolve({ fileId: "file-1" }) },
@@ -161,6 +161,51 @@ describe("content route security", () => {
       expect(new Uint8Array(await response.arrayBuffer())).toEqual(
         CONTENT_BYTES,
       );
+    },
+  );
+
+  it.each(["image/png", "video/mp4", "audio/mpeg"])(
+    "downloads the owner's %s result as an attachment with its stored filename",
+    async (mimeType) => {
+      const name = "生成結果 1.mp4";
+      dbMocks.findFileForContentAccess.mockResolvedValue({
+        ...publicFile(mimeType),
+        name,
+        visibility: "PRIVATE",
+      });
+      authMocks.getSession.mockResolvedValue({ user: { id: "owner" } });
+      bucketMocks.get.mockResolvedValue({
+        body: CONTENT_BYTES,
+        size: CONTENT_BYTES.byteLength,
+      });
+
+      const response = await requestContent(undefined, "?download=1");
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Type")).toBe(mimeType);
+      expect(response.headers.get("Content-Disposition")).toBe(
+        `attachment; filename="____ 1.mp4"; filename*=UTF-8''${encodeURIComponent(name)}`,
+      );
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+      expect(response.headers.get("Content-Length")).toBe("4");
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(CONTENT_BYTES);
+    },
+  );
+
+  it.each([null, { user: { id: "other" } }])(
+    "does not allow a download to bypass private result ownership: %j",
+    async (session) => {
+      dbMocks.findFileForContentAccess.mockResolvedValue({
+        ...publicFile("video/mp4"),
+        visibility: "PRIVATE",
+      });
+      authMocks.getSession.mockResolvedValue(session);
+
+      const response = await requestContent(undefined, "?download=1");
+
+      expect(response.status).toBe(404);
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+      expect(bucketMocks.get).not.toHaveBeenCalled();
     },
   );
 
