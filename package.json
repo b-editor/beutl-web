@@ -32,7 +32,7 @@
   "devDependencies": {
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
-    "@types/node": "^24.19.2",
+    "@types/node": "^26.6.6",
     "@types/ws": "8.18.2",
     "@typescript/typescript6": "^6.0.2",
     "esbuild": "0.28.2",
