@@ -22,7 +22,7 @@
     "@beutl/db": "workspace:*",
     "@beutl/email": "workspace:*",
     "@beutl/i18n": "workspace:*",
-    "better-auth": "^1.7.15",
+    "better-auth": "^1.7.16",
     "server-only": "^0.0.1"
   },
   "devDependencies": {
