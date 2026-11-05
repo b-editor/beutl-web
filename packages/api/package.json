@@ -77,7 +77,7 @@
     "fast-xml-parser": "5.11.2",
     "hono": "^4.13.16",
     "isomorphic-git": "1.44.9",
-    "music-metadata": "^12.3.3",
+    "music-metadata": "^12.3.4",
     "negotiator": "^1.1.0",
     "semver": "^7.8.5",
     "spdx-exceptions": "2.5.0",
