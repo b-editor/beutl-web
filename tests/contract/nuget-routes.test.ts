@@ -530,14 +530,6 @@ describe("NuGet registry routes", () => {
     expect(models.release.update).toHaveBeenCalledWith({ where: { id: "release" }, data: { nugetListed: false, artifactLocked: true } });
     expect(bucket.put).not.toHaveBeenCalled();
   });
-  it("rejects publishing to a hidden project without reporting a duplicate or storing bytes", async () => {
-    models.package.findFirst.mockResolvedValueOnce({ ...pkg, published: false });
-    const body = new Blob([zipSync({ "Library.nuspec": strToU8(manifest.replace("1.0.0", "2.0.0")) })]);
-    const response = await request("/api/v2/package", { method: "PUT", headers: { "X-NuGet-ApiKey": secret }, body });
-    expect(response.status).toBe(400);
-    expect((await response.json()).message).toContain("Publish the project");
-    expect(bucket.put).not.toHaveBeenCalled();
-  });
   it.each(["DELETE", "POST"])("requires authentication and push scope for %s listing changes", async (method) => {
     expect((await request("/api/v2/package/library/1.0.0", { method })).status).toBe(401);
     canPush = false;

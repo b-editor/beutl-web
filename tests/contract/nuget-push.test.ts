@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { zipSync, strToU8 } from "fflate";
 import { setDbProvider } from "@beutl/db";
-import { pushNugetPackage } from "../../packages/api/src/nuget/push";
+import { NugetOwnershipError, pushNugetPackage } from "../../packages/api/src/nuget/push";
 
 const publication = vi.hoisted(() => ({ createRelease: vi.fn(), updateRelease: vi.fn(), store: vi.fn() }));
 vi.mock("@beutl/db", async (original) => ({ ...await original<typeof import("@beutl/db")>(),
@@ -53,16 +53,20 @@ describe("NuGet push searchable metadata", () => {
     expect(tx.package.findFirst).not.toHaveBeenCalled();
     expect(publication.store).not.toHaveBeenCalled();
   });
-  it.each(["USER", "DEVELOPMENT"])("rejects a hidden %s project before storing bytes", async (audience) => {
+  it.each(["USER", "DEVELOPMENT"])("takes a version for a hidden %s project and leaves the project hidden", async (audience) => {
     tx.package.findFirst.mockResolvedValue({ ...existing, audience, published: false });
-    await expect(push()).rejects.toThrow("Publish the project before pushing");
-    expect(publication.store).not.toHaveBeenCalled();
-    expect(publication.createRelease).not.toHaveBeenCalled();
+    await expect(push()).resolves.toEqual({ kind: "created" });
+    expect(publication.store).toHaveBeenCalledOnce();
+    expect(publication.createRelease).toHaveBeenCalledWith(expect.objectContaining({ packageId: "pkg", version: "2.0.0" }));
+    // The release is ready for when the project is shown; the push never shows the project itself.
+    expect(publication.updateRelease).toHaveBeenCalledWith(expect.objectContaining({ id: "new-release", published: true, fileId: "uploaded-file" }));
+    expect(tx.package.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ published: expect.anything() }) }));
+    expect(tx.package.create).not.toHaveBeenCalled();
   });
-  it("rechecks project visibility in the publication transaction", async () => {
-    tx.package.findFirst.mockResolvedValueOnce(existing).mockResolvedValueOnce({ ...existing, published: false });
-    await expect(push()).rejects.toThrow("Publish the project before pushing");
-    expect(publication.createRelease).not.toHaveBeenCalled();
+  it("still refuses a hidden project of another account", async () => {
+    tx.package.findFirst.mockResolvedValue({ ...existing, userId: "someone-else", published: false });
+    await expect(push()).rejects.toBeInstanceOf(NugetOwnershipError);
+    expect(publication.store).not.toHaveBeenCalled();
   });
   it("rejects another version of a deleted published ID before storing bytes", async () => {
     tx.package.findFirst.mockResolvedValue(null);
