@@ -79,7 +79,7 @@
     "isomorphic-git": "1.44.9",
     "music-metadata": "^12.3.3",
     "negotiator": "^1.1.0",
-    "semver": "^7.8.5",
+    "semver": "^7.8.6",
     "spdx-exceptions": "2.5.0",
     "spdx-license-ids": "3.0.24",
     "stripe": "^23.1.0",
