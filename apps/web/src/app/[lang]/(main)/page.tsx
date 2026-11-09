@@ -5,6 +5,7 @@ import { cn } from "@beutl/core";
 import EasingDemo, { type EasingName } from "@/components/easing-demo";
 import EffectsDemo from "@/components/effects-demo";
 import FeaturesToc from "@/components/features-toc";
+import AgentDemoVideo from "@/components/landing/agent-demo-video";
 import BentoSection from "@/components/landing/bento-section";
 import type { DownloadCtaProps } from "@/components/landing/download-cta";
 import DownloadSection, { DOWNLOAD_SECTION_ID } from "@/components/landing/download-section";
@@ -236,6 +237,17 @@ export default async function Home(props: {
         }
       >
         <PackagesMock t={t} lang={lang} packages={packages} />
+      </FeatureSection>
+
+      <FeatureSection
+        eyebrow={t("main:agentEyebrow")}
+        headline={t("main:agentHeadline")}
+        body={t("main:agentText")}
+      >
+        <AgentDemoVideo
+          label={t("main:agentVideoLabel")}
+          caption={t("main:agentVideoCaption")}
+        />
       </FeatureSection>
 
       <DownloadSection
