@@ -58,6 +58,9 @@
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS",
+    // Static assets ignore Range, and Safari will not play an MP4 without it.
+    // See src/lib/worker-video-range.ts.
+    "run_worker_first": ["/img/agent-demo.mp4", "/img/showcase.mp4"],
   },
   "images": {
     // Images Free is confirmed for this deployment. The Worker still requires

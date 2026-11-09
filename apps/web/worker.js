@@ -14,6 +14,7 @@
 // 境界ではない。
 import { fetchWithBodyLimit } from "./src/lib/worker-body-limit";
 import { keepRenderingAfterDisconnect } from "./src/lib/worker-render-disconnect";
+import { isRangeServedVideo, serveVideoWithRange } from "./src/lib/worker-video-range";
 import { freeImageTransformsEnabled, isContentImageTransformRequest } from "./src/lib/image-transform-policy";
 import apiRuntime, { isApiRequest, handlePreviewRequest } from "@beutl/api/runtime";
 import { resolveWorkerSecrets } from "@beutl/api/worker-secrets";
@@ -30,6 +31,7 @@ export { BucketCachePurge } from "./.open-next/worker.js";
 
 export default {
   async fetch(request, env, ctx) {
+    if (isRangeServedVideo(request)) return serveVideoWithRange(request, env.ASSETS);
     // Versioned APIs include streaming Git/LFS and storage uploads. Route them
     // before OpenNext buffers request bodies or applies the Web upload cap.
     const preview = await handlePreviewRequest(request, env);
