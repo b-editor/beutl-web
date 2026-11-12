@@ -14,7 +14,7 @@
   "agentEyebrow": "AI agents",
   "agentHeadline": "AI drafts it. You finish it.",
   "agentText": "An AI agent can build an edit in the project you have open while you watch. Everything it makes lands on the timeline as ordinary layers, keyframes, and effects, so you can take over at any point and keep going. Its edits and yours share one undo history.",
-  "agentVideoLabel": "Claude Code in Beutl's Terminal tab replaying recorded agent edits, sped up. The timeline fills with clips, the agent fixes a defect it found in its own render, and the project is then refined by hand in the Graph Editor, undone and redone, and played as the finished teaser.",
+  "agentVideoLabel": "Claude Code in Beutl's Terminal tab replaying recorded agent edits, sped up. The timeline fills with elements, the agent fixes a defect it found in its own render, and the project is then refined by hand in the Graph Editor, undone and redone, and played as the finished teaser.",
   "agentVideoCaption": "A replay of recorded agent edits, sped up, followed by editing the same project by hand.",
 
   "tocTimeline": "Timeline",
