@@ -1,5 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { transform } from "esbuild";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("hono", () => {
@@ -61,6 +63,25 @@ describe("Cloudflare Worker memory footprint", () => {
     );
     expect(prisma).not.toMatch(/from "@beutl\/api"/u);
     expect(provider).not.toMatch(/^import\s/mu);
+  });
+
+  // V8 holds the Worker's source on the heap as UTF-16 when any character is
+  // above U+00FF. `check:runtime` checks the whole bundle after a build.
+  it("minifies the Web Worker so its comments do not reach the heap", () => {
+    expect(source("apps/web/wrangler.jsonc")).toMatch(/^\s*"minify": true,$/mu);
+  });
+
+  it("keeps isomorphic-git within U+00FF once minified", async () => {
+    // esbuild escapes strings but keeps regular expression literals as written.
+    // patches/isomorphic-git@1.44.9.patch escapes the one U+FFFF they carried.
+    const requireApi = createRequire(new URL("../../packages/api/package.json", import.meta.url));
+    const root = dirname(requireApi.resolve("isomorphic-git"));
+    for (const entry of [
+      "index.js", "index.cjs", "managers/index.js", "managers/index.cjs", "models/index.js", "models/index.cjs",
+    ]) {
+      const { code } = await transform(readFileSync(join(root, entry), "utf8"), { loader: "js", minify: true });
+      expect(code.match(/[^\x00-\xff]/gu), entry).toBeNull();
+    }
   });
 
   it("uses the Zod release with the lower-memory schema representation", () => {

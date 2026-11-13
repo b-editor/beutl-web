@@ -1,0 +1,78 @@
+diff --git a/index.cjs b/index.cjs
+index 7530fedb6b927527f304de93ddaad03c7c4ca475..dbdb1b23ef5b9fd02c830228d5ba737663d799a1 100644
+--- a/index.cjs
++++ b/index.cjs
+@@ -510,7 +510,7 @@ class BufferCursor {
+ }
+ 
+ // Code units from U+D800 up. Only these can make the two orders differ.
+-const NEEDS_CODE_POINT_ORDER = /[\ud800-￿]/;
++const NEEDS_CODE_POINT_ORDER = /[\ud800-\uffff]/;
+ 
+ // Is the code unit at index i a surrogate with no partner? Such a unit is not valid Unicode.
+ // A high surrogate needs a low one after it. A low surrogate needs a high one before it.
+diff --git a/index.js b/index.js
+index 39ce103ddc72a4b2324de9ec5e016a690c58e892..76db01c4739d0fce63e1a3fefc04f59eb77fc504 100644
+--- a/index.js
++++ b/index.js
+@@ -503,7 +503,7 @@ class BufferCursor {
+ }
+ 
+ // Code units from U+D800 up. Only these can make the two orders differ.
+-const NEEDS_CODE_POINT_ORDER = /[\ud800-￿]/;
++const NEEDS_CODE_POINT_ORDER = /[\ud800-\uffff]/;
+ 
+ // Is the code unit at index i a surrogate with no partner? Such a unit is not valid Unicode.
+ // A high surrogate needs a low one after it. A low surrogate needs a high one before it.
+diff --git a/managers/index.cjs b/managers/index.cjs
+index 5f4e575349249c1ac0247600c6cbe421cb69f0f2..cd49a2a22c82b6e2efbfbda711fe1d93e3c56a0a 100644
+--- a/managers/index.cjs
++++ b/managers/index.cjs
+@@ -1084,7 +1084,7 @@ class BufferCursor {
+ }
+ 
+ // Code units from U+D800 up. Only these can make the two orders differ.
+-const NEEDS_CODE_POINT_ORDER = /[\ud800-￿]/;
++const NEEDS_CODE_POINT_ORDER = /[\ud800-\uffff]/;
+ 
+ // Is the code unit at index i a surrogate with no partner? Such a unit is not valid Unicode.
+ // A high surrogate needs a low one after it. A low surrogate needs a high one before it.
+diff --git a/managers/index.js b/managers/index.js
+index 986834f0b7fb97b0f57d6f9b953386433da877c1..d92991b84197e2af6f26477ea709152d71fc646d 100644
+--- a/managers/index.js
++++ b/managers/index.js
+@@ -1077,7 +1077,7 @@ class BufferCursor {
+ }
+ 
+ // Code units from U+D800 up. Only these can make the two orders differ.
+-const NEEDS_CODE_POINT_ORDER = /[\ud800-￿]/;
++const NEEDS_CODE_POINT_ORDER = /[\ud800-\uffff]/;
+ 
+ // Is the code unit at index i a surrogate with no partner? Such a unit is not valid Unicode.
+ // A high surrogate needs a low one after it. A low surrogate needs a high one before it.
+diff --git a/models/index.cjs b/models/index.cjs
+index dbfced07e6c9b431a7b189acc7da1c9f0d05d7d6..3455ffb381ee59ae3085cb17d273caf32445efc7 100644
+--- a/models/index.cjs
++++ b/models/index.cjs
+@@ -7,7 +7,7 @@ function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'defau
+ var pify = _interopDefault(require('pify'));
+ 
+ // Code units from U+D800 up. Only these can make the two orders differ.
+-const NEEDS_CODE_POINT_ORDER = /[\ud800-￿]/;
++const NEEDS_CODE_POINT_ORDER = /[\ud800-\uffff]/;
+ 
+ // Is the code unit at index i a surrogate with no partner? Such a unit is not valid Unicode.
+ // A high surrogate needs a low one after it. A low surrogate needs a high one before it.
+diff --git a/models/index.js b/models/index.js
+index 7a5b506f7d3481a784b577e2a52c716812213d47..9a08ea2a597048859efcb2bf5ccefccb09902ad2 100644
+--- a/models/index.js
++++ b/models/index.js
+@@ -1,7 +1,7 @@
+ import pify from 'pify';
+ 
+ // Code units from U+D800 up. Only these can make the two orders differ.
+-const NEEDS_CODE_POINT_ORDER = /[\ud800-￿]/;
++const NEEDS_CODE_POINT_ORDER = /[\ud800-\uffff]/;
+ 
+ // Is the code unit at index i a surrogate with no partner? Such a unit is not valid Unicode.
+ // A high surrogate needs a low one after it. A low surrogate needs a high one before it.

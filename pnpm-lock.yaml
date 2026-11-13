@@ -38,6 +38,9 @@ patchedDependencies:
   '@ai-sdk/gateway@4.0.132':
     hash: 6pi5tgybgcbtpof6c7xr75hig4
     path: patches/@ai-sdk__gateway@4.0.132.patch
+  isomorphic-git@1.44.9:
+    hash: wbvl3sxj4vbny5xtjiqihwr7xq
+    path: patches/isomorphic-git@1.44.9.patch
   next@16.4.3:
     hash: 5sslgv67muk62ogxg6owtdgj5q
     path: patches/next@16.4.3.patch
@@ -415,7 +418,7 @@ importers:
         version: 4.13.16
       isomorphic-git:
         specifier: 1.44.9
-        version: 1.44.9
+        version: 1.44.9(patch_hash=wbvl3sxj4vbny5xtjiqihwr7xq)
       music-metadata:
         specifier: ^12.3.3
         version: 12.3.3
@@ -8833,7 +8836,7 @@ snapshots:
 
   isexe@2.0.0: {}
 
-  isomorphic-git@1.44.9:
+  isomorphic-git@1.44.9(patch_hash=wbvl3sxj4vbny5xtjiqihwr7xq):
     dependencies:
       async-lock: 1.4.1
       clean-git-ref: 2.0.1

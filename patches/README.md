@@ -10,6 +10,20 @@ null/undefined in the shipped JavaScript and its TypeScript source.
 checks zero, nonzero and absent seeds on the outgoing HTTP requests. Remove
 this patch when upgrading to an SDK version that passes these tests without it.
 
+## isomorphic-git 1.44.9
+
+The published `NEEDS_CODE_POINT_ORDER` regular expression carries U+FFFF as a
+raw character rather than an escape. esbuild escapes non-ASCII characters in
+strings but writes regular expression literals as they are, so that one
+character survives minification into the Web Worker bundle. A single character
+above U+00FF makes V8 hold the whole source as UTF-16, doubling the heap the
+22 MB source takes. The patch writes it as `￿` in the ESM and CommonJS
+builds of the package, `managers` and `models` entry points.
+
+`tests/contract/cloudflare-memory-footprint.test.ts` minifies those entry
+points and checks that no character above U+00FF remains. Remove this patch
+when upgrading to an isomorphic-git version that passes this test without it.
+
 ## next 16.4.3
 
 Next strips `_rsc` from the URL that middleware sees and copies it back onto a

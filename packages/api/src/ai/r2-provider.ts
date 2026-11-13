@@ -3,7 +3,7 @@
 // compatible services to it, and storage/bucket-from-env.ts picks which one
 // the configuration names.
 // Keep its startup path dependency-free: instrumentation imports it before any
-// API route. The invocation scope loads async_hooks on demand.
+// API route. The invocation scope loads async_hooks on demand, once per isolate.
 const GLOBAL_KEY = "__BEUTL_R2_BUCKET_PROVIDER__";
 const SCOPE_KEY = "__BEUTL_R2_BUCKET_PROVIDER_SCOPE__";
 
@@ -60,11 +60,17 @@ export type R2BucketLike = {
 };
 
 type R2BucketProvider = () => R2BucketLike;
+type ProviderScope = import("node:async_hooks").AsyncLocalStorage<R2BucketProvider>;
 
-async function providerScope() {
-  const { AsyncLocalStorage } = await import("node:async_hooks");
+// Every import() call goes through the runtime's dynamic import path, which
+// waits for the isolate lock and fails outright when the isolate is short of
+// memory. Each API request binds a scope, so import only for the first one.
+async function providerScope(): Promise<ProviderScope> {
   const global = globalThis as Record<string, unknown>;
-  return (global[SCOPE_KEY] ??= new AsyncLocalStorage<R2BucketProvider>()) as InstanceType<typeof AsyncLocalStorage<R2BucketProvider>>;
+  const loaded = global[SCOPE_KEY] as ProviderScope | undefined;
+  if (loaded) return loaded;
+  const { AsyncLocalStorage } = await import("node:async_hooks");
+  return (global[SCOPE_KEY] ??= new AsyncLocalStorage<R2BucketProvider>()) as ProviderScope;
 }
 
 /** Bind a bucket to one scheduled invocation without changing concurrent requests. */
