@@ -35,7 +35,10 @@ export async function serveJwksFromCache(
   render: (request: Request) => Promise<Response>,
 ): Promise<Response> {
   const key = new Request(new URL(JWKS_PATH, request.url));
-  const cached = await cache.match(key).catch(() => undefined);
+  const cached = await cache.match(key).catch((error: unknown) => {
+    console.warn("Could not read the cached JWKS; rendering it instead", error);
+    return undefined;
+  });
   if (cached) return cached;
 
   const response = await render(request);
@@ -51,7 +54,9 @@ export async function serveJwksFromCache(
         },
       });
       await cache.put(key, stored);
-    })().catch(() => undefined));
+    })().catch((error: unknown) => {
+      console.warn("Could not cache the JWKS", error);
+    }));
   }
   return response;
 }

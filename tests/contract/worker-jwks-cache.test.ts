@@ -89,18 +89,26 @@ describe("serveJwksFromCache", () => {
     expect(cache.put).not.toHaveBeenCalled();
   });
 
-  it("renders when the cache cannot be read and ignores a failed write", async () => {
+  it("renders when the cache cannot be read and logs a failed write", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const failure = new Error("cache unavailable");
     const cache = {
-      match: vi.fn(async () => { throw new Error("cache unavailable"); }),
-      put: vi.fn(async () => { throw new Error("cache unavailable"); }),
+      match: vi.fn(async () => { throw failure; }),
+      put: vi.fn(async () => { throw failure; }),
     };
     const ctx = context();
 
-    const response = await serveJwksFromCache(new Request(URL_JWKS), ctx, cache,
-      renderer(() => Response.json(KEYS)));
+    try {
+      const response = await serveJwksFromCache(new Request(URL_JWKS), ctx, cache,
+        renderer(() => Response.json(KEYS)));
 
-    expect(await response.json()).toEqual(KEYS);
-    await expect(Promise.all(ctx.pending)).resolves.toBeDefined();
-    expect(cache.put).toHaveBeenCalledTimes(1);
+      expect(await response.json()).toEqual(KEYS);
+      await expect(Promise.all(ctx.pending)).resolves.toBeDefined();
+      expect(cache.put).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(warn.mock.calls.every((call) => call.includes(failure))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
