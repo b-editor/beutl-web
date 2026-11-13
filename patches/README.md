@@ -10,19 +10,26 @@ null/undefined in the shipped JavaScript and its TypeScript source.
 checks zero, nonzero and absent seeds on the outgoing HTTP requests. Remove
 this patch when upgrading to an SDK version that passes these tests without it.
 
-## isomorphic-git 1.44.9
+## isomorphic-git
 
 The published `NEEDS_CODE_POINT_ORDER` regular expression carries U+FFFF as a
-raw character rather than an escape. esbuild escapes non-ASCII characters in
-strings but writes regular expression literals as they are, so that one
-character survives minification into the Web Worker bundle. A single character
-above U+00FF makes V8 hold the whole source as UTF-16, doubling the heap the
-22 MB source takes. The patch writes it as `￿` in the ESM and CommonJS
-builds of the package, `managers` and `models` entry points.
+raw character rather than an escape (still so in 1.44.13). esbuild escapes
+non-ASCII characters in strings but writes regular expression literals as they
+are, so that one character survives minification into the Web Worker bundle. A
+single character above U+00FF makes V8 hold the whole source as UTF-16,
+doubling the heap the 22 MB source takes. The patch writes it as `\uffff` in
+the ESM and CommonJS builds of the package, `managers` and `models` entry
+points.
 
-`tests/contract/cloudflare-memory-footprint.test.ts` minifies those entry
-points and checks that no character above U+00FF remains. Remove this patch
-when upgrading to an isomorphic-git version that passes this test without it.
+The patch is keyed by the package name without a version, so pnpm applies it
+to whichever version is installed and Dependabot updates keep it. The patch
+made for 1.44.9 applied unchanged to 1.44.13, where two of its lines had moved.
+When the patch does not apply, pnpm only warns ("Could not apply patch") and
+installs the package unpatched. `tests/contract/cloudflare-memory-footprint.test.ts`
+minifies those entry points and fails if a character above U+00FF remains, as
+does the bundle check in `check:runtime`; regenerate the patch against the new
+version then. Remove the patch when pnpm warns that it could not apply it while
+that test passes: the release then escapes the character itself.
 
 ## next 16.4.3
 

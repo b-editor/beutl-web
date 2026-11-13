@@ -73,7 +73,7 @@ describe("Cloudflare Worker memory footprint", () => {
 
   it("keeps isomorphic-git within U+00FF once minified", async () => {
     // esbuild escapes strings but keeps regular expression literals as written.
-    // patches/isomorphic-git@1.44.9.patch escapes the one U+FFFF they carried.
+    // patches/isomorphic-git.patch escapes the one U+FFFF they carry.
     const requireApi = createRequire(new URL("../../packages/api/package.json", import.meta.url));
     const root = dirname(requireApi.resolve("isomorphic-git"));
     for (const entry of [

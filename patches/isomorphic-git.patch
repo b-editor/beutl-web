@@ -1,8 +1,8 @@
 diff --git a/index.cjs b/index.cjs
-index 7530fedb6b927527f304de93ddaad03c7c4ca475..dbdb1b23ef5b9fd02c830228d5ba737663d799a1 100644
+index f1a34e7f0e99905c2b220fdf8433bc97d40a268e..e63c37224c16f12fa59a9e523d8dcc3a3c35704f 100644
 --- a/index.cjs
 +++ b/index.cjs
-@@ -510,7 +510,7 @@ class BufferCursor {
+@@ -509,7 +509,7 @@ class BufferCursor {
  }
  
  // Code units from U+D800 up. Only these can make the two orders differ.
@@ -12,7 +12,7 @@ index 7530fedb6b927527f304de93ddaad03c7c4ca475..dbdb1b23ef5b9fd02c830228d5ba7376
  // Is the code unit at index i a surrogate with no partner? Such a unit is not valid Unicode.
  // A high surrogate needs a low one after it. A low surrogate needs a high one before it.
 diff --git a/index.js b/index.js
-index 39ce103ddc72a4b2324de9ec5e016a690c58e892..76db01c4739d0fce63e1a3fefc04f59eb77fc504 100644
+index 57e6192cc57529a2a7e0cae8000c6abcbea545cf..cb28be26462df1f3d7398407c0c8dcadc7920c70 100644
 --- a/index.js
 +++ b/index.js
 @@ -503,7 +503,7 @@ class BufferCursor {
@@ -25,10 +25,10 @@ index 39ce103ddc72a4b2324de9ec5e016a690c58e892..76db01c4739d0fce63e1a3fefc04f59e
  // Is the code unit at index i a surrogate with no partner? Such a unit is not valid Unicode.
  // A high surrogate needs a low one after it. A low surrogate needs a high one before it.
 diff --git a/managers/index.cjs b/managers/index.cjs
-index 5f4e575349249c1ac0247600c6cbe421cb69f0f2..cd49a2a22c82b6e2efbfbda711fe1d93e3c56a0a 100644
+index 20c6f7bfe3d407a304a871adefd69090645068c8..ffe81cd2e609c45ca5154ceb11a91dc96877cb42 100644
 --- a/managers/index.cjs
 +++ b/managers/index.cjs
-@@ -1084,7 +1084,7 @@ class BufferCursor {
+@@ -1083,7 +1083,7 @@ class BufferCursor {
  }
  
  // Code units from U+D800 up. Only these can make the two orders differ.
@@ -38,7 +38,7 @@ index 5f4e575349249c1ac0247600c6cbe421cb69f0f2..cd49a2a22c82b6e2efbfbda711fe1d93
  // Is the code unit at index i a surrogate with no partner? Such a unit is not valid Unicode.
  // A high surrogate needs a low one after it. A low surrogate needs a high one before it.
 diff --git a/managers/index.js b/managers/index.js
-index 986834f0b7fb97b0f57d6f9b953386433da877c1..d92991b84197e2af6f26477ea709152d71fc646d 100644
+index a5a73cc4a777485396cf0f0756255644d0ea6053..fec1b4ef5a4f1b8031b5c188fcde507dc32e2dce 100644
 --- a/managers/index.js
 +++ b/managers/index.js
 @@ -1077,7 +1077,7 @@ class BufferCursor {
