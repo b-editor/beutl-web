@@ -4,22 +4,33 @@
 import { getDb } from "@beutl/db";
 import { localizedDisplayName, localizedShortDescription, selectPricing, packageTypeWhere } from "@beutl/core";
 import type { PackageTypeFilter } from "@beutl/core";
-import { existsUserPaymentHistory, packageTranslationSelect } from "@beutl/db";
+import { existsUserPaymentHistory, findPaidPackageIds, packageTranslationSelect } from "@beutl/db";
 import { contentPath } from "./content-url";
 import { guessCurrency } from "./currency";
 
-export async function packageOwned(pkgId: string, userId: string) {
-  const db = await getDb();
-  return !!(await db.userPackage.findFirst({
-    where: {
-      userId: userId,
-      packageId: pkgId,
-    },
-  }));
-}
-
 export async function packagePaied(pkgId: string, userId: string) {
   return existsUserPaymentHistory({ userId, packageId: pkgId });
+}
+
+// The list endpoints read these flags for a whole page in one query each, not per package.
+export async function paidPackageIds(pkgIds: string[], userId: string | null | undefined) {
+  if (!userId) return new Set<string>();
+  return new Set(await findPaidPackageIds({ userId, packageIds: pkgIds }));
+}
+
+export async function ownedPackageIds(pkgIds: string[], userId: string | null | undefined) {
+  if (!userId || pkgIds.length === 0) return new Set<string>();
+  const db = await getDb();
+  const owned = await db.userPackage.findMany({
+    where: {
+      userId: userId,
+      packageId: { in: pkgIds },
+    },
+    select: {
+      packageId: true,
+    },
+  });
+  return new Set(owned.map((row) => row.packageId));
 }
 
 export type ListedPackage = {
@@ -29,6 +40,12 @@ export type ListedPackage = {
   shortDescription: string;
   userName: string | null;
   userId: string;
+  profile: {
+    userName: string;
+    displayName: string;
+    bio: string | null;
+    iconFileId: string | null;
+  } | null;
   iconFileUrl: string | null;
   iconFileId: string | null;
   tags: string[];
@@ -95,6 +112,9 @@ export async function retrievePackages(
           Profile: {
             select: {
               userName: true,
+              displayName: true,
+              bio: true,
+              iconFileId: true,
             },
           },
         },
@@ -138,6 +158,7 @@ export async function retrievePackages(
         shortDescription: localizedShortDescription(pkg, lang ?? ""),
         userName: pkg.user.Profile?.userName || null,
         userId: pkg.userId,
+        profile: pkg.user.Profile,
         iconFileUrl: url,
         iconFileId: pkg.iconFileId,
         tags: pkg.tags,

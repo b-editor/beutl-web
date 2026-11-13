@@ -65,22 +65,23 @@ export async function getPackagePublishedByIdOrThrow({
   });
 }
 
-export async function findPackageForLibraryResponse({
-  id: pkgId,
+export async function findPackagesForLibraryResponse({
+  ids,
   currency,
   lang,
   prisma,
 }: {
-  id: string;
+  ids: string[];
   currency: string | null;
   lang?: string;
   prisma?: PrismaTransaction;
 }) {
+  if (ids.length === 0) return [];
   const db = prisma ?? await getDb();
-  return await db.package.findFirst({
+  return await db.package.findMany({
     where: {
       audience: "USER",
-      id: pkgId,
+      id: { in: ids },
     },
     select: {
       published: true,

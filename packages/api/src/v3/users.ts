@@ -6,6 +6,7 @@ import { getPackages, mapPackage } from "../api/packages-db";
 import { findUserIdByUserName, profileUserNameFilter } from "@beutl/db";
 import { getUserProfile } from "./user";
 import { getLanguage } from "../lang-utils";
+import { paidPackageIds } from "../store-utils";
 
 const app = new Hono()
   .get("/:name", async (c) => {
@@ -42,6 +43,7 @@ const app = new Hono()
       currency: currency ?? undefined,
       lang,
     });
+    const paid = await paidPackageIds(packages.map((pkg) => pkg.id), currentUserId);
 
     return c.json(
       await Promise.all(
@@ -53,6 +55,7 @@ const app = new Hono()
               pkg,
               request: c.req.raw,
               lang,
+              paid: paid.has(pkg.id),
             }),
         ),
       ),

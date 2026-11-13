@@ -3,13 +3,12 @@ import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import {
   type ListedPackage,
-  packageOwned,
-  packagePaied,
+  ownedPackageIds,
+  paidPackageIds,
   retrievePackages,
 } from "../store-utils";
 import { getUserId } from "../api/auth";
 import { getContentUrl } from "../content-url";
-import { findProfileForDiscover } from "@beutl/db";
 import { PACKAGE_TYPE_FILTERS } from "@beutl/core";
 import { getLanguage } from "../lang-utils";
 
@@ -37,38 +36,37 @@ const featuredQuerySchema = z.object({
   lang: langSchema,
 });
 
-async function mapPackage(pkg: ListedPackage, userId: string | null, request?: Request) {
-  const profile = await findProfileForDiscover({
-    userId: pkg.userId,
-  });
-  let paid = false;
-  let owned = false;
-  if (userId != null) {
-    paid = await packagePaied(pkg.id, userId);
-    owned = await packageOwned(pkg.id, userId);
-  }
+async function mapPackages(packages: ListedPackage[], userId: string | null, request?: Request) {
+  const ids = packages.map((pkg) => pkg.id);
+  const [paid, owned] = await Promise.all([
+    paidPackageIds(ids, userId),
+    ownedPackageIds(ids, userId),
+  ]);
 
-  return {
-    id: pkg.id,
-    name: pkg.name,
-    displayName: pkg.displayName,
-    shortDescription: pkg.shortDescription,
-    tags: pkg.tags,
-    logoId: pkg.iconFileId || null,
-    logoUrl: await getContentUrl(pkg.iconFileId, request),
-    currency: pkg.price?.currency || null,
-    price: pkg.price?.price || null,
-    paid: paid,
-    owned: owned,
-    owner: {
-      id: pkg.userId,
-      name: profile?.userName || "",
-      displayName: profile?.displayName || "",
-      bio: profile?.bio,
-      iconId: profile?.iconFileId,
-      iconUrl: await getContentUrl(profile?.iconFileId, request),
-    },
-  };
+  return await Promise.all(packages.map(async (pkg) => {
+    const profile = pkg.profile;
+    return {
+      id: pkg.id,
+      name: pkg.name,
+      displayName: pkg.displayName,
+      shortDescription: pkg.shortDescription,
+      tags: pkg.tags,
+      logoId: pkg.iconFileId || null,
+      logoUrl: await getContentUrl(pkg.iconFileId, request),
+      currency: pkg.price?.currency || null,
+      price: pkg.price?.price || null,
+      paid: paid.has(pkg.id),
+      owned: owned.has(pkg.id),
+      owner: {
+        id: pkg.userId,
+        name: profile?.userName || "",
+        displayName: profile?.displayName || "",
+        bio: profile?.bio,
+        iconId: profile?.iconFileId,
+        iconUrl: await getContentUrl(profile?.iconFileId, request),
+      },
+    };
+  }));
 }
 
 const app = new Hono()
@@ -81,11 +79,8 @@ const app = new Hono()
       offset: query.offset,
       count: query.count,
     }, lang);
-    const result = await Promise.all(
-      packages.map(async (pkg) => await mapPackage(pkg, userId, c.req.raw)),
-    );
 
-    return c.json(result);
+    return c.json(await mapPackages(packages, userId, c.req.raw));
   })
   .get("/featured", zValidator("query", featuredQuerySchema), async (c) => {
     const query = c.req.valid("query");
@@ -93,11 +88,8 @@ const app = new Hono()
     const lang = query.lang ?? await getLanguage(c.req.raw);
 
     const packages = await retrievePackages(undefined, c.req.raw, query.type, undefined, lang);
-    const result = await Promise.all(
-      packages.map(async (pkg) => await mapPackage(pkg, userId, c.req.raw)),
-    );
 
-    return c.json(result);
+    return c.json(await mapPackages(packages, userId, c.req.raw));
   });
 
 export default app;

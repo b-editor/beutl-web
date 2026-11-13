@@ -4,7 +4,7 @@ import { getUserId } from "../api/auth";
 import { apiErrorResponse } from "../api/error";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
-import { packageOwned, packagePaied } from "../store-utils";
+import { ownedPackageIds, packagePaied, paidPackageIds } from "../store-utils";
 import { guessCurrency } from "../currency";
 import { compareNugetVersions, localizedDisplayName, localizedReleaseDescription, localizedShortDescription } from "@beutl/core";
 import { getContentUrl } from "../content-url";
@@ -12,9 +12,9 @@ import { selectPricing } from "@beutl/core";
 import { getLanguage } from "../lang-utils";
 import {
   existsPaidPricingForPackage,
-  findPackageForLibraryResponse,
+  findPackagesForLibraryResponse,
 } from "@beutl/db";
-import { findReleaseForLibrary } from "@beutl/db";
+import { findReleasesForLibrary } from "@beutl/db";
 import { findUserForLibrary } from "@beutl/db";
 import {
   createUserPackage,
@@ -29,77 +29,84 @@ const acquireSchema = z.object({
   lang: z.string().optional(),
 });
 
-async function createResponse(
-  pkgId: string,
+// The queries cover every package at once, so a larger library adds no database round trips.
+// Unpublished and missing packages are left out; the rest keep the order of pkgIds.
+async function createResponses(
+  pkgIds: string[],
   userId: string | null,
   request?: Request,
   lang?: string,
 ) {
   const currency = await guessCurrency(request);
   const displayLang = lang ?? await getLanguage(request);
-  const pkg = await findPackageForLibraryResponse({
-    id: pkgId,
+  const found = await findPackagesForLibraryResponse({
+    ids: pkgIds,
     currency,
     lang: displayLang,
   });
-  if (!pkg || !pkg.published) {
-    return null;
+  const publishedById = new Map(found.filter((pkg) => pkg.published).map((pkg) => [pkg.id, pkg]));
+  const packages = pkgIds.flatMap((id) => publishedById.get(id) ?? []);
+  const latestReleaseIds = new Map<string, string>();
+  for (const pkg of packages) {
+    pkg.Release.sort((a, b) => {
+      return compareNugetVersions(b.version, a.version);
+    });
+    const latestReleaseId = pkg.Release?.[0]?.id;
+    if (latestReleaseId) latestReleaseIds.set(pkg.id, latestReleaseId);
   }
-  const profile = pkg.user.Profile;
-  pkg.Release.sort((a, b) => {
-    return compareNugetVersions(b.version, a.version);
-  });
-  const latestReleaseId = pkg.Release?.[0]?.id;
-  const latestRelease = latestReleaseId
-    ? await findReleaseForLibrary({
-      id: latestReleaseId,
+
+  const ids = packages.map((pkg) => pkg.id);
+  const [releases, paid, owned] = await Promise.all([
+    findReleasesForLibrary({
+      ids: [...latestReleaseIds.values()],
       lang: displayLang,
-    })
-    : null;
+    }),
+    paidPackageIds(ids, userId),
+    ownedPackageIds(ids, userId),
+  ]);
+  const releasesById = new Map(releases.map((release) => [release.id, release]));
 
-  let paid = false;
-  let owned = false;
-  if (userId != null) {
-    paid = await packagePaied(pkg.id, userId);
-    owned = await packageOwned(pkg.id, userId);
-  }
+  return await Promise.all(packages.map(async (pkg) => {
+    const profile = pkg.user.Profile;
+    const latestReleaseId = latestReleaseIds.get(pkg.id);
+    const latestRelease = latestReleaseId ? releasesById.get(latestReleaseId) : undefined;
+    const price = selectPricing(pkg.packagePricing, currency);
 
-  const price = selectPricing(pkg.packagePricing, currency);
-
-  return {
-    package: {
-      id: pkg.id,
-      name: pkg.name,
-      displayName: localizedDisplayName(pkg, displayLang) || null,
-      shortDescription: localizedShortDescription(pkg, displayLang),
-      tags: pkg.tags,
-      logoId: pkg.iconFileId,
-      logoUrl: await getContentUrl(pkg.iconFileId, request),
-      currency: price?.currency || null,
-      price: price?.price || null,
-      paid: paid,
-      owned: owned,
-      owner: {
-        id: pkg.userId,
-        name: profile?.userName || "",
-        displayName: profile?.displayName || "",
-        bio: profile?.bio || null,
-        iconId: profile?.iconFileId || null,
-        iconUrl: await getContentUrl(profile?.iconFileId, request),
+    return {
+      package: {
+        id: pkg.id,
+        name: pkg.name,
+        displayName: localizedDisplayName(pkg, displayLang) || null,
+        shortDescription: localizedShortDescription(pkg, displayLang),
+        tags: pkg.tags,
+        logoId: pkg.iconFileId,
+        logoUrl: await getContentUrl(pkg.iconFileId, request),
+        currency: price?.currency || null,
+        price: price?.price || null,
+        paid: paid.has(pkg.id),
+        owned: owned.has(pkg.id),
+        owner: {
+          id: pkg.userId,
+          name: profile?.userName || "",
+          displayName: profile?.displayName || "",
+          bio: profile?.bio || null,
+          iconId: profile?.iconFileId || null,
+          iconUrl: await getContentUrl(profile?.iconFileId, request),
+        },
       },
-    },
-    latestRelease: latestRelease
-      ? {
-        id: latestRelease.id,
-        version: latestRelease.version,
-        title: latestRelease.title,
-        description: localizedReleaseDescription(latestRelease, displayLang),
-        targetVersion: latestRelease.targetVersion,
-        fileId: latestRelease.fileId,
-        fileUrl: latestRelease.fileId ? await nugetFileUrl(latestRelease.fileId, userId) : null,
-      }
-      : null,
-  };
+      latestRelease: latestRelease
+        ? {
+          id: latestRelease.id,
+          version: latestRelease.version,
+          title: latestRelease.title,
+          description: localizedReleaseDescription(latestRelease, displayLang),
+          targetVersion: latestRelease.targetVersion,
+          fileId: latestRelease.fileId,
+          fileUrl: latestRelease.fileId ? await nugetFileUrl(latestRelease.fileId, userId) : null,
+        }
+        : null,
+    };
+  }));
 }
 
 const app = new Hono()
@@ -123,7 +130,7 @@ const app = new Hono()
       return c.json(await apiErrorResponse("userNotFound"), { status: 404 });
     }
 
-    const pkg = await createResponse(req.packageId, userId, c.req.raw, req.lang);
+    const [pkg] = await createResponses([req.packageId], userId, c.req.raw, req.lang);
     if (!pkg) {
       return c.json(await apiErrorResponse("packageNotFound"), { status: 404 });
     }
@@ -173,12 +180,12 @@ const app = new Hono()
     });
 
     const lang = c.req.query("lang") ?? await getLanguage(c.req.raw);
-    const items = await Promise.all(
-      packages.map(
-        async (pkg) => await createResponse(pkg.packageId, userId, c.req.raw, lang),
-      ),
-    );
-    return c.json(items.filter((item) => item !== null));
+    return c.json(await createResponses(
+      packages.map((pkg) => pkg.packageId),
+      userId,
+      c.req.raw,
+      lang,
+    ));
   })
   .delete("/:name", async (c) => {
     const name = c.req.param("name");

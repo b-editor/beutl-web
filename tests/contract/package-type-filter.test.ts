@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const dbMocks = vi.hoisted(() => ({
   getDb: vi.fn(),
   existsUserPaymentHistory: vi.fn(),
-  findProfileForDiscover: vi.fn(),
+  findPaidPackageIds: vi.fn(),
   packageTranslationSelect: vi.fn(() => ({ PackageTranslation: {} })),
 }));
 const authMocks = vi.hoisted(() => ({
@@ -36,10 +36,10 @@ beforeEach(() => {
   findMany.mockResolvedValue([]);
   dbMocks.getDb.mockResolvedValue({
     package: { findMany },
-    userPackage: { findFirst: vi.fn().mockResolvedValue(null) },
+    userPackage: { findMany: vi.fn().mockResolvedValue([]) },
   });
   dbMocks.existsUserPaymentHistory.mockResolvedValue(false);
-  dbMocks.findProfileForDiscover.mockResolvedValue(null);
+  dbMocks.findPaidPackageIds.mockResolvedValue([]);
   authMocks.getUserId.mockResolvedValue(null);
 });
 

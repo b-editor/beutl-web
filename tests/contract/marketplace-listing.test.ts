@@ -8,29 +8,38 @@ import library from "../../packages/api/src/v3/library";
 function pkg(id: string, published = true) {
   return {
     id, name: id, displayName: null, shortDescription: "", tags: [], published,
-    iconFileId: null, userId: "publisher", user: { Profile: null }, packagePricing: [], Release: [],
+    iconFileId: null, userId: "publisher", user: { Profile: null as { userName: string } | null },
+    packagePricing: [], Release: [] as { id: string; version: string }[],
   };
 }
 type Package = ReturnType<typeof pkg>;
+type Query = { where?: { id?: { in: string[] }; packageId?: { in: string[] } }; skip?: number; take?: number };
+const inIds = (ids: { in: string[] } | undefined, id: string) => !ids || ids.in.includes(id);
 
 describe("marketplace list contracts", () => {
   let packages: Package[];
+  let releases: { id: string; version: string; title: string; description: string; targetVersion: null; fileId: null }[];
   let findMany: ReturnType<typeof vi.fn>;
+  let paidFindMany: ReturnType<typeof vi.fn>;
+  let ownedFindMany: ReturnType<typeof vi.fn>;
+  let releaseFindMany: ReturnType<typeof vi.fn>;
+  let profileFindFirst: ReturnType<typeof vi.fn>;
   beforeEach(() => {
     packages = [pkg("p3"), pkg("p2"), pkg("p1")];
-    findMany = vi.fn(async (query) => packages.slice(query.skip ?? 0,
-      query.take === undefined ? undefined : (query.skip ?? 0) + query.take));
+    releases = [];
+    findMany = vi.fn(async (query: Query) => packages.filter((row) => inIds(query.where?.id, row.id))
+      .slice(query.skip ?? 0, query.take === undefined ? undefined : (query.skip ?? 0) + query.take));
+    paidFindMany = vi.fn(async () => []);
+    ownedFindMany = vi.fn(async ({ where }: Query) => ["p3", "hidden", "gone", "p1"]
+      .filter((id) => inIds(where?.packageId, id)).map((packageId) => ({ packageId })));
+    releaseFindMany = vi.fn(async ({ where }: Query) => releases.filter((row) => inIds(where?.id, row.id)));
+    profileFindFirst = vi.fn(async () => null);
     setDbProvider(async () => ({
-      package: {
-        findMany,
-        findFirst: async ({ where }: { where: { id: string } }) => packages.find((row) => row.id === where.id) ?? null,
-      },
-      profile: { findFirst: async () => null },
-      userPaymentHistory: { findFirst: async () => null },
-      userPackage: {
-        findFirst: async () => null,
-        findMany: async () => [{ packageId: "p3" }, { packageId: "hidden" }, { packageId: "gone" }, { packageId: "p1" }],
-      },
+      package: { findMany },
+      profile: { findFirst: profileFindFirst },
+      release: { findMany: releaseFindMany },
+      userPaymentHistory: { findMany: paidFindMany },
+      userPackage: { findMany: ownedFindMany },
     }) as never);
   });
   it("applies count and offset before mapping search results", async () => {
@@ -58,6 +67,18 @@ describe("marketplace list contracts", () => {
     await discover.request(path);
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 30, skip: 0 }));
   });
+  it("reads the owners with the page and the paid and owned flags in one query each", async () => {
+    packages[1].user.Profile = { userName: "maker" };
+    paidFindMany.mockResolvedValue([{ packageId: "p2" }]);
+    const body = await (await discover.request("/featured")).json();
+    expect(body.map((row: { id: string; paid: boolean; owned: boolean; owner: { name: string } }) =>
+      [row.id, row.paid, row.owned, row.owner.name])).toEqual([
+      ["p3", false, true, ""], ["p2", true, false, "maker"], ["p1", false, true, ""],
+    ]);
+    expect(paidFindMany).toHaveBeenCalledOnce();
+    expect(ownedFindMany).toHaveBeenCalledOnce();
+    expect(profileFindFirst).not.toHaveBeenCalled();
+  });
   it("omits unpublished and missing packages while retaining visible library entries", async () => {
     packages.push(pkg("hidden", false));
     const response = await library.request("/");
@@ -69,5 +90,16 @@ describe("marketplace list contracts", () => {
   it("returns an empty array when all acquired packages are hidden or missing", async () => {
     packages = packages.map((row) => ({ ...row, published: false }));
     expect(await (await library.request("/")).json()).toEqual([]);
+  });
+  it("loads the library and the latest releases of its packages in one query each", async () => {
+    packages[0].Release = [{ id: "r9", version: "1.9.0" }, { id: "r10", version: "1.10.0" }];
+    packages[2].Release = [{ id: "r1", version: "1.0.0" }];
+    releases = ["r10", "r1"].map((id) => ({ id, version: id, title: "", description: "", targetVersion: null, fileId: null }));
+    const body = await (await library.request("/")).json();
+    expect(body.map((row: { package: Package; latestRelease: { id: string } | null }) =>
+      [row.package.id, row.latestRelease?.id])).toEqual([["p3", "r10"], ["p1", "r1"]]);
+    expect(findMany).toHaveBeenCalledOnce();
+    expect(releaseFindMany).toHaveBeenCalledOnce();
+    expect(releaseFindMany.mock.calls[0][0].where.id).toEqual({ in: ["r10", "r1"] });
   });
 });

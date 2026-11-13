@@ -25,15 +25,19 @@ beforeEach(() => {
   vi.stubEnv("NUGET_DOWNLOAD_SECRET", "test-download-secret");
   vi.stubEnv("NUGET_PUBLIC_ORIGIN", origin);
   setDbProvider(async () => ({
-    package: { findFirst: async () => pkg() },
+    package: { findFirst: async () => pkg(), findMany: async () => [pkg()] },
     release: { findFirst: async () => ({ ...release, published }), findMany: async () => [{ ...release, published }], updateMany: async () => ({ count: 1 }) },
     file: { findFirst: async () => ({ id: "file", name: "Library.nupkg", size: 4n, objectKey: "object", userId: "owner", visibility: "DEDICATED",
       Package: [], Profile: [], PackageScreenshot: [], Release: [{ published, package: pkg() }] }) },
     user: { findUnique: async () => ({ id: "buyer" }) },
     userPackage: { findMany: async () => [{ packageId: "pkg" }], findFirst: async () => ({ id: "acquired" }), count: async () => 1 },
     packagePricing: { findFirst: async () => paid ? { id: "price" } : null },
-    userPaymentHistory: { findFirst: async ({ where }: { where: { userId: string } }) =>
-      purchased && where.userId === "buyer" ? { id: "purchase" } : null },
+    userPaymentHistory: {
+      findFirst: async ({ where }: { where: { userId: string } }) =>
+        purchased && where.userId === "buyer" ? { id: "purchase" } : null,
+      findMany: async ({ where }: { where: { userId: string } }) =>
+        purchased && where.userId === "buyer" ? [{ packageId: "pkg" }] : [],
+    },
   }) as never);
   setR2BucketProvider(() => ({ get: async () => ({ body: new Blob(["test"]).stream() }) }) as never);
 });
