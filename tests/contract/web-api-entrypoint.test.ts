@@ -63,6 +63,34 @@ describe("public Web Worker API entrypoint", () => {
   });
   afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
+  it("answers repeated key set fetches from the cache without starting Next", async () => {
+    const store = new Map<string, Response>();
+    vi.stubGlobal("caches", { default: {
+      match: async (request: Request) => store.get(request.url)?.clone(),
+      put: async (request: Request, response: Response) => { store.set(request.url, response); },
+    } });
+    try {
+      const keys = { keys: [{ kid: "k1", kty: "EC", alg: "ES256" }] };
+      mocks.next.mockImplementation(async () => Response.json(keys));
+      for (let i = 0; i < 2; i++) {
+        const ctx = context();
+        const response = await web.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/auth/jwks`), env, ctx);
+        expect(await response.json()).toEqual(keys);
+        await Promise.all(ctx.pending);
+      }
+      expect(mocks.next).toHaveBeenCalledTimes(1);
+
+      // A browser's cross-origin request still reaches Next every time.
+      await web.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/auth/jwks`, {
+        headers: { Origin: "https://example.com" },
+      }), env, context());
+      expect(mocks.next).toHaveBeenCalledTimes(2);
+    } finally {
+      mocks.next.mockImplementation(async () => new Response("Next page"));
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("creates a repository through the deployed Web entrypoint", async () => {
     const ctx = context();
     const response = await web.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/v3/repos`, {
