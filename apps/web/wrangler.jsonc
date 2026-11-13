@@ -17,6 +17,14 @@
     // submissions release their Worker resources when the client disconnects.
     "enable_request_signal",
   ],
+  // workerd copies the bundle onto the V8 heap, under the 128 MB limit. Left
+  // unminified, it kept comments with Japanese text and dashes, and a single
+  // character above U+00FF makes V8 hold the whole source as UTF-16: 34.5 MB
+  // of source took 66 MB of heap, and dynamic imports began to fail with
+  // "exceeded memory limits". Minifying drops the comments and escapes string
+  // literals. Regular expression literals stay as written, so `check:runtime`
+  // fails the build when one brings such a character back.
+  "minify": true,
   "keep_vars": true,
   // Create these account secrets before deploying. See docs/deployment.md#secrets-store.
   "secrets_store_secrets": [

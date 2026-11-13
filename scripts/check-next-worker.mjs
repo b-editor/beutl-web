@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const requireApp = createRequire(resolve("package.json"));
 const { unstable_dev, experimental_readRawConfig } = requireApp("wrangler");
@@ -67,7 +68,38 @@ try {
     assert.ok(!html.includes('id="__next_error__"'), `${path}: Next.js rendered an error`);
     console.log(`Worker rendered ${path} successfully.`);
   }
+  // An unminified bundle keeps its comments and cannot pass this check.
+  if (rawConfig.minify) await assertOneByteBundle();
 } finally {
   await worker?.stop();
   await rm(persistTo, { recursive: true, force: true });
+}
+
+/**
+ * workerd copies the bundle onto the V8 heap, and a single character above
+ * U+00FF makes V8 hold the whole source as UTF-16, at twice the bytes.
+ * Minifying drops the comments and escapes string literals, but esbuild leaves
+ * regular expression literals as written, so a dependency can still bring one.
+ */
+async function assertOneByteBundle() {
+  const outdir = await mkdtemp(join(tmpdir(), "beutl-worker-bundle-"));
+  try {
+    const wrangler = join(dirname(requireApp.resolve("wrangler/package.json")), "bin", "wrangler.js");
+    execFileSync(process.execPath, [wrangler, "deploy", "--dry-run", "--outdir", outdir, "--config", "wrangler.jsonc"], {
+      // Otherwise wrangler hands an OpenNext project to `opennextjs-cloudflare deploy`.
+      env: { ...process.env, OPEN_NEXT_DEPLOY: "true", WRANGLER_LOG: "error" },
+      stdio: ["ignore", "ignore", "inherit"],
+    });
+    const source = await readFile(join(outdir, "worker.js"), "utf8");
+    const size = `${(source.length / 1e6).toFixed(1)} MB`;
+    const wide = [...source.matchAll(/[^\x00-\xff]/gu)];
+    assert.equal(wide.length, 0, [
+      `The ${size} Worker bundle has ${wide.length} characters above U+00FF, so V8 holds it as UTF-16:`,
+      ...wide.slice(0, 5).map(({ 0: character, index }) =>
+        `  U+${character.codePointAt(0).toString(16).toUpperCase()} in ...${source.slice(Math.max(0, index - 80), index + 20)}...`),
+    ].join("\n"));
+    console.log(`Worker bundle is ${size}, every character within U+00FF.`);
+  } finally {
+    await rm(outdir, { recursive: true, force: true });
+  }
 }
