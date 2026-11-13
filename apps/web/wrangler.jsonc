@@ -25,6 +25,15 @@
   // literals. Regular expression literals stay as written, so `check:runtime`
   // fails the build when one brings such a character back.
   "minify": true,
+  // The database sits in AWS ap-southeast-1 behind Hyperdrive, so each query a
+  // request waits on costs a round trip to Singapore from wherever the request
+  // landed, and quiet locations start most requests from a cold isolate. Smart
+  // Placement runs the Worker nearer the database once Cloudflare measures that
+  // to be faster. Static assets served directly stay at the nearest location,
+  // but the MP4s in `run_worker_first` are read through the ASSETS binding and
+  // so come from wherever the Worker runs. The `cf-placement` response header
+  // shows where a request ran.
+  "placement": { "mode": "smart" },
   "keep_vars": true,
   // Create these account secrets before deploying. See docs/deployment.md#secrets-store.
   "secrets_store_secrets": [
