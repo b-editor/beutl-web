@@ -15,6 +15,7 @@
 import { fetchWithBodyLimit } from "./src/lib/worker-body-limit";
 import { keepRenderingAfterDisconnect } from "./src/lib/worker-render-disconnect";
 import { isRangeServedVideo, serveVideoWithRange } from "./src/lib/worker-video-range";
+import { isCacheableJwksRequest, serveJwksFromCache } from "./src/lib/worker-jwks-cache";
 import { freeImageTransformsEnabled, isContentImageTransformRequest } from "./src/lib/image-transform-policy";
 import apiRuntime, { isApiRequest, handlePreviewRequest } from "@beutl/api/runtime";
 import { resolveWorkerSecrets } from "@beutl/api/worker-secrets";
@@ -43,11 +44,15 @@ export default {
       ? env : { ...env, IMAGES: undefined };
     // 閲覧者が離れても、ページの描画は閉じずに最後まで続ける。
     // 理由は worker-render-disconnect.ts を参照。
-    return await keepRenderingAfterDisconnect(request, ctx, (forwarded) =>
+    const render = (incoming) => keepRenderingAfterDisconnect(incoming, ctx, (forwarded) =>
       fetchWithBodyLimit(forwarded, imageEnv, ctx, async (bounded, nextEnv, nextCtx) =>
         openNext.fetch(bounded, await resolveWorkerSecrets(nextEnv), nextCtx),
       ),
     );
+    // The desktop API's token check fetches this key set from this Worker.
+    // See worker-jwks-cache.ts.
+    if (isCacheableJwksRequest(request)) return serveJwksFromCache(request, ctx, caches.default, render);
+    return await render(request);
   },
   async scheduled(controller, env, ctx) {
     await apiRuntime.scheduled(controller, env, ctx);
