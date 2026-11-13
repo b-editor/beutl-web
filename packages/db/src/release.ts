@@ -29,19 +29,20 @@ export async function reservePublishedReleaseIdentity(
 
 export type ReleaseNugetData = { metadata: NugetMetadata; nuspec: string; readme: string | null };
 
-export async function findReleaseForLibrary({
-  id: latestReleaseId,
+export async function findReleasesForLibrary({
+  ids,
   lang,
   prisma,
 }: {
-  id: string;
+  ids: string[];
   lang?: string;
   prisma?: PrismaTransaction;
 }) {
+  if (ids.length === 0) return [];
   const db = prisma ?? await getDb();
-  return await db.release.findFirst({
+  return await db.release.findMany({
     where: {
-      id: latestReleaseId,
+      id: { in: ids },
       published: true,
     },
     select: {

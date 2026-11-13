@@ -174,16 +174,19 @@ export async function mapPackage({
   pkg,
   request,
   lang,
+  paid,
 }: {
   userId?: string;
   currency?: string;
   pkg: NonNullable<Awaited<ReturnType<typeof getPackage>>>;
   request?: Request;
   lang?: string;
+  // A list passes the flag it read for all of its packages at once.
+  paid?: boolean;
 }) {
   const owned = pkg.UserPackage && pkg.UserPackage.length > 0;
-  let paied = false;
-  if (userId) {
+  let paied = paid ?? false;
+  if (paid === undefined && userId) {
     paied = await packagePaied(pkg.id, userId);
   }
 
