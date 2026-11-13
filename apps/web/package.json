@@ -44,7 +44,7 @@
     "hono": "^4.13.16",
     "jose": "^6.2.15",
     "lucide-react": "^1.66.0",
-    "music-metadata": "^12.3.3",
+    "music-metadata": "^12.3.5",
     "next": "16.4.3",
     "pg": "^8.23.1",
     "react": "19.3.1",
