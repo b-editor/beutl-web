@@ -16,7 +16,8 @@ import { fetchWithBodyLimit } from "./src/lib/worker-body-limit";
 import { keepRenderingAfterDisconnect } from "./src/lib/worker-render-disconnect";
 import { isRangeServedVideo, serveVideoWithRange } from "./src/lib/worker-video-range";
 import { isCacheableJwksRequest, serveJwksFromCache } from "./src/lib/worker-jwks-cache";
-import { freeImageTransformsEnabled, isContentImageTransformRequest } from "./src/lib/image-transform-policy";
+import { freeImageTransformsEnabled, isContentRequest } from "./src/lib/image-transform-policy";
+import { isPublicImageCacheRequest, servePublicContentImage } from "./src/lib/worker-content-image-cache";
 import apiRuntime, { isApiRequest, handlePreviewRequest } from "@beutl/api/runtime";
 import { resolveWorkerSecrets } from "@beutl/api/worker-secrets";
 export { GitRepositoryDurableObject, PreviewSessionDurableObject } from "@beutl/api/runtime";
@@ -40,7 +41,8 @@ export default {
     if (isApiRequest(request)) return apiRuntime.fetch(request, env, ctx);
     // Only the content route can use the bounded presets. The generic
     // /_next/image optimizer must not spend the shared transformation quota.
-    const imageEnv = freeImageTransformsEnabled(env) && isContentImageTransformRequest(request)
+    const contentRequest = isContentRequest(request);
+    const imageEnv = freeImageTransformsEnabled(env) && contentRequest
       ? env : { ...env, IMAGES: undefined };
     // 閲覧者が離れても、ページの描画は閉じずに最後まで続ける。
     // 理由は worker-render-disconnect.ts を参照。
@@ -52,6 +54,9 @@ export default {
     // The desktop API's token check fetches this key set from this Worker.
     // See worker-jwks-cache.ts.
     if (isCacheableJwksRequest(request)) return serveJwksFromCache(request, ctx, caches.default, render);
+    if (contentRequest && request.method === "GET" && isPublicImageCacheRequest(request)) {
+      return servePublicContentImage(request, ctx, render);
+    }
     return await render(request);
   },
   async scheduled(controller, env, ctx) {

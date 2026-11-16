@@ -46,8 +46,15 @@ async function authorization() {
 }
 
 describe("public Web Worker API entrypoint", () => {
+  const publicImages = new Map<string, Response>();
   beforeEach(() => {
     vi.clearAllMocks();
+    publicImages.clear();
+    vi.stubGlobal("caches", { open: async () => ({
+      match: async (key: Request) => publicImages.get(key.url)?.clone(),
+      put: async (key: Request, response: Response) => { publicImages.set(key.url, response); },
+    }) });
+    mocks.next.mockImplementation(async () => new Response("Next page"));
     mocks.db = {
       $disconnect: vi.fn(async () => undefined),
       $transaction: async (work: (db: unknown) => unknown) => work(mocks.db),
@@ -61,7 +68,59 @@ describe("public Web Worker API entrypoint", () => {
       if (typeof value === "string") vi.stubEnv(key, value);
     }
   });
-  afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+  afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+
+  it("serves warm public images before Next and rechecks access on a cache miss", async () => {
+    const url = `${env.PUBLIC_ORIGIN}/api/contents/logo`;
+    const fetchImage = async (query: string, headers?: HeadersInit) => {
+      const ctx = context();
+      const response = await web.fetch(new Request(url + query, { headers }), env, ctx);
+      await Promise.all(ctx.pending);
+      return response;
+    };
+    const representations = [["", "image/png"], ["?image=icon-64", "image/webp"]];
+    for (const [query, mime] of representations) {
+      mocks.next.mockResolvedValueOnce(new Response(mime, { headers: {
+        "Cache-Control": "public, no-cache, must-revalidate",
+        "Cloudflare-CDN-Cache-Control": "public, max-age=60, must-revalidate",
+        "Content-Type": mime, ETag: '"logo"', "X-Content-Type-Options": "nosniff",
+      } }));
+      expect(await (await fetchImage(query)).text()).toBe(mime);
+      expect(publicImages.get(url + query)?.headers.get("Cache-Control")).toBe("public, max-age=60, must-revalidate");
+    }
+    for (const [query, mime] of representations) {
+      const hit = await fetchImage(query);
+      expect(await hit.text()).toBe(mime);
+      expect(hit.headers.get("Cache-Control")).toBe("public, no-cache, must-revalidate");
+      expect(hit.headers.get("ETag")).toBe('"logo"');
+      expect(hit.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    }
+    expect(mocks.next).toHaveBeenCalledTimes(2);
+
+    mocks.next.mockImplementation(async () => new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } }));
+    for (const [name, value] of [["Cookie", "session=owner"], ["Authorization", "Bearer token"],
+      ["Range", "bytes=0-1"], ["Cache-Control", "no-cache"]]) {
+      expect((await fetchImage("", { [name]: value })).status).toBe(404);
+    }
+    publicImages.delete(url);
+    expect((await fetchImage("")).status).toBe(404);
+    expect(publicImages.has(url)).toBe(false);
+  });
+
+  it.each([
+    ["Cache-Control", "no-store"],
+    ["Set-Cookie", "session=test"],
+  ])("respects %s when storing a public image response", async (name, value) => {
+    mocks.next.mockResolvedValueOnce(new Response("image", { headers: {
+      "Content-Type": "image/png", "Cache-Control": "public, no-cache, must-revalidate",
+      "Cloudflare-CDN-Cache-Control": "public, max-age=60, must-revalidate", [name]: value,
+    } }));
+    const ctx = context();
+    const response = await web.fetch(new Request(`${env.PUBLIC_ORIGIN}/api/contents/logo`), env, ctx);
+    expect(await response.text()).toBe("image");
+    await Promise.all(ctx.pending);
+    expect(publicImages.size).toBe(0);
+  });
 
   it("answers repeated key set fetches from the cache without starting Next", async () => {
     const store = new Map<string, Response>();

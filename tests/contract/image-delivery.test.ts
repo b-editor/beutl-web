@@ -114,12 +114,26 @@ afterEach(async () => {
 });
 
 describe("image delivery", () => {
+  it("allows a one-minute edge cache for public package logos and their presets", async () => {
+    mocks.findFileForContentAccess.mockResolvedValue({
+      ...file(), visibility: "DEDICATED", Package: [{ userId: "owner", published: true }],
+    });
+    for (const query of ["", "?image=icon-64"]) {
+      const response = await request(undefined, query);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Cloudflare-CDN-Cache-Control")).toBe("public, max-age=60, must-revalidate");
+      expect(response.headers.get("Cache-Control")).toBe("public, no-cache, must-revalidate");
+      await response.arrayBuffer();
+    }
+  });
+
   it("downloads original bytes even when the URL requests a cached preview", async () => {
     await (await request(undefined, "?image=preview-1024")).arrayBuffer();
     await Promise.all(pending);
 
     const response = await request(undefined, "?image=preview-1024&download=1");
     expect(response.status).toBe(200);
+    expect(response.headers.has("Cloudflare-CDN-Cache-Control")).toBe(false);
     expect(response.headers.get("Content-Type")).toBe("image/png");
     expect(response.headers.get("Content-Disposition")).toBe(
       "attachment; filename=\"image.png\"; filename*=UTF-8''image.png",
@@ -754,6 +768,7 @@ describe("image delivery", () => {
       const response = await request({ "If-None-Match": contentEntityTag(file()) });
       expect(response.status).toBe(200);
       expect(response.headers.get("Cache-Control")).toBe("no-store");
+      expect(response.headers.has("Cloudflare-CDN-Cache-Control")).toBe(false);
       expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES);
       await Promise.all(pending);
     }
@@ -841,7 +856,9 @@ describe("image delivery", () => {
 
   it.each(["text/html", "image/svg+xml", "video/mp4"])("streams %s without image caching", async (mimeType) => {
     mocks.findFileForContentAccess.mockResolvedValue({ ...file(), mimeType });
-    expect((await request()).status).toBe(200);
+    const response = await request();
+    expect(response.status).toBe(200);
+    expect(response.headers.has("Cloudflare-CDN-Cache-Control")).toBe(false);
     expect(mocks.open).not.toHaveBeenCalled();
   });
 
@@ -851,6 +868,7 @@ describe("image delivery", () => {
     mocks.get.mockResolvedValue({ body: new Response(BYTES).body, arrayBuffer });
     const response = await request();
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES);
+    expect(response.headers.has("Cloudflare-CDN-Cache-Control")).toBe(false);
     expect(arrayBuffer).not.toHaveBeenCalled();
     expect(mocks.open).not.toHaveBeenCalled();
   });

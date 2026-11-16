@@ -493,10 +493,19 @@ icons use lazy loading. Storage cards and the details pane use thumbnails;
 the preview dialog and AI generation/edit results use previews. AI history
 uses icons. Browser-local upload URLs and streamed data previews are unchanged.
 
-The Worker caches transformed bytes for 24 hours, keyed by the source object,
-hash, and preset version. Every request still checks the current File access
-policy before reading the cache or returning 304, so deletion and unpublishing
-take effect immediately. Public images use `no-cache, must-revalidate`.
+An anonymous GET of a public inline image up to 10 MiB can be served from the
+Worker's edge cache for 60 seconds using the [Cloudflare Cache API](https://developers.cloudflare.com/workers/runtime-apis/cache/).
+The original URL and each preset have
+separate entries. A hit skips Next.js, the database, and object storage.
+After deletion, unpublishing, a visibility change, or replacement, an existing
+entry can serve the previous image until its minute expires. The next miss
+checks current access. Browsers must revalidate before reuse. Requests with
+credentials, explicit cache directives, an Origin or Range header, and
+downloads go through the content route.
+
+The route also caches image bytes for 24 hours, keyed by the source object,
+hash, and, for transformed images, preset version. The route checks the
+current File access policy before reading this internal cache or returning 304.
 Variant validators are checked only against cached or successfully generated
 WebP bytes; an uncached variant must not return 304 before its encoding is known.
 If a public transformation falls back, its original ETag is checked before
