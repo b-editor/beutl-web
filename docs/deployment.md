@@ -510,8 +510,9 @@ hash, and, for transformed images, preset version. The route checks the
 current File access policy before reading this internal cache or returning 304.
 Variant validators are checked only against cached or successfully generated
 WebP bytes; an uncached variant must not return 304 before its encoding is known.
-If a public transformation falls back, its original ETag is checked before
-returning the body, allowing 304 revalidation during an outage or quota pause.
+If a public transformation falls back, the route checks the original ETag
+and can return 304. The preset stays out of the edge cache until a transformation
+succeeds, so requests can pick up the WebP when the service or quota recovers.
 HEAD checks the same access policy without fetching or transforming bytes. It
 returns cached-variant metadata when available and known-original metadata
 when optimization is unavailable or paused. For an uncached eligible variant,

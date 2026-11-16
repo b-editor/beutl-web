@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setR2BucketProvider } from "@beutl/api/ai/r2-provider";
 import { contentEntityTag } from "../../apps/web/src/lib/content-cache";
+import { servePublicContentImage } from "../../apps/web/src/lib/worker-content-image-cache";
 
 const mocks = vi.hoisted(() => ({
   findFileForContentAccess: vi.fn(),
@@ -270,18 +271,38 @@ describe("image delivery", () => {
     expect(mocks.get).toHaveBeenCalledTimes(1);
   });
 
-  it("revalidates the original after transient transformation failures", async () => {
+  it("revalidates a preset fallback and caches the WebP at the edge after recovery", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    mocks.output.mockRejectedValue(new Error("Images temporarily unavailable"));
-    const first = await request(undefined, "?image=preview-1024");
-    await first.arrayBuffer();
+    const failure = new Error("Images temporarily unavailable");
+    mocks.output.mockRejectedValueOnce(failure).mockRejectedValueOnce(failure);
+    mocks.findFileForContentAccess.mockResolvedValue({
+      ...file(), visibility: "DEDICATED", Package: [{ userId: "owner", published: true }],
+    });
+    const url = "https://beutl.example/api/contents/file-1?image=preview-1024";
+    const preview = (headers?: HeadersInit) => servePublicContentImage(
+      new Request(url, { headers }), mocks.getCloudflareContext().ctx,
+      (req) => GET(req as Parameters<ContentGet>[0], { params: Promise.resolve({ fileId: "file-1" }) }),
+    );
+    const first = await preview();
+    expect(new Uint8Array(await first.arrayBuffer())).toEqual(BYTES);
     await Promise.all(pending);
-    const response = await request({ "If-None-Match": first.headers.get("ETag")! }, "?image=preview-1024");
+    expect(stored.has(url)).toBe(false);
+    const response = await preview({ "If-None-Match": first.headers.get("ETag")! });
     expect(response.status).toBe(304);
     expect(await response.text()).toBe("");
     expect(response.headers.get("Content-Type")).toBe("image/png");
     expect(response.headers.get("ETag")).toBe(contentEntityTag(file()));
-    expect(mocks.output).toHaveBeenCalledTimes(2);
+    expect(response.headers.has("Cloudflare-CDN-Cache-Control")).toBe(false);
+
+    const recovered = await preview({ "If-None-Match": first.headers.get("ETag")! });
+    expect(recovered.status).toBe(200);
+    expect(recovered.headers.get("Content-Type")).toBe("image/webp");
+    expect(new Uint8Array(await recovered.arrayBuffer())).toEqual(WEBP_BYTES);
+    await Promise.all(pending);
+    expect(stored.get(url)?.headers.get("Cache-Control")).toBe("public, max-age=604800, must-revalidate");
+    expect(new Uint8Array(await (await preview()).arrayBuffer())).toEqual(WEBP_BYTES);
+    expect(mocks.findFileForContentAccess).toHaveBeenCalledTimes(3);
+    expect(mocks.output).toHaveBeenCalledTimes(3);
   });
 
   it("sends the original when an evicted variant fails to regenerate despite a matching variant validator", async () => {
@@ -325,6 +346,7 @@ describe("image delivery", () => {
     const second = await request({ "If-None-Match": first.headers.get("ETag")! }, "?image=preview-1024");
     expect(second.status).toBe(304);
     expect(second.headers.get("ETag")).toBe(contentEntityTag(file()));
+    expect(second.headers.has("Cloudflare-CDN-Cache-Control")).toBe(false);
     expect(await second.text()).toBe("");
     expect(mocks.output).toHaveBeenCalledTimes(1);
     expect(mocks.get).toHaveBeenCalledTimes(1);

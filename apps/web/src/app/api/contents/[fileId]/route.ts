@@ -90,17 +90,19 @@ async function serveContent(
     const etag = contentEntityTag(file);
     const download = new URL(request.url).searchParams.get("download") === "1";
     const deliveryHeaders = contentDeliveryHeaders(file.mimeType);
-    const cacheImageAtEdge = canCacheImageBytes(deliveryHeaders["Content-Type"], file.size) &&
-      isPublicImageCacheRequest(request);
+    const edgeCacheVisibility = canCacheImageBytes(deliveryHeaders["Content-Type"], file.size) &&
+      isPublicImageCacheRequest(request) ? file.visibility : undefined;
+    const variant = download ? null : getContentImageVariant(request, file);
     const headers = {
       ...deliveryHeaders,
       "Content-Disposition": contentDisposition(download ? "attachment" : deliveryHeaders["Content-Disposition"], file.name),
-      ...contentCacheHeaders(access.canUsePublicCache, cacheImageAtEdge ? file.visibility : undefined),
+      // A fallback at a preset URL must let the next request retry the transform.
+      ...contentCacheHeaders(access.canUsePublicCache, variant ? undefined : edgeCacheVisibility),
       ETag: etag,
     };
-    const variant = download ? null : getContentImageVariant(request, file);
     const variantHeaders = variant ? {
       ...headers,
+      ...contentCacheHeaders(access.canUsePublicCache, edgeCacheVisibility),
       "Content-Type": "image/webp",
       "Content-Disposition": contentDisposition("inline", `${file.name.replace(/\.[^.]*$/u, "")}.webp`),
       ETag: variant.etag,
