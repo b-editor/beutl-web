@@ -18,8 +18,9 @@ import {
   contentEntityTag,
   matchesContentEntityTag,
 } from "@/lib/content-cache";
-import { getImageContentCache } from "@/lib/image-content-cache";
+import { canCacheImageBytes, getImageContentCache } from "@/lib/image-content-cache";
 import { getContentImageVariant } from "@/lib/content-image-transform";
+import { isPublicImageCacheRequest } from "@/lib/worker-content-image-cache";
 
 type ContentProps = { params: Promise<{ fileId: string }> };
 
@@ -89,15 +90,19 @@ async function serveContent(
     const etag = contentEntityTag(file);
     const download = new URL(request.url).searchParams.get("download") === "1";
     const deliveryHeaders = contentDeliveryHeaders(file.mimeType);
+    const edgeCacheVisibility = canCacheImageBytes(deliveryHeaders["Content-Type"], file.size) &&
+      isPublicImageCacheRequest(request) ? file.visibility : undefined;
+    const variant = download ? null : getContentImageVariant(request, file);
     const headers = {
       ...deliveryHeaders,
       "Content-Disposition": contentDisposition(download ? "attachment" : deliveryHeaders["Content-Disposition"], file.name),
-      ...contentCacheHeaders(access.canUsePublicCache),
+      // A fallback at a preset URL must let the next request retry the transform.
+      ...contentCacheHeaders(access.canUsePublicCache, variant ? undefined : edgeCacheVisibility),
       ETag: etag,
     };
-    const variant = download ? null : getContentImageVariant(request, file);
     const variantHeaders = variant ? {
       ...headers,
+      ...contentCacheHeaders(access.canUsePublicCache, edgeCacheVisibility),
       "Content-Type": "image/webp",
       "Content-Disposition": contentDisposition("inline", `${file.name.replace(/\.[^.]*$/u, "")}.webp`),
       ETag: variant.etag,

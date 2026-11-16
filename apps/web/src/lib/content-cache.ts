@@ -1,3 +1,5 @@
+import type { ContentAccessFile } from "@beutl/core";
+
 const INLINE_MEDIA_TYPES = new Set([
   "audio/aac",
   "audio/flac",
@@ -20,6 +22,12 @@ const INLINE_MEDIA_TYPES = new Set([
 ]);
 
 const DOWNLOAD_CONTENT_TYPE = "application/octet-stream";
+export const PUBLIC_CONTENT_CACHE_CONTROL = "public, no-cache, must-revalidate";
+// Previously public bytes can be served until the entry's original TTL expires.
+export const IMAGE_EDGE_CACHE_CONTROL: Partial<Record<ContentAccessFile["visibility"], string>> = {
+  PUBLIC: "public, max-age=60, must-revalidate",
+  DEDICATED: "public, max-age=604800, must-revalidate",
+};
 const CONTENT_SECURITY_HEADERS = {
   "Content-Security-Policy": "default-src 'none'; sandbox",
   "X-Content-Type-Options": "nosniff",
@@ -27,18 +35,15 @@ const CONTENT_SECURITY_HEADERS = {
 
 export function contentCacheHeaders(
   canUsePublicCache: boolean,
+  imageVisibility?: ContentAccessFile["visibility"],
 ): Record<string, string> {
-  return canUsePublicCache
-    ? {
-        "Cache-Control": "public, no-cache, must-revalidate",
-        Vary: "Cookie, Authorization",
-        ...CONTENT_SECURITY_HEADERS,
-      }
-    : {
-        "Cache-Control": "no-store",
-        Vary: "Cookie, Authorization",
-        ...CONTENT_SECURITY_HEADERS,
-      };
+  const edgeCacheControl = canUsePublicCache && imageVisibility ? IMAGE_EDGE_CACHE_CONTROL[imageVisibility] : undefined;
+  return {
+    "Cache-Control": canUsePublicCache ? PUBLIC_CONTENT_CACHE_CONTROL : "no-store",
+    ...(edgeCacheControl ? { "Cloudflare-CDN-Cache-Control": edgeCacheControl } : {}),
+    Vary: "Cookie, Authorization",
+    ...CONTENT_SECURITY_HEADERS,
+  };
 }
 
 /** Every stored replacement gets a new object key, including legacy files without a hash. */

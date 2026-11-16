@@ -493,14 +493,26 @@ icons use lazy loading. Storage cards and the details pane use thumbnails;
 the preview dialog and AI generation/edit results use previews. AI history
 uses icons. Browser-local upload URLs and streamed data previews are unchanged.
 
-The Worker caches transformed bytes for 24 hours, keyed by the source object,
-hash, and preset version. Every request still checks the current File access
-policy before reading the cache or returning 304, so deletion and unpublishing
-take effect immediately. Public images use `no-cache, must-revalidate`.
+The Worker caches anonymous GETs of publicly accessible inline images up to
+10 MiB using the [Cloudflare Cache API](https://developers.cloudflare.com/workers/runtime-apis/cache/).
+The edge lifetime is 60 seconds for `PUBLIC` images and seven days for
+`DEDICATED` images used as published package logos, screenshots of published
+packages, or profile icons. The original URL and each preset have separate
+entries. A hit skips Next.js, the database, and object storage.
+After deletion, unpublishing, a visibility change, or replacement, an existing
+entry can serve the previous image until its original lifetime expires. The next miss
+checks current access. Browsers must revalidate before reuse. Requests with
+credentials, explicit cache directives, an Origin or Range header, and
+downloads go through the content route.
+
+The route also caches image bytes for 24 hours, keyed by the source object,
+hash, and, for transformed images, preset version. The route checks the
+current File access policy before reading this internal cache or returning 304.
 Variant validators are checked only against cached or successfully generated
 WebP bytes; an uncached variant must not return 304 before its encoding is known.
-If a public transformation falls back, its original ETag is checked before
-returning the body, allowing 304 revalidation during an outage or quota pause.
+If a public transformation falls back, the route checks the original ETag
+and can return 304. The preset stays out of the edge cache until a transformation
+succeeds, so requests can pick up the WebP when the service or quota recovers.
 HEAD checks the same access policy without fetching or transforming bytes. It
 returns cached-variant metadata when available and known-original metadata
 when optimization is unavailable or paused. For an uncached eligible variant,

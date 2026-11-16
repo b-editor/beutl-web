@@ -7,6 +7,10 @@ export const MAX_CACHED_IMAGE_BYTES = 10 * 1024 * 1024;
 const IMAGE_CACHE_SECONDS = 24 * 60 * 60;
 const IMAGE_CACHE_NAME = "beutl-image-content-v1";
 
+export function canCacheImageBytes(contentType: string, size: bigint): boolean {
+  return contentType.startsWith("image/") && size > BigInt(0) && size <= BigInt(MAX_CACHED_IMAGE_BYTES);
+}
+
 /** Only call after checking the file's current access policy. This stores bytes,
  * not an HTTP response that could bypass authentication or retain old metadata. */
 export async function getImageContentCache(request: Request, file: {
@@ -19,9 +23,7 @@ export async function getImageContentCache(request: Request, file: {
   put(response: Response): void;
 } | null> {
   const mimeType = contentDeliveryHeaders(file.mimeType)["Content-Type"];
-  if (!mimeType.startsWith("image/") || file.size <= BigInt(0) || file.size > BigInt(MAX_CACHED_IMAGE_BYTES)) {
-    return null;
-  }
+  if (!canCacheImageBytes(mimeType, file.size)) return null;
   // Plain Next/Node development has no Worker cache or execution context.
   if (typeof caches === "undefined") return null;
   let waitUntil: (task: Promise<unknown>) => void;
@@ -76,7 +78,7 @@ export async function getImageContentCache(request: Request, file: {
     put(response) {
       if (response.status !== 200 || !response.body || !validLength(response)) return;
       // Retain only bytes and their length. Delivery headers are rebuilt from
-      // the live File record, so rename/unpublish/delete take effect immediately.
+      // the live File record each time the content route runs.
       const cached = new Response(response.clone().body, {
         headers: {
           "Cache-Control": `public, max-age=${IMAGE_CACHE_SECONDS}`,
