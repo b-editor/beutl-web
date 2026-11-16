@@ -114,18 +114,20 @@ afterEach(async () => {
 });
 
 describe("image delivery", () => {
-  it("allows a one-minute edge cache for public package logos and their presets", async () => {
-    mocks.findFileForContentAccess.mockResolvedValue({
-      ...file(), visibility: "DEDICATED", Package: [{ userId: "owner", published: true }],
-    });
-    for (const query of ["", "?image=icon-64"]) {
-      const response = await request(undefined, query);
-      expect(response.status).toBe(200);
-      expect(response.headers.get("Cloudflare-CDN-Cache-Control")).toBe("public, max-age=60, must-revalidate");
-      expect(response.headers.get("Cache-Control")).toBe("public, no-cache, must-revalidate");
-      await response.arrayBuffer();
-    }
-  });
+  it.each([["PUBLIC", 60], ["DEDICATED", 3600]] as const)(
+    "sets the %s edge lifetime for a published logo and its presets", async (visibility, seconds) => {
+      mocks.findFileForContentAccess.mockResolvedValue({
+        ...file(), visibility, Package: [{ userId: "owner", published: true }],
+      });
+      for (const query of ["", "?image=icon-64"]) {
+        const response = await request(undefined, query);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("Cloudflare-CDN-Cache-Control")).toBe(`public, max-age=${seconds}, must-revalidate`);
+        expect(response.headers.get("Cache-Control")).toBe("public, no-cache, must-revalidate");
+        await response.arrayBuffer();
+      }
+    },
+  );
 
   it("downloads original bytes even when the URL requests a cached preview", async () => {
     await (await request(undefined, "?image=preview-1024")).arrayBuffer();
@@ -761,8 +763,8 @@ describe("image delivery", () => {
     expect(mocks.get).toHaveBeenCalledTimes(1);
   });
 
-  it("reuses private bytes only after authenticating the owner on every request", async () => {
-    mocks.findFileForContentAccess.mockResolvedValue({ ...file(), visibility: "PRIVATE" });
+  it.each(["PRIVATE", "DEDICATED"] as const)("keeps owner-only %s images out of the edge cache", async (visibility) => {
+    mocks.findFileForContentAccess.mockResolvedValue({ ...file(), visibility });
     mocks.getSession.mockResolvedValue({ user: { id: "owner" } });
     for (let attempt = 0; attempt < 2; attempt++) {
       const response = await request({ "If-None-Match": contentEntityTag(file()) });

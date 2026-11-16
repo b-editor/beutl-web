@@ -70,7 +70,7 @@ describe("public Web Worker API entrypoint", () => {
   });
   afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
-  it("serves warm public images before Next and rechecks access on a cache miss", async () => {
+  it.each([60, 3600])("serves warm images with the route's %i-second lifetime and rechecks access on a miss", async (seconds) => {
     const url = `${env.PUBLIC_ORIGIN}/api/contents/logo`;
     const fetchImage = async (query: string, headers?: HeadersInit) => {
       const ctx = context();
@@ -79,14 +79,15 @@ describe("public Web Worker API entrypoint", () => {
       return response;
     };
     const representations = [["", "image/png"], ["?image=icon-64", "image/webp"]];
+    const edgeCacheControl = `public, max-age=${seconds}, must-revalidate`;
     for (const [query, mime] of representations) {
       mocks.next.mockResolvedValueOnce(new Response(mime, { headers: {
         "Cache-Control": "public, no-cache, must-revalidate",
-        "Cloudflare-CDN-Cache-Control": "public, max-age=60, must-revalidate",
+        "Cloudflare-CDN-Cache-Control": edgeCacheControl,
         "Content-Type": mime, ETag: '"logo"', "X-Content-Type-Options": "nosniff",
       } }));
       expect(await (await fetchImage(query)).text()).toBe(mime);
-      expect(publicImages.get(url + query)?.headers.get("Cache-Control")).toBe("public, max-age=60, must-revalidate");
+      expect(publicImages.get(url + query)?.headers.get("Cache-Control")).toBe(edgeCacheControl);
     }
     for (const [query, mime] of representations) {
       const hit = await fetchImage(query);

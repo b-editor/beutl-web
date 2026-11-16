@@ -1,3 +1,5 @@
+import type { ContentAccessFile } from "@beutl/core";
+
 const INLINE_MEDIA_TYPES = new Set([
   "audio/aac",
   "audio/flac",
@@ -21,8 +23,11 @@ const INLINE_MEDIA_TYPES = new Set([
 
 const DOWNLOAD_CONTENT_TYPE = "application/octet-stream";
 export const PUBLIC_CONTENT_CACHE_CONTROL = "public, no-cache, must-revalidate";
-// A deleted or unpublished image can be served at the edge for up to one minute.
-export const PUBLIC_IMAGE_EDGE_CACHE_CONTROL = "public, max-age=60, must-revalidate";
+// Previously public bytes can be served until the entry's original TTL expires.
+export const IMAGE_EDGE_CACHE_CONTROL: Partial<Record<ContentAccessFile["visibility"], string>> = {
+  PUBLIC: "public, max-age=60, must-revalidate",
+  DEDICATED: "public, max-age=3600, must-revalidate",
+};
 const CONTENT_SECURITY_HEADERS = {
   "Content-Security-Policy": "default-src 'none'; sandbox",
   "X-Content-Type-Options": "nosniff",
@@ -30,12 +35,12 @@ const CONTENT_SECURITY_HEADERS = {
 
 export function contentCacheHeaders(
   canUsePublicCache: boolean,
-  cacheImageAtEdge = false,
+  imageVisibility?: ContentAccessFile["visibility"],
 ): Record<string, string> {
+  const edgeCacheControl = canUsePublicCache && imageVisibility ? IMAGE_EDGE_CACHE_CONTROL[imageVisibility] : undefined;
   return {
     "Cache-Control": canUsePublicCache ? PUBLIC_CONTENT_CACHE_CONTROL : "no-store",
-    ...(canUsePublicCache && cacheImageAtEdge
-      ? { "Cloudflare-CDN-Cache-Control": PUBLIC_IMAGE_EDGE_CACHE_CONTROL } : {}),
+    ...(edgeCacheControl ? { "Cloudflare-CDN-Cache-Control": edgeCacheControl } : {}),
     Vary: "Cookie, Authorization",
     ...CONTENT_SECURITY_HEADERS,
   };

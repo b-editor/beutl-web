@@ -493,12 +493,14 @@ icons use lazy loading. Storage cards and the details pane use thumbnails;
 the preview dialog and AI generation/edit results use previews. AI history
 uses icons. Browser-local upload URLs and streamed data previews are unchanged.
 
-An anonymous GET of a public inline image up to 10 MiB can be served from the
-Worker's edge cache for 60 seconds using the [Cloudflare Cache API](https://developers.cloudflare.com/workers/runtime-apis/cache/).
-The original URL and each preset have
-separate entries. A hit skips Next.js, the database, and object storage.
+The Worker caches anonymous GETs of publicly accessible inline images up to
+10 MiB using the [Cloudflare Cache API](https://developers.cloudflare.com/workers/runtime-apis/cache/).
+The edge lifetime is 60 seconds for `PUBLIC` images and one hour for
+`DEDICATED` images used as published package logos, screenshots of published
+packages, or profile icons. The original URL and each preset have separate
+entries. A hit skips Next.js, the database, and object storage.
 After deletion, unpublishing, a visibility change, or replacement, an existing
-entry can serve the previous image until its minute expires. The next miss
+entry can serve the previous image until its original lifetime expires. The next miss
 checks current access. Browsers must revalidate before reuse. Requests with
 credentials, explicit cache directives, an Origin or Range header, and
 downloads go through the content route.

@@ -95,7 +95,7 @@ async function serveContent(
     const headers = {
       ...deliveryHeaders,
       "Content-Disposition": contentDisposition(download ? "attachment" : deliveryHeaders["Content-Disposition"], file.name),
-      ...contentCacheHeaders(access.canUsePublicCache, cacheImageAtEdge),
+      ...contentCacheHeaders(access.canUsePublicCache, cacheImageAtEdge ? file.visibility : undefined),
       ETag: etag,
     };
     const variant = download ? null : getContentImageVariant(request, file);

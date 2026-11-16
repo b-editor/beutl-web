@@ -1,5 +1,7 @@
-import { PUBLIC_CONTENT_CACHE_CONTROL, PUBLIC_IMAGE_EDGE_CACHE_CONTROL } from "./content-cache";
+import { IMAGE_EDGE_CACHE_CONTROL, PUBLIC_CONTENT_CACHE_CONTROL } from "./content-cache";
 import { CONTENT_IMAGE_VARIANTS } from "./content-image";
+
+const IMAGE_CACHE_POLICIES = new Set(Object.values(IMAGE_EDGE_CACHE_CONTROL));
 
 /** Called only for /api/contents/:id. Other requests retain the live route's semantics. */
 export function isPublicImageCacheRequest(request: Request): boolean {
@@ -33,13 +35,14 @@ export async function servePublicContentImage(
   }
 
   const response = await render(request);
+  const edgeCacheControl = response.headers.get("Cloudflare-CDN-Cache-Control");
   if (response.status === 200 && response.body && !response.headers.has("Set-Cookie") &&
     response.headers.get("Cache-Control") === PUBLIC_CONTENT_CACHE_CONTROL &&
-    response.headers.get("Cloudflare-CDN-Cache-Control") === PUBLIC_IMAGE_EDGE_CACHE_CONTROL) {
+    edgeCacheControl !== null && IMAGE_CACHE_POLICIES.has(edgeCacheControl)) {
     // Cache API uses Cache-Control for expiration. Only the stored copy gets
     // the edge TTL. Both misses and hits require downstream revalidation.
     const copy = new Response(response.clone().body, response);
-    copy.headers.set("Cache-Control", PUBLIC_IMAGE_EDGE_CACHE_CONTROL);
+    copy.headers.set("Cache-Control", edgeCacheControl);
     ctx.waitUntil(cache.put(request, copy).catch((error: unknown) => {
       console.warn("Could not cache the public image", error);
     }));
