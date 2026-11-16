@@ -114,7 +114,7 @@ afterEach(async () => {
 });
 
 describe("image delivery", () => {
-  it.each([["PUBLIC", 60], ["DEDICATED", 3600]] as const)(
+  it.each([["PUBLIC", 60], ["DEDICATED", 604_800]] as const)(
     "sets the %s edge lifetime for a published logo and its presets", async (visibility, seconds) => {
       mocks.findFileForContentAccess.mockResolvedValue({
         ...file(), visibility, Package: [{ userId: "owner", published: true }],

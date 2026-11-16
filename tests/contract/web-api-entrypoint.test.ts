@@ -70,7 +70,7 @@ describe("public Web Worker API entrypoint", () => {
   });
   afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
-  it.each([60, 3600])("serves warm images with the route's %i-second lifetime and rechecks access on a miss", async (seconds) => {
+  it.each([60, 604_800])("serves warm images with the route's %i-second lifetime and rechecks access on a miss", async (seconds) => {
     const url = `${env.PUBLIC_ORIGIN}/api/contents/logo`;
     const fetchImage = async (query: string, headers?: HeadersInit) => {
       const ctx = context();

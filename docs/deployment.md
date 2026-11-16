@@ -495,7 +495,7 @@ uses icons. Browser-local upload URLs and streamed data previews are unchanged.
 
 The Worker caches anonymous GETs of publicly accessible inline images up to
 10 MiB using the [Cloudflare Cache API](https://developers.cloudflare.com/workers/runtime-apis/cache/).
-The edge lifetime is 60 seconds for `PUBLIC` images and one hour for
+The edge lifetime is 60 seconds for `PUBLIC` images and seven days for
 `DEDICATED` images used as published package logos, screenshots of published
 packages, or profile icons. The original URL and each preset have separate
 entries. A hit skips Next.js, the database, and object storage.

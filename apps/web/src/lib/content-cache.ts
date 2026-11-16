@@ -26,7 +26,7 @@ export const PUBLIC_CONTENT_CACHE_CONTROL = "public, no-cache, must-revalidate";
 // Previously public bytes can be served until the entry's original TTL expires.
 export const IMAGE_EDGE_CACHE_CONTROL: Partial<Record<ContentAccessFile["visibility"], string>> = {
   PUBLIC: "public, max-age=60, must-revalidate",
-  DEDICATED: "public, max-age=3600, must-revalidate",
+  DEDICATED: "public, max-age=604800, must-revalidate",
 };
 const CONTENT_SECURITY_HEADERS = {
   "Content-Security-Policy": "default-src 'none'; sandbox",
