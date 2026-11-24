@@ -615,7 +615,7 @@ describe("LFS batch admission", () => {
     expect(c).toMatchObject({ ...existing, authenticated: true });
     expect(get.mock.calls.filter(([key]) => key.startsWith("lfs:"))).toEqual([first, denied, existing].map(({ oid }) => [`lfs:${oid}`]));
     const { expiresAt } = reserveLfsBatch.mock.calls[0][0].items[0];
-    expect(reserveLfsBatch).toHaveBeenCalledExactlyOnceWith({ repoId, ownerId: "owner",
+    expect(reserveLfsBatch).toHaveBeenCalledExactlyOnceWith({ repoId, ownerId: "owner", maxReservations: 10_000,
       items: [first, denied, existing].map((object) => ({ ...object, expiresAt })) });
     expect(put.mock.calls.filter(([key]) => key === "lfsCount")).toEqual([["lfsCount", 0], ["lfsCount", 2]]);
     expect(getAlarm).toHaveBeenCalledOnce();
@@ -650,6 +650,35 @@ describe("LFS batch admission", () => {
     expect(await f.storage.get("lfsCount")).toBe(10_000);
     expect(list.mock.calls).toEqual([[{ prefix: "lfs:" }], [{ prefix: "lfs:" }]]);
     expect(f.accounting.reserveLfs.mock.calls.map(([input]) => input.oid)).toEqual([first.oid, next.oid]);
+  });
+
+  it.each([false, true])("does not spend the last LFS object slot on an over-quota item (batch=%s)", async (batched) => {
+    const tooLarge = { oid: "a".repeat(64), size: 100 }, fits = { oid: "b".repeat(64), size: 1 }, extra = { oid: "c".repeat(64), size: 1 };
+    const reserveLfsBatch = batched
+      ? vi.fn<NonNullable<GitStorageAccounting["reserveLfsBatch"]>>(async ({ items, maxReservations = Infinity }) => {
+        const results = new Map<string, "reserved" | "existing" | "overQuota" | "limitReached">();
+        let admitted = 0;
+        for (const entry of items) {
+          if (admitted >= maxReservations) results.set(entry.oid, "limitReached");
+          else if (entry.oid === tooLarge.oid) results.set(entry.oid, "overQuota");
+          else { results.set(entry.oid, "reserved"); admitted++; }
+        }
+        return results;
+      })
+      : undefined;
+    const f = fixture({}, reserveLfsBatch);
+    if (!batched) f.accounting.reserveLfs.mockImplementation(async ({ oid }) => oid === tooLarge.oid ? "overQuota" : "reserved");
+    const stored = { size: 1, expiresAt: 0, verified: true, resourceId: "existing", offset: 1, partCount: 1 };
+    for (let i = 0; i < 9999; i++) {
+      f.storage.values.set(`lfs:${i.toString(16).padStart(64, "0")}`, stored);
+    }
+    const { body } = await f.batch(upload([tooLarge, fits, extra]));
+    expect(body.objects[0]).toEqual({ ...tooLarge, error: { code: 413, message: "Account storage quota exceeded" } });
+    expect(body.objects[1]).toMatchObject({ ...fits, authenticated: true });
+    expect(body.objects[2]).toEqual({ ...extra, error: { code: 413, message: "Repositories are limited to 10,000 LFS objects" } });
+    expect(await f.storage.get("lfsCount")).toBe(10_000);
+    if (batched) expect(reserveLfsBatch).toHaveBeenCalledWith(expect.objectContaining({ maxReservations: 1 }));
+    else expect(f.accounting.reserveLfs.mock.calls.map(([input]) => input.oid)).toEqual([tooLarge.oid, fits.oid]);
   });
 
   it("releases expired records before reserving replacements and clears the count on repository deletion", async () => {

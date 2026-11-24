@@ -83,11 +83,12 @@ export async function reserveGitLfs({ repoId, oid, ownerId, size, expiresAt }: {
   });
 }
 
-export async function reserveGitLfsBatch({ repoId, ownerId, items }: {
+export async function reserveGitLfsBatch({ repoId, ownerId, items, maxReservations = Infinity }: {
   repoId: string;
   ownerId: string;
   items: readonly { oid: string; size: number; expiresAt: number }[];
-}): Promise<Map<string, "reserved" | "existing" | "overQuota">> {
+  maxReservations?: number;
+}): Promise<Map<string, "reserved" | "existing" | "overQuota" | "limitReached">> {
   if (!items.length) return new Map();
   return startRetryableTransaction(async (tx) => {
     const unique = new Map<string, (typeof items)[number]>();
@@ -109,17 +110,23 @@ export async function reserveGitLfsBatch({ repoId, ownerId, items }: {
     }
 
     let available = BigInt(0);
-    if (existing.size < unique.size) {
+    if (existing.size < unique.size && maxReservations > 0) {
       const [quota, used] = await Promise.all([
         resolveStorageQuota({ userId: ownerId, prisma: tx }), accountReserved(tx, ownerId),
       ]);
       available = BigInt(quota.quotaBytes) - used;
     }
-    const results = new Map<string, "reserved" | "existing" | "overQuota">();
+    const results = new Map<string, "reserved" | "existing" | "overQuota" | "limitReached">();
     const toCreate = [];
+    let admitted = 0;
     for (const { oid, size, expiresAt } of unique.values()) {
+      if (admitted >= maxReservations) {
+        results.set(oid, "limitReached");
+        continue;
+      }
       if (existing.has(oid)) {
         results.set(oid, "existing");
+        admitted++;
         continue;
       }
       const bytes = BigInt(size);
@@ -128,6 +135,7 @@ export async function reserveGitLfsBatch({ repoId, ownerId, items }: {
         continue;
       }
       available -= bytes;
+      admitted++;
       results.set(oid, "reserved");
       toCreate.push({ repoId, oid, ownerId, size: bytes, expiresAt: new Date(expiresAt) });
     }

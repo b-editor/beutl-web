@@ -161,19 +161,25 @@ export async function handleLfsBatch(
   let count = 0, created = 0;
   if (toReserve.size) {
     count = await readLfsCount(storage, toReserve.size);
-    const items = [...toReserve.values()].slice(0, Math.max(0, MAX_LFS_OBJECTS - count));
-    const reservations = items.length && accounting?.reserveLfsBatch
-      ? await accounting.reserveLfsBatch({ repoId, ownerId, items }) : undefined;
-    for (const item of items) {
-      const result = reservations ? reservations.get(item.oid) : await accounting?.reserveLfs({ repoId, ownerId, ...item });
-      if (result === "overQuota") {
-        overQuota.add(item.oid);
-        continue;
+    const remainingSlots = Math.max(0, MAX_LFS_OBJECTS - count);
+    if (remainingSlots > 0) {
+      const candidates = [...toReserve.values()];
+      const reservations = accounting?.reserveLfsBatch
+        ? await accounting.reserveLfsBatch({ repoId, ownerId, items: candidates, maxReservations: remainingSlots })
+        : undefined;
+      for (const item of candidates) {
+        if (created >= remainingSlots) break;
+        const result = reservations ? reservations.get(item.oid) : await accounting?.reserveLfs({ repoId, ownerId, ...item });
+        if (result === "overQuota") {
+          overQuota.add(item.oid);
+          continue;
+        }
+        if (result === "limitReached") continue;
+        const record = { size: item.size, expiresAt, verified: false, resourceId: crypto.randomUUID(), offset: 0, partCount: 0 };
+        writes.set(item.oid, record);
+        records.set(item.oid, record);
+        created++;
       }
-      const record = { size: item.size, expiresAt, verified: false, resourceId: crypto.randomUUID(), offset: 0, partCount: 0 };
-      writes.set(item.oid, record);
-      records.set(item.oid, record);
-      created++;
     }
   }
   // Coalesce new records and their counter update into the same storage write batch.

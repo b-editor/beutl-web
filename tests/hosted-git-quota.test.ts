@@ -100,8 +100,8 @@ describe("batched Git LFS storage admission", () => {
     const lock = vi.spyOn(prisma.user, "update");
     const files = vi.spyOn(prisma.file, "aggregate");
     const subscription = vi.spyOn(prisma.subscription, "findUnique");
-    const reserve = (items: Parameters<typeof reserveGitLfsBatch>[0]["items"]) =>
-      runWithDbProvider(async () => prisma as never, () => reserveGitLfsBatch({ repoId, ownerId, items }));
+    const reserve = (items: Parameters<typeof reserveGitLfsBatch>[0]["items"], maxReservations?: number) =>
+      runWithDbProvider(async () => prisma as never, () => reserveGitLfsBatch({ repoId, ownerId, items, maxReservations }));
     return { state, findFirst, findMany, createMany, transaction, lock, files, subscription, reserve };
   }
 
@@ -142,6 +142,18 @@ describe("batched Git LFS storage admission", () => {
     await expect(db.reserve([item("b", 1), ...objects])).rejects.toThrow("Git LFS reservation mismatch");
     expect(db.createMany).not.toHaveBeenCalled();
     expect(db.files).not.toHaveBeenCalled();
+  });
+
+  it("counts only admitted reservations against maxReservations when earlier items exceed quota", async () => {
+    const db = database();
+    const tooLarge = item("a", 20), fits = item("b", 5), overLimit = item("c", 1);
+    db.state.files.set("file", { id: "file", userId: ownerId, size: STORAGE_FREE_QUOTA_BYTES - 10 } as never);
+
+    const results = await db.reserve([tooLarge, fits, overLimit], 1);
+    expect([...results]).toEqual([[tooLarge.oid, "overQuota"], [fits.oid, "reserved"], [overLimit.oid, "limitReached"]]);
+    expect(db.createMany).toHaveBeenCalledExactlyOnceWith({
+      data: [{ repoId, ownerId, oid: fits.oid, size: 5n, expiresAt: new Date(expiresAt) }],
+    });
   });
 
   it("returns an empty result without opening the database", async () => {

@@ -40,8 +40,10 @@ export async function withGitDatabase<T>(
 export interface GitStorageAccounting {
   reserveLfs(input: { repoId: string; oid: string; ownerId: string; size: number; expiresAt: number }):
     Promise<"reserved" | "existing" | "overQuota">;
-  reserveLfsBatch?(input: { repoId: string; ownerId: string; items: readonly { oid: string; size: number; expiresAt: number }[] }):
-    Promise<Map<string, "reserved" | "existing" | "overQuota">>;
+  reserveLfsBatch?(input: {
+    repoId: string; ownerId: string; items: readonly { oid: string; size: number; expiresAt: number }[];
+    maxReservations?: number;
+  }): Promise<Map<string, "reserved" | "existing" | "overQuota" | "limitReached">>;
   commitLfs(repoId: string, oid: string): Promise<void>;
   extendLfs(repoId: string, oid: string, expiresAt: number): Promise<void>;
   releaseLfs(repoId: string, oid: string): Promise<void>;
