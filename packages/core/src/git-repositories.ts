@@ -1,5 +1,7 @@
 export const GIT_REPOSITORY_LIMIT = 20;
 export const GIT_REPOSITORY_NAME_MAX_LENGTH = 80;
+export const MAX_GIT_REPOSITORY_THUMBNAIL_BYTES = 1024 * 1024;
+export const MAX_GIT_REPOSITORY_THUMBNAIL_DIMENSION = 1024;
 
 export function isValidGitRepositoryName(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 &&
@@ -18,6 +20,7 @@ export type GitRepositorySummary = {
   url: string;
   createdAt: string;
   updatedAt: string;
+  thumbnailUpdatedAt: string | null;
 };
 
 export const GIT_ACCESS_TOKEN_LIMIT = 50;

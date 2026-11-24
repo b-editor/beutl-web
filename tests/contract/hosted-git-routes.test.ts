@@ -111,6 +111,8 @@ describe("Hosted Git routes in the Worker and the Next.js v3 route", () => {
     ["GET", "/api/v3/repos", undefined],
     ["POST", "/api/v3/repos", { name: "demo", creationId: repoId, ownerId: "owner" }],
     ["GET", `/api/v3/repos/${repoId}`, undefined],
+    ["GET", `/api/v3/repos/${repoId}/thumbnail`, undefined],
+    ["PUT", `/api/v3/repos/${repoId}/thumbnail`, { invalid: true }],
     ["PATCH", `/api/v3/repos/${repoId}`, { name: "renamed" }],
     ["DELETE", `/api/v3/repos/${repoId}`, undefined],
     ["GET", "/api/v3/repos/22222222-2222-4222-8222-222222222222", undefined],

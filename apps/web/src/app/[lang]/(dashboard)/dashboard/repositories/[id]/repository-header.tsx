@@ -15,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from "@beutl/ui/ui/dropdown-menu";
 import { OpenInBeutlButton } from "@/components/open-in-beutl-button";
+import { RepositoryThumbnail } from "../repository-thumbnail";
 import { repositoryHref, shortOid } from "./links";
 import { PendingLink, useRepositoryNavigation } from "./navigation";
 
@@ -41,7 +42,7 @@ export function RepositoryHeader({
   tab,
 }: {
   lang: string;
-  repository: Pick<GitRepositorySummary, "id" | "name">;
+  repository: Pick<GitRepositorySummary, "id" | "name" | "thumbnailUpdatedAt">;
   refs: GitRefList;
   /** A branch, a tag or a commit ID; null for a repository nothing was pushed to. */
   current: string | null;
@@ -67,9 +68,7 @@ export function RepositoryHeader({
       </Link>
       <div className="grid min-w-0 items-start gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
         <div className="flex min-w-0 items-center gap-3">
-          <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-primary/15 bg-primary/5 text-primary">
-            <GitBranch className="size-5" aria-hidden />
-          </span>
+          <RepositoryThumbnail repository={repository} variant="header" />
           <h1 className="min-w-0 break-words text-2xl font-semibold tracking-tight" title={repository.name}>{repository.name}</h1>
         </div>
         <OpenInBeutlButton

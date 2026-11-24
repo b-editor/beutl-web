@@ -60,6 +60,7 @@ model GitRepository {
   id                String    @id @default(uuid())
   ownerId           String?
   name              String
+  thumbnailUpdatedAt DateTime?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
   deletedAt         DateTime?

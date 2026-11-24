@@ -7,6 +7,7 @@ import {
   STORAGE_UPLOAD_FINISH_BODY_BYTES,
   STORAGE_UPLOAD_MAX_PART_BYTES,
 } from "./storage-quota";
+import { MAX_GIT_REPOSITORY_THUMBNAIL_BYTES } from "./git-repositories";
 
 /**
  * 1 リクエストの本文に許す大きさ。
@@ -70,6 +71,9 @@ export function apiRequestBodyLimit(
   }
   if (normalizedMethod === "PATCH" && /^\/api\/v3\/git\/[0-9a-f-]+\.git\/info\/lfs\/objects\/[0-9a-f]{64}\/tus\/[0-9a-f-]+$/u.test(path)) {
     return MAX_GIT_LFS_PART_BYTES;
+  }
+  if (normalizedMethod === "PUT" && /^\/api\/v3\/repos\/[0-9a-f-]+\/thumbnail$/u.test(path)) {
+    return MAX_GIT_REPOSITORY_THUMBNAIL_BYTES;
   }
   if (
     normalizedMethod === "POST" &&

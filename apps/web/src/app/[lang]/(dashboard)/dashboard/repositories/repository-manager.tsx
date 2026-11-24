@@ -18,6 +18,7 @@ import { RepositoryConnectionDialog } from "./repository-connection-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@beutl/ui/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@beutl/ui/ui/toggle-group";
 import { RepositoryActions, RepositoryContextMenu, RepositoryDate, RepositoryGridCard, RepositoryVisibility, repositoryPageHref, type RepositoryHandlers } from "./repository-items";
+import { RepositoryThumbnail } from "./repository-thumbnail";
 import Link from "next/link";
 import { actionFailureKey } from "@/lib/action-error";
 
@@ -184,7 +185,7 @@ export function RepositoryManager({ lang, userId, initialResult }: {
           <TableBody>{filtered.map((repository) => <RepositoryContextMenu key={repository.id} {...itemProps(repository)}>
             <TableRow>
               <TableCell className="w-full min-w-40 max-w-0 py-2">
-                <div className="flex min-w-0 items-center gap-2"><GitBranch className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                <div className="flex min-w-0 items-center gap-3"><RepositoryThumbnail repository={repository} variant="list" />
                   <div className="min-w-0 flex-1"><h2 className="truncate text-sm font-medium" title={repository.name}><Link prefetch={false} className="block w-full truncate text-left outline-none hover:underline focus-visible:underline aria-disabled:pointer-events-none aria-disabled:opacity-50" aria-disabled={pending || !available} tabIndex={pending || !available ? -1 : undefined} href={repositoryPageHref(lang, repository)}>{repository.name}</Link></h2>
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 sm:hidden"><RepositoryVisibility lang={lang} /><RepositoryDate repository={repository} lang={lang} /></div>
                   </div>

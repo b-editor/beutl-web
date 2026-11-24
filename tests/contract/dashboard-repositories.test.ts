@@ -19,7 +19,7 @@ const id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const createdAt = new Date("2026-10-04T00:00:00Z");
 const row = { id, ownerId: "owner", name: "Project", deletedAt: null, createdAt, updatedAt: createdAt };
 const repository = { id, name: "Project", url: `https://git.example/api/v3/git/${id}.git`,
-  createdAt: createdAt.toISOString(), updatedAt: createdAt.toISOString() };
+  createdAt: createdAt.toISOString(), updatedAt: createdAt.toISOString(), thumbnailUpdatedAt: null };
 const cleanup = vi.fn(async (_request: Request) => new Response(null, { status: 204 }));
 const namespace = { idFromName: vi.fn((name: string) => name), get: vi.fn(() => ({ fetch: cleanup })) };
 const gitEnv = {

@@ -10,6 +10,7 @@ import { Button } from "@beutl/ui/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@beutl/ui/ui/context-menu";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@beutl/ui/ui/dropdown-menu";
 import { desktopOpenRepositoryUrl } from "@/lib/desktop-install";
+import { RepositoryThumbnail } from "./repository-thumbnail";
 
 export type RepositoryHandlers = {
   connect: (repository: GitRepositorySummary) => void;
@@ -86,8 +87,8 @@ export function RepositoryGridCard(props: ItemProps) {
   const { t } = useTranslation(lang);
   return <RepositoryContextMenu {...props}>
     <div className="group flex min-w-0 flex-col overflow-hidden rounded-lg border bg-card text-card-foreground transition-colors hover:bg-accent/40">
-      <Link prefetch={false} className="flex aspect-[4/3] w-full items-center justify-center bg-muted/40 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-disabled:pointer-events-none aria-disabled:opacity-50" aria-disabled={disabled} tabIndex={disabled ? -1 : undefined} href={repositoryPageHref(lang, repository)} aria-label={`${t("dashboard:repositories.browse")} ${repository.name}`}>
-        <GitBranch className="size-10 text-muted-foreground" aria-hidden />
+      <Link prefetch={false} className="flex aspect-video w-full items-center justify-center overflow-hidden bg-muted/40 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-disabled:pointer-events-none aria-disabled:opacity-50" aria-disabled={disabled} tabIndex={disabled ? -1 : undefined} href={repositoryPageHref(lang, repository)} aria-label={`${t("dashboard:repositories.browse")} ${repository.name}`}>
+        <RepositoryThumbnail repository={repository} variant="card" />
       </Link>
       <div className="flex items-center gap-2 px-3 py-2">
         <GitBranch className="size-4 shrink-0 text-muted-foreground" aria-hidden />
