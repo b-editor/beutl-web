@@ -8,7 +8,7 @@ class Store implements ObjectStore {
   objects = new Map<string, Uint8Array>();
   get = vi.fn(async (key: string) => this.objects.get(key) ?? null);
   head = vi.fn(async (key: string) => { const data = this.objects.get(key); return data ? { size: data.length } : null; });
-  async put(key: string, data: Uint8Array) { this.objects.set(key, data.slice()); }
+  async put(key: string, data: Uint8Array) { this.objects.set(key, Uint8Array.from(data)); }
   async delete(key: string) { this.objects.delete(key); }
   list = vi.fn(async (prefix: string, { delimiter, limit = Infinity }: ListOptions = {}) => {
     const objects = [], prefixes = new Set<string>();
@@ -69,7 +69,7 @@ it("caches bytes, missing objects, metadata and listings, coalesces reads and ex
   await vi.advanceTimersByTimeAsync(100);
   await read(); expect(store.get).toHaveBeenCalledTimes(4); expect(store.list).toHaveBeenCalledTimes(2);
   await cached.put("missing", Buffer.from("now present"));
-  expect(await cached.get("missing")).toEqual(Buffer.from("now present"));
+  expect(await cached.get("missing")).toEqual(new TextEncoder().encode("now present"));
   await cached.delete("repo/HEAD");
   expect(await cached.get("repo/HEAD")).toBeNull();
   expect((await cached.list("repo/")).objects).toEqual([]);
@@ -95,5 +95,66 @@ it("does not repopulate the cache with a read that finishes after a write", asyn
   const old = cached.get("HEAD");
   await cached.put("HEAD", Buffer.from("new"));
   complete(Buffer.from("old")); await old;
-  expect(await cached.get("HEAD")).toEqual(Buffer.from("new"));
+  expect(await cached.get("HEAD")).toEqual(new TextEncoder().encode("new"));
+});
+
+it("writes through bytes and metadata while preserving unrelated objects and refreshing listings", async () => {
+  const store = new Store(), cached = cacheGitObjectStore(store, { maxBytes: 4096, ttlMs: 1000 });
+  const pack = "repo/objects/pack/recv-1.pack", ref = "repo/refs/heads/main";
+  await store.put(pack, Uint8Array.of(1, 2));
+  await cached.get(pack);
+  await cached.head(pack);
+  await cached.list("repo/");
+  store.get.mockClear(); store.head.mockClear();
+
+  const value = Uint8Array.of(3, 4, 5);
+  await cached.put(ref, value);
+  value.fill(0);
+  expect(await cached.get(ref)).toEqual(Uint8Array.of(3, 4, 5));
+  expect(await cached.head(ref)).toEqual({ size: 3 });
+  expect((await cached.list("repo/")).objects).toEqual([{ key: pack, size: 2 }, { key: ref, size: 3 }]);
+
+  await cached.delete(ref);
+  expect(await cached.get(ref)).toBeNull();
+  expect(await cached.head(ref)).toBeNull();
+  expect((await cached.list("repo/")).objects).toEqual([{ key: pack, size: 2 }]);
+  expect(await cached.get(pack)).toEqual(Uint8Array.of(1, 2));
+  expect(await cached.head(pack)).toEqual({ size: 2 });
+  expect(store.get).not.toHaveBeenCalled();
+  expect(store.head).not.toHaveBeenCalled();
+  expect(store.list).toHaveBeenCalledTimes(3);
+});
+
+it.each(["put", "delete"] as const)("reloads a %s whose response was lost while retaining other keys", async (operation) => {
+  const store = new Store(), cached = cacheGitObjectStore(store, { maxBytes: 4096, ttlMs: 1000 });
+  await store.put("pack", Uint8Array.of(1));
+  await store.put("HEAD", Uint8Array.of(2));
+  const readHead = () => Promise.all([cached.get("HEAD"), cached.head("HEAD"), cached.list("HEAD")]);
+  await cached.get("pack");
+  await readHead();
+  store.get.mockClear(); store.head.mockClear(); store.list.mockClear();
+
+  const gate = Promise.withResolvers<void>(), failure = new Error("B2 response was lost");
+  const newValue = Uint8Array.of(3, 4);
+  vi.spyOn(store, operation).mockImplementationOnce(async () => {
+    await gate.promise;
+    if (operation === "put") store.objects.set("HEAD", newValue);
+    else store.objects.delete("HEAD");
+    throw failure;
+  });
+  const rejected = expect(operation === "put" ? cached.put("HEAD", newValue) : cached.delete("HEAD")).rejects.toBe(failure);
+  try {
+    expect(await readHead()).toEqual([Uint8Array.of(2), { size: 1 }, { objects: [{ key: "HEAD", size: 1 }], prefixes: [] }]);
+    expect(store.get).toHaveBeenCalledExactlyOnceWith("HEAD");
+    expect(store.head).toHaveBeenCalledExactlyOnceWith("HEAD");
+    expect(store.list).toHaveBeenCalledOnce();
+  } finally { gate.resolve(); }
+  await rejected;
+  const exists = operation === "put";
+  expect(await readHead()).toEqual([exists ? newValue : null, exists ? { size: 2 } : null,
+    { objects: exists ? [{ key: "HEAD", size: 2 }] : [], prefixes: [] }]);
+  expect(await cached.get("pack")).toEqual(Uint8Array.of(1));
+  expect(store.get.mock.calls).toEqual([["HEAD"], ["HEAD"]]);
+  expect(store.head).toHaveBeenCalledTimes(2);
+  expect(store.list).toHaveBeenCalledTimes(2);
 });

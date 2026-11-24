@@ -31,7 +31,7 @@ import {
 } from "./storage-uploads";
 import { resolveStorageBucket } from "./storage/bucket-from-env";
 import type { GitEnvironment } from "./git/environment";
-import { resolveWorkerSecrets, type WorkerSecretBindings } from "./worker-secrets";
+import { resolveWorkerSecrets, S3_SECRET_NAMES, WORKER_SECRET_NAMES, type WorkerSecretBindings } from "./worker-secrets";
 import {
   reconcileGitHistoryReservations,
   reconcileGitLfsReservations,
@@ -91,7 +91,7 @@ type ScheduledControllerLike = {
 // signing and incoming-webhook credentials must not gate these maintenance jobs.
 const SCHEDULED_SECRET_NAMES = [
   "STRIPE_SECRET_KEY", "OPENROUTER_API_KEY", "VERCEL_AI_GATEWAY_API_KEY",
-  "BEUTL_S3_ACCESS_KEY_ID", "BEUTL_S3_SECRET_ACCESS_KEY", "BEUTL_S3_SESSION_TOKEN",
+  ...S3_SECRET_NAMES,
 ] as const;
 
 type ApiExecutionContext = NonNullable<Parameters<typeof api.fetch>[2]>;
@@ -157,6 +157,8 @@ export function isApiRequest(request: Request): boolean {
 const BODYLESS_METHODS = new Set(["GET", "HEAD"]);
 const STORAGE_PART_PATH = /^\/api\/v3\/storage\/uploads\/[^/]+\/parts\/\d+$/u;
 const TUS_UPLOAD_PATH = /^\/api\/v3\/git\/[^/]+\.git\/info\/lfs\/objects\/[0-9a-f]{64}\/tus(?:\/[^/]*)?$/u;
+const GIT_REPOSITORY_PATH = /^\/api\/v3\/git\/[^/]+\.git(?:\/|$)/u;
+const GIT_MEDIA_PATH = /^\/api\/v3\/git\/[^/]+\.git\/info\/lfs\/objects\/[0-9a-f]{64}\/(?:download|verify|tus(?:\/[^/]+)?)$/u;
 
 /** tus clients require Tus-Resumable on every response, including this boundary's 413. */
 async function bodyTooLarge(request: Request): Promise<Response> {
@@ -223,7 +225,11 @@ export default {
     });
     if (bounded === null) return bodyTooLarge(request);
 
-    const env = await resolveWorkerSecrets<Env>(bindings);
+    const pathname = new URL(bounded.url).pathname;
+    // Git authentication uses the database. Only media transfers access S3 from this Worker.
+    const secretNames = GIT_MEDIA_PATH.test(pathname) ? S3_SECRET_NAMES
+      : GIT_REPOSITORY_PATH.test(pathname) ? [] : WORKER_SECRET_NAMES;
+    const env = await resolveWorkerSecrets<Env>(bindings, secretNames);
     return withApiBindings(env, async (scopedContext) => {
       try {
         const response = await api.fetch(bounded, env, scopedContext);

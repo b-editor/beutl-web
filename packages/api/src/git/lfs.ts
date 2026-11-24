@@ -9,7 +9,7 @@ import type { GitScope } from "./tokens";
 /** B2 multipart uploads have at most 10,000 parts, and each tus PATCH stores one. */
 export const MAX_LFS_PARTS = 10_000;
 export const MAX_LFS_OBJECT_BYTES = MAX_LFS_PARTS * MAX_GIT_LFS_PART_BYTES;
-// Bounds the records a batch lists and the repository object sweeps.
+// Bounds the LFS records stored per repository and visited by its sweeps.
 const MAX_LFS_OBJECTS = 10_000;
 /** B2 accepts one PUT of at most 5 GB; larger objects need the desktop's beutl-tus agent. */
 export const MAX_BASIC_LFS_OBJECT_BYTES = 5_000_000_000;
@@ -64,10 +64,21 @@ export async function readJson(request: Request): Promise<any> {
   return JSON.parse(new TextDecoder().decode(await readBodyAtMost(request, 32 * 1024)));
 }
 
+async function readLfsCount(storage: GitDurableStorage, newObjects: number): Promise<number> {
+  const count = await storage.get<number>("lfsCount");
+  if (count !== undefined && count + newObjects <= MAX_LFS_OBJECTS) return count;
+  // Initialize older repositories and confirm the count before rejecting new objects.
+  const actual = (await storage.list({ prefix: "lfs:" })).size;
+  await storage.put("lfsCount", actual);
+  return actual;
+}
+
 export async function cleanupLfs(
   storage: GitDurableStorage, bucket: GitObjectBucket, accounting: GitStorageAccounting | undefined,
   repoId: string, oid: string, record?: LfsRecord,
 ): Promise<void> {
+  const recordKey = `lfs:${oid}`;
+  record ??= await storage.get<LfsRecord>(recordKey);
   if (record?.verified) return;
   const key = lfsKey(repoId, oid);
   if (record?.uploadId) await bucket.resumeMultipartUpload(key, record.uploadId).abort();
@@ -77,7 +88,11 @@ export async function cleanupLfs(
   await accounting?.releaseLfs(repoId, oid);
   const parts = await storage.list({ prefix: partPrefix(oid) });
   if (parts.size) await storage.delete([...parts.keys()]);
-  await storage.delete(`lfs:${oid}`);
+  const count = record ? await storage.get<number>("lfsCount") : undefined;
+  await Promise.all([
+    storage.delete(recordKey),
+    count === undefined ? undefined : storage.put("lfsCount", Math.max(0, count - 1)),
+  ]);
 }
 
 export async function handleLfsBatch(
@@ -101,67 +116,94 @@ export async function handleLfsBatch(
   if (input.transfers && !input.transfers.includes(transfer))
     return json({ message: "LFS needs the basic or beutl-tus transfer" }, 422);
   const ownerId = request.headers.get("x-beutl-git-owner-id") ?? "";
-  const authorization = request.headers.get("authorization");
+  const credential = { Authorization: request.headers.get("authorization") };
   const base = `${new URL(request.url).origin}/api/v3/git/${repoId}.git/info/lfs/objects`;
-  const objects = [];
-  let stored: number | undefined;
-  for (const object of input.objects) {
-    const { oid, size } = object;
-    let record = await storage.get<LfsRecord>(`lfs:${oid}`);
+  const requested = input.objects as { oid: string; size: number }[];
+  const oids = [...new Set(requested.map(({ oid }) => oid))];
+  const records = new Map(await Promise.all(oids.map(async (oid) =>
+    [oid, await storage.get<LfsRecord>(`lfs:${oid}`)] as const)));
+  for (const [oid, record] of records) {
     if (record && !record.verified && record.expiresAt <= Date.now()) {
       await cleanupLfs(storage, bucket, accounting, repoId, oid, record);
-      record = undefined;
+      records.delete(oid);
     }
-    if (record && record.size !== size) {
-      objects.push({ oid, size, error: { code: 409, message: "LFS size differs from its reservation" } }); continue;
-    }
-    if (input.operation === "download") {
-      objects.push(record?.verified && record.versionId
+  }
+
+  const now = Date.now();
+  const expiresAt = now + UPLOAD_LIFETIME_MS;
+  const writes = new Map<string, LfsRecord>();
+  const toReserve = new Map<string, { oid: string; size: number; expiresAt: number }>();
+  const ready = requested.map(({ oid, size }) => {
+    const record = records.get(oid);
+    const reservation = record ?? toReserve.get(oid);
+    if (reservation && reservation.size !== size)
+      return { oid, size, error: { code: 409, message: "LFS size differs from its reservation" } };
+    if (input.operation === "download")
+      return record?.verified && record.versionId
         ? { oid, size, authenticated: true, actions: { download: {
-          href: `${base}/${oid}/download`, header: { Authorization: authorization },
+          href: `${base}/${oid}/download`, header: credential,
         } } }
-        : { oid, size, error: { code: 404, message: "LFS object is not verified" } });
-      continue;
-    }
+        : { oid, size, error: { code: 404, message: "LFS object is not verified" } };
     if (record?.verified) {
       // The client may be about to push a commit that points here.
-      if (Date.now() - (record.touchedAt ?? 0) > LFS_TOUCH_PRECISION_MS) await storage.put(`lfs:${oid}`, { ...record, touchedAt: Date.now() });
-      objects.push({ oid, size }); continue;
+      if (now - (record.touchedAt ?? 0) > LFS_TOUCH_PRECISION_MS) writes.set(oid, { ...record, touchedAt: now });
+      return { oid, size };
     }
     // Objects already stored need no transfer, whatever their size.
-    if (size > (transfer === "basic" ? MAX_BASIC_LFS_OBJECT_BYTES : MAX_LFS_OBJECT_BYTES)) {
-      objects.push({ oid, size, error: { code: 422, message: size > MAX_LFS_OBJECT_BYTES
+    if (size > (transfer === "basic" ? MAX_BASIC_LFS_OBJECT_BYTES : MAX_LFS_OBJECT_BYTES))
+      return { oid, size, error: { code: 422, message: size > MAX_LFS_OBJECT_BYTES
         ? `LFS objects are limited to ${MAX_LFS_OBJECT_BYTES / 1024 ** 3} GiB`
-        : "LFS objects over 5 GB need the Beutl desktop app" } });
-      continue;
-    }
-    if (!record) {
-      stored ??= (await storage.list({ prefix: "lfs:" })).size;
-      if (stored >= MAX_LFS_OBJECTS) {
-        objects.push({ oid, size, error: { code: 413, message: "Repositories are limited to 10,000 LFS objects" } }); continue;
+        : "LFS objects over 5 GB need the Beutl desktop app" } };
+    if (!reservation) toReserve.set(oid, { oid, size, expiresAt });
+  });
+
+  const overQuota = new Set<string>();
+  let count = 0, created = 0;
+  if (toReserve.size) {
+    count = await readLfsCount(storage, toReserve.size);
+    const remainingSlots = Math.max(0, MAX_LFS_OBJECTS - count);
+    if (remainingSlots > 0) {
+      const candidates = [...toReserve.values()];
+      const reservations = accounting?.reserveLfsBatch
+        ? await accounting.reserveLfsBatch({ repoId, ownerId, items: candidates, maxReservations: remainingSlots })
+        : undefined;
+      for (const item of candidates) {
+        if (created >= remainingSlots) break;
+        const result = reservations ? reservations.get(item.oid) : await accounting?.reserveLfs({ repoId, ownerId, ...item });
+        if (result === "overQuota") {
+          overQuota.add(item.oid);
+          continue;
+        }
+        if (result === "limitReached") continue;
+        const record = { size: item.size, expiresAt, verified: false, resourceId: crypto.randomUUID(), offset: 0, partCount: 0 };
+        writes.set(item.oid, record);
+        records.set(item.oid, record);
+        created++;
       }
-      const expiresAt = Date.now() + UPLOAD_LIFETIME_MS;
-      if (await accounting?.reserveLfs({ repoId, oid, ownerId, size, expiresAt }) === "overQuota") {
-        objects.push({ oid, size, error: { code: 413, message: "Account storage quota exceeded" } }); continue;
-      }
-      record = { size, expiresAt, verified: false, resourceId: crypto.randomUUID(), offset: 0, partCount: 0 };
-      await storage.put(`lfs:${oid}`, record);
-      stored++;
-      await scheduleGitMaintenance(storage, expiresAt + 1000);
     }
+  }
+  // Coalesce new records and their counter update into the same storage write batch.
+  await Promise.all([
+    ...[...writes].map(([oid, record]) => storage.put(`lfs:${oid}`, record)),
+    created ? storage.put("lfsCount", count + created) : undefined,
+  ]);
+  if (created) await scheduleGitMaintenance(storage, expiresAt + 1000);
+
+  const objects = await Promise.all(requested.map(async ({ oid, size }, index) => {
+    if (ready[index]) return ready[index];
+    const record = records.get(oid);
+    if (!record) return { oid, size, error: { code: 413, message: overQuota.has(oid)
+      ? "Account storage quota exceeded" : "Repositories are limited to 10,000 LFS objects" } };
     // The client's own repository credential authorizes tus and verification requests.
-    const credential = { Authorization: authorization };
     const reservedUntil = new Date(record.expiresAt).toISOString();
     const verify = { href: `${base}/${oid}/verify`, header: credential, expires_at: reservedUntil };
-    if (transfer === "beutl-tus") {
-      objects.push({ oid, size, authenticated: true, actions: {
+    if (transfer === "beutl-tus")
+      return { oid, size, authenticated: true, actions: {
         upload: { href: `${base}/${oid}/tus`, header: credential, expires_at: reservedUntil }, verify,
-      } });
-      continue;
-    }
+      } };
     if (!bucket.presignUpload) throw new Error("Object storage cannot presign LFS uploads");
     const lifetime = Math.max(1000, Math.min(UPLOAD_URL_LIFETIME_MS, record.expiresAt - Date.now()));
-    objects.push({ oid, size, authenticated: true, actions: {
+    return { oid, size, authenticated: true, actions: {
       // B2 stores the PUT body only if its length and SHA-256 match this object.
       upload: {
         href: await bucket.presignUpload(lfsKey(repoId, oid), size, oid, Math.floor(lifetime / 1000)),
@@ -169,8 +211,8 @@ export async function handleLfsBatch(
         expires_at: new Date(Date.now() + lifetime).toISOString(),
       },
       verify,
-    } });
-  }
+    } };
+  }));
   return new Response(JSON.stringify({ transfer, objects }), {
     headers: { "Content-Type": "application/vnd.git-lfs+json", "Cache-Control": "no-store" },
   });

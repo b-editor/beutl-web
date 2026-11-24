@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import git from "isomorphic-git";
 import {
   FLUSH,
   GitProtocolError,
@@ -12,15 +11,15 @@ import {
   type RefUpdate,
 } from "./git-protocol";
 import { MAX_GIT_NEGOTIATION_BYTES, MAX_GIT_PUSH_BYTES } from "@beutl/core";
-import { GitObjectStore, type GitObjectBucket, type ObjectStore } from "./git-object-store";
+import { GitObjectStore, type GitObjectBucket, type ListResult, type ObjectStore } from "./git-object-store";
 import { GitFileSystem } from "./git-filesystem";
-import { readRefs } from "./git-refs";
+import { readRefSnapshot } from "./git-refs";
 import { GitObjectReader, type PackedGitEntry } from "./object-reader";
 import { collectGitObjects, GitObjectGraphError } from "./object-graph";
-import { createGitPack, gitPackResponse } from "./pack-writer";
-import { GitPackLimitError, GitPackValidationError, validateGitPack, type ValidatedGitObject } from "./pack-validation";
+import { createGitPack, gitIndexBytes, gitPackResponse } from "./pack-writer";
+import { GitPackLimitError, GitPackValidationError, validateAndIndexGitPack, type ValidatedGitObject } from "./pack-validation";
 
-// Incoming pack validation and isomorphic-git indexing read full packs in memory.
+// Incoming pack validation reads full packs in memory.
 // Keep the Git history small; media must go through LFS.
 export const MAX_GIT_REPOSITORY_BYTES = 16 * 1024 * 1024;
 // Leave room below the object adapter's 10,000-entry listing ceiling, including
@@ -28,19 +27,27 @@ export const MAX_GIT_REPOSITORY_BYTES = 16 * 1024 * 1024;
 const MAX_GIT_REPOSITORY_OBJECTS = 9_000;
 const MAX_GIT_REPOSITORY_REFS = 128;
 const GITDIR = "/repo.git";
+const INITIAL_FILES = [
+  ["config", "[core]\n\trepositoryformatversion = 0\n\tfilemode = false\n\tbare = true\n"],
+  ["HEAD", "ref: refs/heads/main\n"],
+] as const;
 type CheckedRefUpdate = RefUpdate & { error?: string };
+type RepositoryOptions = { store?: ObjectStore; objects?: ListResult["objects"]; initialized?: boolean };
+type ReceivePackOptions = RepositoryOptions & {
+  beforeWrite?: () => Promise<void>;
+  onSettled?: (result: { wrote: boolean; bytes: number }) => void;
+};
 
-function incomingGitObjectBytes(pack: Uint8Array): number {
+export const gitRepositoryPrefix = (repoId: string) => `git/repos/${repoId}`;
+
+function incomingGitPackCount(pack: Uint8Array): number {
   if (pack.byteLength === 0) return 0; // Ref-only update/deletion.
   if (pack.byteLength < 32 || new TextDecoder().decode(pack.subarray(0, 4)) !== "PACK") {
     throw new Error("Invalid Git pack header");
   }
   const header = new DataView(pack.buffer, pack.byteOffset, pack.byteLength);
   if (![2, 3].includes(header.getUint32(4))) throw new Error("Unsupported Git pack version");
-  // indexPack writes a v2 index: 8-byte header, 256 fanout entries, 28
-  // bytes/object (SHA-1, CRC, offset), and two 20-byte checksums. The incoming
-  // 8 MiB bound means offsets never need the additional 64-bit offset table.
-  return pack.byteLength + 1072 + header.getUint32(8) * 28;
+  return header.getUint32(8);
 }
 
 export async function readBodyAtMost(request: Request, limit: number): Promise<Uint8Array> {
@@ -78,26 +85,64 @@ export async function readBodyAtMost(request: Request, limit: number): Promise<U
  */
 export function readGitRepository(bucket: GitObjectBucket, repoId: string,
   { store = new GitObjectStore(bucket), looseObjectHints = false }: { store?: ObjectStore; looseObjectHints?: boolean } = {}) {
-  const prefix = `git/repos/${repoId}`;
+  const prefix = gitRepositoryPrefix(repoId);
   const fs = new GitFileSystem(store, prefix, looseObjectHints);
   return { store, prefix, fs, repo: { fs, gitdir: GITDIR, cache: {} } };
 }
 
-/** Opens the bare repository, writing HEAD/config the first time it is used. */
-async function openRepository(bucket: GitObjectBucket, repoId: string) {
-  const opened = readGitRepository(bucket, repoId);
-  const root = `${opened.prefix}${GITDIR}/`;
-  // Check both independently so a failed first initialization can be retried
-  // without changing an existing repository's default branch.
-  for (const [name, contents] of [
-    ["config", "[core]\n\trepositoryformatversion = 0\n\tfilemode = false\n\tbare = true\n"],
-    ["HEAD", "ref: refs/heads/main\n"],
-  ]) if (!await opened.store.head(root + name)) await opened.store.put(root + name, Buffer.from(contents));
-  return opened;
+async function finishWrites(writes: Promise<void>[]): Promise<void> {
+  try { await Promise.all(writes); }
+  catch (error) {
+    // The repository queue still owns all of these writes on failure.
+    await Promise.allSettled(writes);
+    throw error;
+  }
 }
 
-export async function initializeGitRepository(bucket: GitObjectBucket, repoId: string): Promise<void> {
-  await openRepository(bucket, repoId);
+/** Writes missing bare repository metadata from the history accounting listing. */
+export async function initializeGitRepository(bucket: GitObjectBucket, repoId: string,
+  options: RepositoryOptions = {}, beforeWrite?: () => Promise<void>) {
+  const store = options.store ?? new GitObjectStore(bucket);
+  const prefix = gitRepositoryPrefix(repoId), root = `${prefix}${GITDIR}/`;
+  let objects = options.objects ?? (await store.list(`${prefix}/`)).objects;
+  // Check both files independently so retrying a partial initialization
+  // preserves the default branch of an existing repository.
+  const missing = options.initialized ? [] : INITIAL_FILES.filter(([name]) => !objects.some(({ key }) => key === root + name))
+    .map(([name, contents]) => ({ key: root + name, data: Buffer.from(contents) }));
+  if (missing.length) {
+    await beforeWrite?.();
+    await finishWrites(missing.map(({ key, data }) => store.put(key, data)));
+    objects = [...objects, ...missing.map(({ key, data }) => ({ key, size: data.byteLength }))];
+  }
+  return { objects, bytes: objects.reduce((bytes, object) => bytes + object.size, 0), wrote: missing.length > 0 };
+}
+
+async function openRepository(bucket: GitObjectBucket, repoId: string, options: RepositoryOptions,
+  beforeWrite?: () => Promise<void>) {
+  const opened = readGitRepository(bucket, repoId, { store: options.store });
+  const { store, prefix, fs } = opened, root = `${prefix}${GITDIR}/`;
+  const { objects, bytes: storedBytes, wrote } = await initializeGitRepository(bucket, repoId, { ...options, store }, beforeWrite);
+  const refSizes = new Map<string, number>();
+  const packIndexNames: string[] = [];
+  const objectsPrefix = `${root}objects/`, packPrefix = `${objectsPrefix}pack/`;
+  let objectBytes = 0, objectCount = 0, lastPackTime = 0;
+  let hasLooseObjects = false, packedRefsSize: number | undefined;
+  for (const { key, size } of objects) {
+    if (key.startsWith(`${root}refs/`)) refSizes.set(key, size);
+    if (key === `${root}packed-refs`) packedRefsSize = size;
+    if (!key.startsWith(objectsPrefix)) continue;
+    objectCount++;
+    objectBytes += size;
+    if (/^[0-9a-f]{2}\/[0-9a-f]{38}$/u.test(key.slice(objectsPrefix.length))) hasLooseObjects = true;
+    if (!key.startsWith(packPrefix)) continue;
+    const name = key.slice(packPrefix.length);
+    if (name.endsWith(".idx") && !name.includes("/")) packIndexNames.push(name);
+    const time = /^(?:recv|pack)-(\d+)\.pack$/u.exec(name)?.[1];
+    if (time) lastPackTime = Math.max(lastPackTime, Number(time));
+  }
+  fs.setNoLooseObjects(!hasLooseObjects);
+  return { ...opened, root, refSizes, packedRefsSize, storedBytes, objectBytes, objectCount, lastPackTime,
+    packIndexNames: packIndexNames.sort(), wrote };
 }
 
 export type GitService = "git-upload-pack" | "git-receive-pack";
@@ -106,9 +151,14 @@ export function isGitService(value: string | undefined): value is GitService {
   return value === "git-upload-pack" || value === "git-receive-pack";
 }
 
-export async function advertiseGitRefs(bucket: GitObjectBucket, repoId: string, service: GitService): Promise<Response> {
-  const opened = await openRepository(bucket, repoId), root = `${opened.prefix}${GITDIR}/`;
-  const [refs, headBytes] = await Promise.all([readRefs(opened.store, root), opened.store.get(`${root}HEAD`)]);
+export async function advertiseGitRefs(bucket: GitObjectBucket, repoId: string, service: GitService,
+  options: RepositoryOptions = {}): Promise<Response> {
+  const opened = await openRepository(bucket, repoId, options);
+  const { store, root, refSizes, packedRefsSize, packIndexNames } = opened;
+  const [{ refs }, headBytes] = await Promise.all([
+    readRefSnapshot(store, root, { refKeys: [...refSizes.keys()], hasPackedRefs: packedRefsSize !== undefined }),
+    store.get(`${root}HEAD`),
+  ]);
   const head = headBytes ? Buffer.from(headBytes).toString("utf8").trim() : "";
   const target = head.startsWith("ref: ") && isGitRefName(head.slice(5)) ? head.slice(5) : undefined;
   const headOid = target ? refs.get(target) : /^[0-9a-f]{40}$/u.test(head) ? head : undefined;
@@ -117,7 +167,7 @@ export async function advertiseGitRefs(bucket: GitObjectBucket, repoId: string, 
       "allow-tip-sha1-in-want", "allow-reachable-sha1-in-want", ...(target ? [`symref=HEAD:${target}`] : [])]
     : ["report-status", "delete-refs", "ofs-delta", "side-band-64k"];
   const entries: [string, string][] = headOid ? [["HEAD", headOid]] : [];
-  const reader = new GitObjectReader(opened);
+  const reader = new GitObjectReader(opened, { packIndexNames });
   for (const [name, oid] of [...refs].sort(([a], [b]) => Buffer.compare(Buffer.from(a), Buffer.from(b)))) {
     if (!isGitRefName(name)) throw new Error("Invalid stored Git ref");
     entries.push([name, oid]);
@@ -153,14 +203,14 @@ async function commonObjects(reader: GitObjectReader, haves: string[]): Promise<
   return common;
 }
 
-export async function uploadGitPack(request: Request, bucket: GitObjectBucket, repoId: string): Promise<Response> {
+export async function uploadGitPack(request: Request, bucket: GitObjectBucket, repoId: string,
+  options: RepositoryOptions = {}): Promise<Response> {
   const body = await readBodyAtMost(request, MAX_GIT_NEGOTIATION_BYTES);
   let lines: (string | null)[];
   try { lines = parsePktLines(body); }
   catch (error) { if (error instanceof GitProtocolError) return new Response(error.message, { status: 400 }); throw error; }
-  const opened = await openRepository(bucket, repoId);
-  const objects = await opened.store.list(`${opened.prefix}/repo.git/objects/`);
-  if (objects.objects.reduce((size, object) => size + object.size, 0) > MAX_GIT_REPOSITORY_BYTES)
+  const opened = await openRepository(bucket, repoId, options);
+  if (opened.objectBytes > MAX_GIT_REPOSITORY_BYTES)
     return new Response("Git history exceeds the serving limit", { status: 413 });
   const wants = lines.filter((line): line is string => line?.startsWith("want ") ?? false).map((line) => line.slice(5, 45));
   const haves = lines.map(haveOf).filter((oid): oid is string => oid !== undefined);
@@ -172,8 +222,7 @@ export async function uploadGitPack(request: Request, bucket: GitObjectBucket, r
     headers: { "Content-Type": "application/x-git-upload-pack-result", "Cache-Control": "no-cache" },
   });
   if (!wants.length || (haves.length && !multiAck && !done)) return reply(["NAK\n"]);
-  await opened.fs.detectLooseObjects(GITDIR);
-  const reader = new GitObjectReader(opened), common = await commonObjects(reader, haves);
+  const reader = new GitObjectReader(opened, { packIndexNames: opened.packIndexNames }), common = await commonObjects(reader, haves);
   if (haves.length && multiAck && !done) return reply([...common.map((oid) => `ACK ${oid} common\n`), "NAK\n"]);
   const have = await collectGitObjects(reader, common);
   const want = await collectGitObjects(reader, wants, { exclude: have });
@@ -195,106 +244,125 @@ export async function uploadGitPack(request: Request, bucket: GitObjectBucket, r
 export async function receiveGitPack(
   request: Request, bucket: GitObjectBucket, repoId: string,
   reserveHistory?: (maxAdditionalBytes: number) => Promise<boolean>,
+  { beforeWrite, onSettled, ...options }: ReceivePackOptions = {},
 ): Promise<Response> {
   const body = await readBodyAtMost(request, MAX_GIT_PUSH_BYTES);
   let parsed: ReturnType<typeof parseReceivePackBody>;
   try { parsed = parseReceivePackBody(body); }
   catch (error) { if (error instanceof GitProtocolError) return new Response(error.message, { status: 400 }); throw error; }
-  const repository = await openRepository(bucket, repoId);
-  const { store, prefix, repo } = repository;
+  let readyToWrite: Promise<void> | undefined;
+  const beforeFirstWrite = () => readyToWrite ??= beforeWrite?.() ?? Promise.resolve();
+  const repository = await openRepository(bucket, repoId, options, beforeFirstWrite);
+  const { store, root, refSizes, packedRefsSize } = repository;
+  let { storedBytes, wrote } = repository;
+  const finish = (response: Response) => {
+    onSettled?.({ wrote, bytes: storedBytes });
+    return response;
+  };
   // The Durable Object holds the single-writer queue from this comparison
   // through the ref writes. Stale retries must not store another pack.
-  const refs = await readRefs(store, `${prefix}${GITDIR}/`);
+  const { refs, packedRefs } = await readRefSnapshot(store, root, {
+    refKeys: [...refSizes.keys()], hasPackedRefs: packedRefsSize !== undefined,
+  });
   const updates: CheckedRefUpdate[] = parsed.refUpdates.map((update) => ({ ...update,
     error: (refs.get(update.refName) ?? ZERO_OID) !== update.oldOid ? "stale ref" : undefined,
   }));
-  if (updates.every((update) => update.error)) return receivePackResponse(updates, parsed.capabilities);
-  let additionalBytes: number;
-  try { additionalBytes = incomingGitObjectBytes(parsed.packData); }
+  if (updates.every((update) => update.error)) return finish(receivePackResponse(updates, parsed.capabilities));
+  let count: number;
+  try { count = incomingGitPackCount(parsed.packData); }
   catch {
     // Malformed pack metadata is a client protocol error, returned as HTTP 400.
-    return new Response("Invalid Git pack header", { status: 400 });
+    return finish(new Response("Invalid Git pack header", { status: 400 }));
   }
-  if (parsed.packData.byteLength > 0 &&
-      new DataView(parsed.packData.buffer, parsed.packData.byteOffset).getUint32(8) === 0) {
+  if (parsed.packData.byteLength > 0 && count === 0) {
     // Native Git can send a checksum-bearing, zero-object pack for a ref-only
     // creation. Validate it, then avoid retaining a useless pack/index pair.
-    if (parsed.packData.byteLength !== 32) return new Response("Invalid empty Git pack", { status: 400 });
+    if (parsed.packData.byteLength !== 32) return finish(new Response("Invalid empty Git pack", { status: 400 }));
     const checksum = new Uint8Array(await crypto.subtle.digest("SHA-1", Uint8Array.from(parsed.packData.subarray(0, 12))));
     if (!checksum.every((byte, index) => byte === parsed.packData[12 + index])) {
-      return new Response("Invalid empty Git pack checksum", { status: 400 });
+      return finish(new Response("Invalid empty Git pack checksum", { status: 400 }));
     }
     parsed.packData = new Uint8Array();
-    additionalBytes = 0;
   }
-  const looseRefs = await store.list(`${prefix}/repo.git/refs/`);
-  const projectedRefs = new Set(looseRefs.objects.map((ref) => ref.key));
-  for (const update of updates) {
-    if (!update.error && update.newOid !== ZERO_OID) projectedRefs.add(`${prefix}/repo.git/${update.refName}`);
+  const packBytes = parsed.packData.length ? parsed.packData.byteLength + gitIndexBytes(count) : 0;
+  const refGrowth = (changes: CheckedRefUpdate[]) => changes.reduce((bytes, { refName, newOid, error }) =>
+    !error && newOid !== ZERO_OID ? bytes + Math.max(0, 41 - (refSizes.get(root + refName) ?? 0)) : bytes, 0);
+  const projectedRefs = new Set(refs.keys());
+  for (const { refName, newOid, error } of updates) {
+    if (!error && newOid !== ZERO_OID) projectedRefs.add(refName);
   }
   // Do not credit deletions until they succeed: a stale deletion must not
   // create room for new refs in the same request. Existing refs stay mutable.
-  if (projectedRefs.size > looseRefs.objects.length && projectedRefs.size > MAX_GIT_REPOSITORY_REFS) {
-    return new Response("Git repository ref count limit exceeded", { status: 413 });
+  if (projectedRefs.size > refs.size && projectedRefs.size > MAX_GIT_REPOSITORY_REFS) {
+    return finish(new Response("Git repository ref count limit exceeded", { status: 413 }));
   }
-  const objects = await store.list(`${prefix}/repo.git/objects/`);
-  const allObjects = await store.list(`${prefix}/repo.git/`);
-  const storedBytes = allObjects.objects.reduce((size, object) => size + object.size, 0);
-  additionalBytes += Math.max(0, projectedRefs.size - looseRefs.objects.length) * 41;
-  if (parsed.packData.byteLength > 0 && objects.objects.length + 2 > MAX_GIT_REPOSITORY_OBJECTS) {
-    return new Response("Git history object count limit exceeded", { status: 413 });
+  if (packBytes && repository.objectCount + 2 > MAX_GIT_REPOSITORY_OBJECTS) {
+    return finish(new Response("Git history object count limit exceeded", { status: 413 }));
   }
-  if (storedBytes + additionalBytes > MAX_GIT_REPOSITORY_BYTES) {
-    return new Response("Git history quota exceeded; track media with Git LFS", { status: 413 });
+  if (storedBytes + packBytes + refGrowth(updates) > MAX_GIT_REPOSITORY_BYTES) {
+    return finish(new Response("Git history quota exceeded; track media with Git LFS", { status: 413 }));
   }
+  let index: Uint8Array<ArrayBuffer>;
   try {
-    if (parsed.packData.length && new DataView(parsed.packData.buffer, parsed.packData.byteOffset).getUint32(8) > MAX_GIT_REPOSITORY_OBJECTS)
-      throw new GitPackLimitError("Git pack has too many objects");
-    // Keep full connectivity checks without a missing-loose-object GET per stored object.
-    const validationRepository = readGitRepository(bucket, repoId, { store, looseObjectHints: true });
-    await validationRepository.fs.detectLooseObjects(GITDIR);
-    const reader = new GitObjectReader(validationRepository);
-    const incoming = await validateGitPack(parsed.packData, MAX_GIT_REPOSITORY_BYTES, reader);
-    await validateRefUpdates(updates, refs, reader, incoming);
+    if (count > MAX_GIT_REPOSITORY_OBJECTS) throw new GitPackLimitError("Git pack has too many objects");
+    const reader = new GitObjectReader(repository, { packIndexNames: repository.packIndexNames });
+    const validated = await validateAndIndexGitPack(parsed.packData, MAX_GIT_REPOSITORY_BYTES, reader);
+    index = validated.index;
+    if (parsed.packData.length && index.byteLength !== gitIndexBytes(count)) throw new Error("Git pack index is incomplete");
+    await validateRefUpdates(updates, refs, reader, validated.objects);
   } catch (error) {
     if (!(error instanceof GitPackValidationError)) throw error;
-    return new Response(error instanceof GitPackLimitError ? error.message : "Invalid Git pack", {
+    return finish(new Response(error instanceof GitPackLimitError ? error.message : "Invalid Git pack", {
       status: error instanceof GitPackLimitError ? 413 : 400,
-    });
+    }));
   }
-  if (updates.every((update) => update.error)) return receivePackResponse(updates, parsed.capabilities);
-  if (reserveHistory && !await reserveHistory(additionalBytes)) {
-    return new Response("Account storage quota exceeded", { status: 413 });
+  const accepted = updates.filter(({ error }) => !error);
+  if (!accepted.length) return finish(receivePackResponse(updates, parsed.capabilities));
+  const deletedRefs = new Set(accepted.filter(({ newOid }) => newOid === ZERO_OID).map(({ refName }) => refName));
+  const deletes = [...deletedRefs].map((name) => root + name).filter((key) => refSizes.has(key));
+  const puts = accepted.filter(({ newOid }) => newOid !== ZERO_OID).map(({ refName, newOid }) =>
+    ({ key: root + refName, data: Buffer.from(`${newOid}\n`) }));
+  const remainingPackedRefs = packedRefs.filter(({ name }) => name === undefined || !deletedRefs.has(name));
+  const packed = remainingPackedRefs.length < packedRefs.length
+    ? Buffer.from(remainingPackedRefs.map(({ text }) => text).join("\n")) : undefined;
+  const packedDelta = packed ? packed.byteLength - (packedRefsSize ?? 0) : 0;
+  const additionalBytes = packBytes + refGrowth(accepted) + Math.max(0, packedDelta);
+  if (storedBytes + additionalBytes > MAX_GIT_REPOSITORY_BYTES) {
+    return finish(new Response("Git history quota exceeded; track media with Git LFS", { status: 413 }));
+  }
+  if (additionalBytes > 0 && reserveHistory && !await reserveHistory(additionalBytes)) {
+    return finish(new Response("Account storage quota exceeded", { status: 413 }));
+  }
+  if (packBytes || deletes.length || puts.length || packed) {
+    await beforeFirstWrite();
+    wrote = true;
   }
   if (parsed.packData.length) {
     // Preserve timestamped pack names for history collection, including pushes
     // in the same millisecond and clocks that move backwards.
-    let time = Date.now();
-    for (const { key } of objects.objects) {
-      const previous = /\/(?:recv|pack)-(\d+)\.pack$/u.exec(key)?.[1];
-      if (previous) time = Math.max(time, Number(previous) + 1);
-    }
-    const filepath = `objects/pack/recv-${time}.pack`, packKey = `${prefix}${GITDIR}/${filepath}`;
+    const time = Math.max(Date.now(), repository.lastPackTime + 1);
+    const packKey = `${root}objects/pack/recv-${time}.pack`, indexKey = packKey.replace(/\.pack$/u, ".idx");
     try {
       await store.put(packKey, parsed.packData);
-      const { oids } = await git.indexPack({ ...repo, dir: GITDIR, filepath });
-      // indexPack silently skips objects it cannot resolve. Every validated
-      // pack entry must be indexed before any ref can be published.
-      const expected = new DataView(parsed.packData.buffer, parsed.packData.byteOffset).getUint32(8);
-      if (oids.length !== expected) throw new Error("Git pack index is incomplete");
+      await store.put(indexKey, index);
     } catch (error) {
-      await store.delete(packKey.replace(/\.pack$/u, ".idx"));
+      await store.delete(indexKey);
       await store.delete(packKey);
       throw error;
     }
+    storedBytes += parsed.packData.byteLength + index.byteLength;
   }
-  for (const { refName, newOid, error } of updates) {
-    if (error) continue;
-    if (newOid !== ZERO_OID) await repo.fs.promises.writeFile(`${GITDIR}/${refName}`, `${newOid}\n`);
-    // deleteRef removes a packed ref and its peeled tag line as well as a loose ref.
-    else await git.deleteRef({ ...repo, ref: refName });
+  // A deleted ref can be the parent of a newly created ref. Finish the
+  // deletions first so a failed delete cannot leave conflicting names.
+  await finishWrites(deletes.map((key) => store.delete(key)));
+  if (packed) {
+    await store.put(`${root}packed-refs`, packed);
+    storedBytes += packedDelta;
   }
-  return receivePackResponse(updates, parsed.capabilities);
+  await finishWrites(puts.map(({ key, data }) => store.put(key, data)));
+  for (const key of deletes) storedBytes -= refSizes.get(key)!;
+  for (const { key, data } of puts) storedBytes += data.byteLength - (refSizes.get(key) ?? 0);
+  return finish(receivePackResponse(updates, parsed.capabilities));
 }
 
 /** Validate against incoming and stored objects before making either the pack or refs visible. */
@@ -304,7 +372,8 @@ async function validateRefUpdates(updates: CheckedRefUpdate[], refs: Map<string,
     info: async (oid: string) => incoming.get(oid) ?? stored.info(oid),
     read: async (oid: string) => incoming.get(oid)?.data ?? stored.read(oid),
   };
-  const verified = new Set<string>();
+  // Existing refs mark validated history, even if this push moves or deletes them.
+  const verified = new Set(refs.values());
   for (const update of updates) {
     const { refName, newOid } = update;
     if (update.error) continue;
@@ -317,7 +386,7 @@ async function validateRefUpdates(updates: CheckedRefUpdate[], refs: Map<string,
         update.error = "ref name conflict"; continue;
       }
       try {
-        const reachable = await collectGitObjects(reader, [newOid], { exclude: verified });
+        const reachable = await collectGitObjects(reader, [newOid], { exclude: verified, compareParentTrees: true });
         for (const oid of reachable) verified.add(oid);
       } catch (error) {
         if (!(error instanceof GitObjectGraphError)) throw error;
