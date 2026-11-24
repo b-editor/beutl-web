@@ -176,6 +176,37 @@ describe("Hosted Git routes in the Worker and the Next.js v3 route", () => {
   });
 
   it.each([
+    ["GET", "info/refs?service=git-receive-pack", false, 200],
+    ["POST", "git-receive-pack", false, 200],
+    ["POST", "info/lfs/objects/batch", false, 200],
+    ["OPTIONS", `info/lfs/objects/${oid}/tus`, true, 204],
+    ["HEAD", `info/lfs/objects/${oid}/tus/${repoId}`, true, 412],
+    ["GET", `info/lfs/objects/${oid}/download`, true, 404],
+    ["POST", `info/lfs/objects/${oid}/verify`, true, 200],
+  ] as const)("scopes Worker secrets on %s %s", async (method, path, usesS3, status) => {
+    const key = vi.fn(async () => "access-key"), secret = vi.fn(async () => "secret-key");
+    const sessionToken = vi.fn(async () => "session-token");
+    const unrelated = vi.fn(async () => "unrelated-secret");
+    vi.stubEnv("BEUTL_S3_SESSION_TOKEN", undefined);
+    const bindings = {
+      ...env,
+      BEUTL_S3_ACCESS_KEY_ID: { get: key },
+      BEUTL_S3_SECRET_ACCESS_KEY: { get: secret },
+      BEUTL_S3_SESSION_TOKEN: { get: sessionToken },
+      JWT_SECRET: { get: unrelated },
+      STRIPE_SECRET_KEY: { get: unrelated },
+      OPENROUTER_API_KEY: { get: unrelated },
+    };
+    const response = await web.fetch(new Request(`${origin}/api/v3/git/${repoId}.git/${path}`, {
+      method, headers: { Authorization: await gitToken("write") },
+      ...(path.endsWith("/verify") ? { body: JSON.stringify({ oid, size: 3 }) } : {}),
+    }), bindings, context());
+    expect(response.status).toBe(status);
+    expect(unrelated).not.toHaveBeenCalled();
+    for (const get of [key, secret, sessionToken]) expect(get).toHaveBeenCalledTimes(usesS3 ? 1 : 0);
+  });
+
+  it.each([
     ["GET", `/api/v3/git/${repoId}.git/info/refs?service=git-receive-pack`, "read", 403],
     ["POST", `/api/v3/git/${repoId}.git/git-receive-pack`, "read", 403],
     ["POST", `/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/tus`, "read", 403],

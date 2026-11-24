@@ -2,12 +2,12 @@ import { Hono, type Context } from "hono";
 import { createMiddleware } from "hono/factory";
 import { cacheGitObjectStore } from "./cached-object-store";
 import { MAX_GIT_LFS_PART_BYTES } from "@beutl/core";
-import { advertiseGitRefs, initializeGitRepository, isGitService, MAX_GIT_REPOSITORY_BYTES, readGitRepository, receiveGitPack,
+import { advertiseGitRefs, gitRepositoryPrefix, initializeGitRepository, isGitService, MAX_GIT_REPOSITORY_BYTES, readGitRepository, receiveGitPack,
   uploadGitPack, type GitService } from "./git-http";
 import { isGitRevision, isGitTreePath } from "@beutl/core";
 import { browseFile, browseLog, browsePath, browseRefs, GitBrowseNotFoundError, MAX_COMMIT_PAGE } from "./browse";
 import { S3GitObjectBucket, sha256Base64, type GitS3Environment } from "./s3-object-store";
-import { GitObjectStore, type GitObjectBucket, type ObjectStore } from "./git-object-store";
+import { GitObjectStore, type GitObjectBucket, type ListResult, type ObjectStore } from "./git-object-store";
 import { databaseGitStorageAccounting, withGitDatabase, type GitDatabaseEnvironment, type GitStorageAccounting } from "./accounting";
 import { cleanupLfs, handleLfsBatch, json, lfsKey, LFS_TOUCH_PRECISION_MS, MAX_LFS_PARTS, MIN_TUS_PART_BYTES,
   partKey, partPrefix, readJson, scheduleGitMaintenance, UPLOAD_LIFETIME_MS,
@@ -16,24 +16,23 @@ import { collectUnreachableHistory } from "./history-collection";
 import { referencedLfsOids } from "./lfs-references";
 import { ResumableSha256, type Sha256State } from "./resumable-sha256";
 import type { GitScope } from "./tokens";
-import { resolveWorkerSecrets, type WorkerSecretBindings } from "../worker-secrets";
+import { resolveWorkerSecrets, S3_SECRET_NAMES, type WorkerSecretBindings } from "../worker-secrets";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const MEDIA = "/internal/git/media/:oid{[0-9a-f]{64}}";
+const MEDIA_WITHOUT_STORAGE = /^\/internal\/git\/media\/[0-9a-f]{64}\/(?:status|part|accept|cancel|complete)$/u;
 const DELETION_GRACE_MS = 2 * 60 * 60 * 1000;
 const BROWSE = "/internal/git/browse/";
-// Only this object writes the stored repository, and it drops what the
-// dashboard read before anything else runs; the lifetime bounds the rest.
-const BROWSE_CACHE_TTL_MS = 5 * 60_000;
+// Smart HTTP and browse share cached reads. Maintenance uses the bucket directly.
+const REPO_CACHE_TTL_MS = 5 * 60_000;
 // Clients upload media before pushing the commits that point to it. The
 // touch precision keeps the full period after an offer whose write was skipped.
 const LFS_COLLECTION_GRACE_MS = 7 * 24 * 60 * 60 * 1000 + LFS_TOUCH_PRECISION_MS;
 const LFS_COLLECTION_BATCH = 100;
 type Environment = GitS3Environment & GitDatabaseEnvironment;
-const STORAGE_SECRETS = ["BEUTL_S3_ACCESS_KEY_ID", "BEUTL_S3_SECRET_ACCESS_KEY", "BEUTL_S3_SESSION_TOKEN"] as const;
 type Record = LfsRecord & { gcComplete?: boolean };
 const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-type Routes = { Variables: { repoId: string } };
+type Routes = { Variables: { repoId: string; initializedObjects?: ListResult["objects"] } };
 // Only the Worker reaches this object. It verified the token and ownership, and
 // it overwrites these headers on every request it forwards.
 const scopeOf = (c: Context) => c.req.header("x-beutl-git-scope") ?? "";
@@ -51,41 +50,52 @@ function validHashState(state: unknown, length: number): boolean {
 const sameHashState = (a: Sha256State | undefined, b: Sha256State | undefined) =>
   a === undefined || b === undefined ? a === b : a.tail === b.tail && a.words.every((word, i) => word === b.words[i]);
 
+const uploadOffsetMismatch = (offset: number) =>
+  new Response("Upload offset mismatch", { status: 409, headers: { "Upload-Offset": String(offset) } });
+
 /** Serializes Git metadata and media receipts; media bodies stay in the Worker. */
 export class GitRepositoryDurableObject {
   private tail: Promise<unknown> = Promise.resolve();
   private bucket?: GitObjectBucket;
   private resolvedEnv?: Environment;
-  /** What the dashboard's views read, so browsing folder after folder reads the bucket once. */
-  private browseCache?: { repoId: string; store: ObjectStore };
+  private repoCache?: { repoId: string; store: ObjectStore };
   private readonly accounting?: GitStorageAccounting;
   private readonly app: Hono<Routes>;
-  constructor(private readonly state: { storage: GitDurableStorage }, private readonly env: WorkerSecretBindings<Environment>,
+  constructor(private readonly state: { storage: GitDurableStorage; waitUntil?(promise: Promise<unknown>): void },
+    private readonly env: WorkerSecretBindings<Environment>,
     bucket?: GitObjectBucket, accounting?: GitStorageAccounting) {
     this.bucket = bucket;
     this.accounting = accounting ?? (bucket ? undefined : databaseGitStorageAccounting);
     this.app = this.routes();
   }
   private objectBucket(): GitObjectBucket { return this.bucket ??= new S3GitObjectBucket(this.resolvedEnv!); }
-  private enqueue<T>(work: () => Promise<T>, { browse = false } = {}): Promise<T> {
+  private async resolveStorageEnvironment(): Promise<Environment> {
+    const env = await resolveWorkerSecrets<Environment>(this.env, S3_SECRET_NAMES);
+    if (this.resolvedEnv && S3_SECRET_NAMES.some((key) => this.resolvedEnv![key] !== env[key])) {
+      this.bucket = undefined;
+      this.repoCache = undefined;
+    }
+    this.resolvedEnv = env;
+    return env;
+  }
+  private async ensureBucket(): Promise<GitObjectBucket> {
+    await this.resolveStorageEnvironment();
+    return this.objectBucket();
+  }
+  private enqueue<T>(work: () => Promise<T>, { resolveStorage = true } = {}): Promise<T> {
     const run = async () => {
-      const env = await resolveWorkerSecrets<Environment>(this.env, STORAGE_SECRETS);
-      if (this.resolvedEnv && STORAGE_SECRETS.some((key) => this.resolvedEnv![key] !== env[key])) {
-        this.bucket = undefined;
-        this.browseCache = undefined;
-      }
-      this.resolvedEnv = env;
-      // Anything but a dashboard view may change the stored repository.
-      if (!browse) this.browseCache = undefined;
-      return this.accounting === databaseGitStorageAccounting ? withGitDatabase(env, work) : work();
+      const env = resolveStorage ? await this.resolveStorageEnvironment() : this.env;
+      return this.accounting === databaseGitStorageAccounting
+        ? withGitDatabase(env, work, undefined, this.state.waitUntil?.bind(this.state))
+        : work();
     };
     const result = this.tail.then(run);
     this.tail = result.then(() => undefined, () => undefined);
     return result;
   }
   fetch(request: Request): Promise<Response> {
-    const browse = new URL(request.url).pathname.startsWith(BROWSE);
-    return this.enqueue(async () => this.app.fetch(request), { browse });
+    const resolveStorage = !MEDIA_WITHOUT_STORAGE.test(new URL(request.url).pathname);
+    return this.enqueue(async () => this.app.fetch(request), { resolveStorage });
   }
 
   private routes(): Hono<Routes> {
@@ -101,13 +111,32 @@ export class GitRepositoryDurableObject {
     // Bare-repository HEAD/config also consume account storage. Reserve the
     // initial allocation before creating these metadata objects.
     const initialized = createMiddleware<Routes>(async (c, next) => {
-      const repoId = c.get("repoId");
-      if (this.accounting && await this.gitBytes(repoId) === 0) {
-        if (!await this.accounting.reserveHistory(repoId, ownerOf(c), 4096))
-          return c.text("Account storage quota exceeded", 413);
-        try { await initializeGitRepository(this.objectBucket(), repoId); }
-        finally { await this.accounting.settleHistory(repoId, await this.gitBytes(repoId)); }
+      if (await storage.get<boolean>("gitInitialized") === true) return next();
+      if (!this.accounting) {
+        await next();
+        if (c.res.ok) await storage.put("gitInitialized", true);
+        return;
       }
+      const repoId = c.get("repoId");
+      const empty = await this.gitBytes(repoId) === 0;
+      if (empty && !await this.reserveHistory(repoId, ownerOf(c), 4096))
+        return c.text("Account storage quota exceeded", 413);
+      let needsSettlement = empty;
+      let initial: Awaited<ReturnType<typeof initializeGitRepository>> | undefined;
+      try {
+        initial = await initializeGitRepository(this.objectBucket(), repoId, { store: this.repoStore(repoId) }, async () => {
+          // A previous initialization can have stored just one of HEAD/config.
+          if (!needsSettlement) {
+            await storage.put("historyUnsettled", true);
+            needsSettlement = true;
+          }
+          await this.waitForGitWrite();
+        });
+      } finally {
+        if (needsSettlement) await this.settleHistory(repoId, initial?.bytes);
+      }
+      c.set("initializedObjects", initial.objects);
+      await storage.put("gitInitialized", true);
       await next();
     });
     // Reject a bad ref advertisement before initialization reserves account storage.
@@ -144,13 +173,13 @@ export class GitRepositoryDurableObject {
         await next();
       })
       .post("/internal/git/history", scope("admin"), async (c) => {
-        const repoId = c.get("repoId");
-        await this.accounting?.settleHistory(repoId, await this.gitBytes(repoId));
+        await this.settleHistory(c.get("repoId"));
         await storage.put("gitGcPending", true);
         await scheduleGitMaintenance(storage, Date.now() + 60_000);
         return c.body(null, 204);
       })
       .delete("/internal/git/cleanup", scope("admin"), async (c) => {
+        this.repoCache = undefined;
         if (await storage.get<boolean>("cleanupComplete")) return c.body(null, 204);
         return c.body(null, await this.deleteRepository(c.get("repoId")) ? 204 : 202);
       })
@@ -210,9 +239,9 @@ export class GitRepositoryDurableObject {
       .post("/api/v3/git/:repo/info/lfs/objects/batch", (c) => handleLfsBatch(c.req.raw, this.objectBucket(), storage,
         c.get("repoId"), scopeOf(c) as GitScope, this.accounting))
       .get("/api/v3/git/:repo/info/refs", advertisedService, initialized, (c) =>
-        advertiseGitRefs(this.objectBucket(), c.get("repoId"), c.req.query("service") as GitService))
+        advertiseGitRefs(this.objectBucket(), c.get("repoId"), c.req.query("service") as GitService, this.repositoryOptions(c)))
       .post("/api/v3/git/:repo/git-upload-pack", initialized, (c) =>
-        uploadGitPack(c.req.raw, this.objectBucket(), c.get("repoId")))
+        uploadGitPack(c.req.raw, this.objectBucket(), c.get("repoId"), this.repositoryOptions(c)))
       .post("/api/v3/git/:repo/git-receive-pack", scope("write"), initialized, (c) => this.receivePack(c))
       .onError((error, c) => {
         if (error instanceof GitBrowseNotFoundError) return c.text("Not found", 404);
@@ -222,15 +251,22 @@ export class GitRepositoryDurableObject {
       });
   }
 
-  /** The stored repository as the dashboard reads it, through the browse cache. */
-  private browseRepository(repoId: string) {
-    if (this.browseCache?.repoId !== repoId) {
-      this.browseCache = { repoId, store: cacheGitObjectStore(new GitObjectStore(this.objectBucket()), {
-        // The whole history fits, so a later view reads nothing from the bucket.
-        maxBytes: 2 * MAX_GIT_REPOSITORY_BYTES, ttlMs: BROWSE_CACHE_TTL_MS,
+  private repoStore(repoId: string): ObjectStore {
+    if (this.repoCache?.repoId !== repoId) {
+      this.repoCache = { repoId, store: cacheGitObjectStore(new GitObjectStore(this.objectBucket()), {
+        maxBytes: 2 * MAX_GIT_REPOSITORY_BYTES, ttlMs: REPO_CACHE_TTL_MS,
       }) };
     }
-    return readGitRepository(this.objectBucket(), repoId, { store: this.browseCache.store, looseObjectHints: true });
+    return this.repoCache.store;
+  }
+
+  private repositoryOptions(c: Context<Routes>) {
+    const objects = c.get("initializedObjects");
+    return { store: this.repoStore(c.get("repoId")), objects, initialized: objects !== undefined };
+  }
+
+  private browseRepository(repoId: string) {
+    return readGitRepository(this.objectBucket(), repoId, { store: this.repoStore(repoId), looseObjectHints: true });
   }
 
   /** Learn which loose-object probes can be skipped; load packs only when a view needs them. */
@@ -241,23 +277,38 @@ export class GitRepositoryDurableObject {
     return opened;
   }
 
-  private async gitBytes(repoId: string): Promise<number> {
-    let bytes = 0; let cursor: string | undefined;
-    do {
-      const page = await this.objectBucket().list({ prefix: `git/repos/${repoId}/`, cursor, limit: 1000 });
-      bytes += page.objects.reduce((n, o) => n + o.size, 0);
-      if (!page.truncated) return bytes;
-      if (!page.cursor || page.cursor === cursor) throw new Error("Git listing did not advance");
-      cursor = page.cursor;
-    } while (true);
+  private async gitBytes(repoId: string, store = this.repoStore(repoId)): Promise<number> {
+    const { objects } = await store.list(`${gitRepositoryPrefix(repoId)}/`);
+    return objects.reduce((bytes, object) => bytes + object.size, 0);
+  }
+  private async settleHistory(repoId: string, bytes?: number): Promise<void> {
+    if (!this.accounting) return;
+    await this.accounting.settleHistory(repoId, bytes ?? await this.gitBytes(repoId));
+    await this.state.storage.delete("historyUnsettled");
+  }
+  private async reserveHistory(repoId: string, ownerId: string, bytes: number): Promise<boolean> {
+    const storage = this.state.storage, accounting = this.accounting!;
+    await storage.put("historyUnsettled", true);
+    let reserved: boolean;
+    try { reserved = await accounting.reserveHistory(repoId, ownerId, bytes); }
+    catch (error) {
+      // Older objects can have a stranded DB reservation without a local flag.
+      if (!(error instanceof Error) || error.message !== "Git history requires reconciliation") throw error;
+      await accounting.settleHistory(repoId, await this.gitBytes(repoId));
+      reserved = await accounting.reserveHistory(repoId, ownerId, bytes);
+    }
+    if (!reserved) await storage.delete("historyUnsettled");
+    return reserved;
   }
   private async deleteRepository(repoId: string): Promise<boolean> {
+    this.repoCache = undefined;
     const storage = this.state.storage;
     let deletedAt = await storage.get<number>("deletedAt");
     if (deletedAt === undefined) { deletedAt = Date.now(); await storage.put("deletedAt", deletedAt); }
+    await storage.delete(["gitInitialized", "historyUnsettled", "lfsCount"]);
     const bucket = this.objectBucket();
     await bucket.cleanupMultipartUploads?.(`git-lfs/repos/${repoId}/`, [], Infinity);
-    await bucket.deletePrefix?.(`git/repos/${repoId}/`);
+    await bucket.deletePrefix?.(`${gitRepositoryPrefix(repoId)}/`);
     await bucket.deletePrefix?.(`git-lfs/repos/${repoId}/`);
     // A final abort covers parts that were in flight at the first abort.
     if (Date.now() < deletedAt + DELETION_GRACE_MS) {
@@ -271,23 +322,39 @@ export class GitRepositoryDurableObject {
     return true;
   }
 
-  private async receivePack(c: Context<Routes>): Promise<Response> {
-    const storage = this.state.storage;
-    const repoId = c.get("repoId");
-    const accounting = this.accounting;
-    const last = await storage.get<number>("lastPushFinishedAt") ?? 0;
+  private async waitForGitWrite(): Promise<void> {
+    const last = await this.state.storage.get<number>("lastPushFinishedAt");
+    if (last === undefined) return;
     // B2 can order same-key versions incorrectly within one second.
     const delay = last + 1000 - Date.now();
     if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
-    await accounting?.settleHistory(repoId, await this.gitBytes(repoId));
+  }
+
+  private async receivePack(c: Context<Routes>): Promise<Response> {
+    const storage = this.state.storage, repoId = c.get("repoId"), accounting = this.accounting;
+    if (accounting && await storage.get<boolean>("historyUnsettled")) await this.settleHistory(repoId);
+    let reserved = false, writeStarted = false, settledBytes: number | undefined;
+    const reserve = accounting ? async (bytes: number) => reserved = await this.reserveHistory(repoId, ownerOf(c), bytes) : undefined;
     try {
-      return await receiveGitPack(c.req.raw, this.objectBucket(), repoId,
-        accounting ? bytes => accounting.reserveHistory(repoId, ownerOf(c), bytes) : undefined);
+      return await receiveGitPack(c.req.raw, this.objectBucket(), repoId, reserve, {
+        ...this.repositoryOptions(c),
+        beforeWrite: async () => {
+          // Ref-only writes can change the total without needing a quota reservation.
+          if (accounting && !reserved) await storage.put("historyUnsettled", true);
+          await this.waitForGitWrite();
+          writeStarted = true;
+        },
+        onSettled: ({ wrote, bytes }) => { if (wrote) settledBytes = bytes; },
+      });
     } finally {
-      await storage.put("lastPushFinishedAt", Date.now());
-      await storage.put("gitGcPending", true);
-      await scheduleGitMaintenance(storage, Date.now() + 60_000);
-      await accounting?.settleHistory(repoId, await this.gitBytes(repoId));
+      if (writeStarted) {
+        const finishedAt = Date.now();
+        await storage.put("lastPushFinishedAt", finishedAt);
+        await storage.put("gitGcPending", true);
+        await scheduleGitMaintenance(storage, finishedAt + 60_000);
+      }
+      if (settledBytes !== undefined) await this.settleHistory(repoId, settledBytes);
+      else if (accounting && await storage.get<boolean>("historyUnsettled")) await this.settleHistory(repoId);
     }
   }
 
@@ -316,9 +383,9 @@ export class GitRepositoryDurableObject {
   /** Leases the next part to one PATCH and hands it the SHA-256 state at its offset. */
   private async leasePart(oid: string, record: Record, input: any): Promise<Response> {
     const { offset, length } = input;
-    if (record.verified || record.versionId || !record.uploadId) return new Response("Upload offset mismatch", { status: 409 });
+    if (record.verified || record.versionId || !record.uploadId || (input.start === undefined && offset !== record.offset))
+      return uploadOffsetMismatch(record.offset);
     if (record.parallel || input.start !== undefined) return this.leaseParallelPart(oid, record, input);
-    if (offset !== record.offset) return new Response("Upload offset mismatch", { status: 409 });
     if (!Number.isSafeInteger(length) || length <= 0 || length > MAX_GIT_LFS_PART_BYTES ||
         offset + length > record.size || (length < MIN_TUS_PART_BYTES && offset + length !== record.size))
       return new Response("Invalid tus part length", { status: 400 });
@@ -328,7 +395,8 @@ export class GitRepositoryDurableObject {
       return new Response("Upload part in progress", { status: 423, headers: { "Retry-After": "1" } });
     record.lease = { id: crypto.randomUUID(), until: Date.now() + 15 * 60_000, offset, length };
     await this.state.storage.put(`lfs:${oid}`, record);
-    return json({ uploadId: record.uploadId, partNumber: record.partCount + 1, leaseId: record.lease.id, hash: record.hash });
+    return json({ uploadId: record.uploadId, partNumber: record.partCount + 1, leaseId: record.lease.id, hash: record.hash,
+      size: record.size });
   }
 
   /** Records an uploaded part's receipt and hash state, or releases the lease after a failed part. */
@@ -347,7 +415,10 @@ export class GitRepositoryDurableObject {
       if (complete) { record.digest = input.digest; delete record.hash; } else record.hash = input.hash;
       await this.extendReservation(repoId, oid, record);
     }
-    delete record.lease; await storage.put(`lfs:${oid}`, record); return json(record);
+    delete record.lease;
+    await storage.put(`lfs:${oid}`, record);
+    if (accepted && record.offset === record.size && !record.verified) return this.completeUpload(repoId, oid, record);
+    return json(record);
   }
 
   /** A large upload can outlast one lifetime; progress keeps its reservation. */
@@ -371,7 +442,7 @@ export class GitRepositoryDurableObject {
     // Every part before the accepted offset is full, so offsets name part numbers.
     if (!Number.isSafeInteger(offset) || offset % MAX_GIT_LFS_PART_BYTES !== 0 || offset < record.offset ||
         offset >= record.size || record.offset !== record.partCount * MAX_GIT_LFS_PART_BYTES)
-      return new Response("Upload offset mismatch", { status: 409 });
+      return uploadOffsetMismatch(record.offset);
     if (length !== Math.min(MAX_GIT_LFS_PART_BYTES, record.size - offset))
       return new Response("Parallel tus parts hold 32 MiB, except the last", { status: 400 });
     if (offset > record.offset && !validHashState(input.start, offset))
@@ -388,7 +459,7 @@ export class GitRepositoryDurableObject {
     part.lease = { id: crypto.randomUUID(), until: Date.now() + 15 * 60_000, ...(start ? { start } : {}) };
     await storage.put(key, part);
     if (!record.parallel) { record.parallel = true; delete record.lease; await storage.put(`lfs:${oid}`, record); }
-    return json({ uploadId: record.uploadId, partNumber, leaseId: part.lease.id, hash: start });
+    return json({ uploadId: record.uploadId, partNumber, leaseId: part.lease.id, hash: start, size: record.size });
   }
 
   /**
@@ -426,38 +497,47 @@ export class GitRepositoryDurableObject {
       next?.etag && next.length && !(next.lease && next.lease.until > Date.now());
       next = await storage.get<LfsPart>(partKey(oid, record.partCount + 1))) {
       if (!sameHashState(next.start, record.hash)) {
-        await cleanupLfs(storage, this.objectBucket(), this.accounting, repoId, oid, record);
+        await cleanupLfs(storage, await this.ensureBucket(), this.accounting, repoId, oid, record);
         return new Response("LFS SHA-256 mismatch", { status: 422 });
       }
       record.offset += next.length; record.partCount++;
       if (record.offset === record.size) { record.digest = next.digest; delete record.hash; } else record.hash = next.end;
     }
     if (accepted) await this.extendReservation(repoId, oid, record);
-    await storage.put(`lfs:${oid}`, record); return json(record);
+    await storage.put(`lfs:${oid}`, record);
+    if (accepted && record.offset === record.size && !record.verified) return this.completeUpload(repoId, oid, record);
+    return json(record);
   }
 
   /**
-   * Publishes a tus upload once every byte arrived. The PATCH requests hashed
-   * the bytes they stored, so a wrong digest discards the upload before B2
-   * assembles it.
+   * Publishes a tus upload from its stored receipts so a later HEAD can retry.
+   * The PATCH requests hashed the bytes they stored, so a wrong digest
+   * discards the upload before B2 assembles it.
    */
   private async completeUpload(repoId: string, oid: string, record: Record): Promise<Response> {
     if (record.verified) return json(record);
-    if (record.offset !== record.size || !record.uploadId || record.partCount === 0 || !record.digest)
+    const { uploadId } = record;
+    if (record.offset !== record.size || !uploadId || record.partCount === 0 || !record.digest)
       return new Response("Upload incomplete", { status: 409 });
+    const bucket = await this.ensureBucket();
     if (record.digest !== oid) {
-      await cleanupLfs(this.state.storage, this.objectBucket(), this.accounting, repoId, oid, record);
+      await cleanupLfs(this.state.storage, bucket, this.accounting, repoId, oid, record);
       return new Response("LFS SHA-256 mismatch", { status: 422 });
     }
+    const key = lfsKey(repoId, oid);
     return this.publish(repoId, oid, record, async () => {
-      // A completion whose response was lost has already assembled the object.
-      const existing = await this.objectBucket().head(lfsKey(repoId, oid));
-      if (existing?.size === record.size) return existing;
       // Every part up to the accepted offset has a receipt.
       const parts = [...(await this.state.storage.list<LfsPart>({ prefix: partPrefix(oid) })).values()]
         .filter(p => p.partNumber <= record.partCount).sort((a, b) => a.partNumber - b.partNumber)
         .map(({ partNumber, etag }) => ({ partNumber, etag: etag! }));
-      return this.objectBucket().resumeMultipartUpload(lfsKey(repoId, oid), record.uploadId!).complete(parts);
+      try {
+        return await bucket.resumeMultipartUpload(key, uploadId).complete(parts);
+      } catch (error) {
+        // B2 may have assembled the object before its completion response was lost.
+        const existing = await bucket.head(key);
+        if (existing?.size === record.size && existing.versionId) return existing;
+        throw error;
+      }
     });
   }
 
@@ -546,7 +626,7 @@ export class GitRepositoryDurableObject {
         console.info("Git history collected", { repoId, ...collected });
         // Deleted keys keep old B2 versions until the version sweep removes them.
         await storage.put("gitGcPending", true);
-        await this.accounting?.settleHistory(repoId, await this.gitBytes(repoId));
+        if (this.accounting) await this.settleHistory(repoId, await this.gitBytes(repoId, new GitObjectStore(this.objectBucket())));
       }
       await storage.put("historyCollectedAt", pushed);
     } catch (error) {
@@ -559,6 +639,7 @@ export class GitRepositoryDurableObject {
 
   alarm(): Promise<void> {
     return this.enqueue(async () => {
+      this.repoCache = undefined;
       const storage = this.state.storage;
       const repoId = await storage.get<string>("repoId");
       if (!repoId) return;
@@ -597,7 +678,7 @@ export class GitRepositoryDurableObject {
       await this.collectHistory(repoId);
       try {
         if (await storage.get<boolean>("gitGcPending")) {
-          await this.objectBucket().pruneGitVersions?.(`git/repos/${repoId}/`);
+          await this.objectBucket().pruneGitVersions?.(`${gitRepositoryPrefix(repoId)}/`);
           await storage.delete("gitGcPending");
         }
         const active = await storage.list<Record>({ prefix: "lfs:" });

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { runWithDbProvider } from "@beutl/db";
 import { api } from "@beutl/api/app";
+import type { GitStorageAccounting } from "../packages/api/src/git/accounting";
 import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable-object";
 import { gitRepositoryObject } from "../packages/api/src/git/environment";
 import { appendTusUpload, createTusUpload, downloadLfsObject, readTusUpload, verifyLfsUpload, type LfsObject } from "../packages/api/src/git/media-worker";
@@ -132,15 +133,19 @@ class Bucket {
   async pruneVersions(_key: string, keep: string[]) { this.pruned.push(keep); }
   async list() { return { objects: [], truncated: false }; }
 }
-function fixture() {
+function fixture(env: ConstructorParameters<typeof GitRepositoryDurableObject>[1] = {},
+  reserveLfsBatch?: GitStorageAccounting["reserveLfsBatch"]) {
   const storage = new Storage(), bucket = new Bucket();
-  const accounting = { reserveLfs: vi.fn(async () => "reserved"), commitLfs: vi.fn(async () => undefined),
+  const accounting = { reserveLfs: vi.fn<GitStorageAccounting["reserveLfs"]>().mockResolvedValue("reserved"),
+    reserveLfsBatch, commitLfs: vi.fn(async () => undefined),
     extendLfs: vi.fn(async () => undefined), releaseLfs: vi.fn(async () => undefined),
     releaseRepository: vi.fn(async () => undefined) };
-  const durable = new GitRepositoryDurableObject({ storage }, {}, bucket as never, accounting as never);
-  const bodies: number[] = [];
+  const durable = new GitRepositoryDurableObject({ storage }, env, bucket as never, accounting as never);
+  const bodies: number[] = [], mediaCalls: string[] = [];
   const repository = gitRepositoryObject({ BEUTL_GIT_REPOSITORIES: { idFromName: (name) => name, get: () => ({ fetch: async (r: Request) => {
     if (r.body) bodies.push((await r.clone().text()).length);
+    const path = new URL(r.url).pathname;
+    if (path.startsWith("/internal/git/media/")) mediaCalls.push(path.slice(path.lastIndexOf("/") + 1));
     return durable.fetch(r);
   } }) } }, repoId);
   const access = { repoId, ownerId: "owner", scope: "write" as const };
@@ -182,7 +187,7 @@ function fixture() {
       method: "POST", headers: { "Content-Type": "application/vnd.git-lfs+json" },
       body: typeof body === "string" ? body : JSON.stringify(body),
     }), object(oid));
-  return { storage, bucket, accounting, durable, object, reserve, transfer, bodies, batch, verify };
+  return { storage, bucket, accounting, durable, object, reserve, transfer, bodies, mediaCalls, batch, verify };
 }
 describe("Worker media transfers and durable metadata", () => {
   it("uploads, verifies and streams a pinned version with Range and If-Range", async () => {
@@ -212,7 +217,11 @@ describe("Worker media transfers and durable metadata", () => {
   it("rejects wrong offsets and hashes before publishing; only then releases bad data", async () => {
     const f = fixture(), bytes = new Uint8Array([1, 2, 3]), oid = hash(bytes);
     const { url, record } = await f.reserve(oid, bytes.length);
-    expect((await f.transfer(url, oid, record.resourceId, 1, bytes)).status).toBe(409);
+    f.mediaCalls.length = 0;
+    const wrong = await f.transfer(url, oid, record.resourceId, 1, bytes);
+    expect(wrong.status).toBe(409);
+    expect(wrong.headers.get("upload-offset")).toBe("0");
+    expect(f.mediaCalls).toEqual(["part"]);
     expect(f.bucket.uploads).toBe(0);
     expect((await f.transfer(url, oid, record.resourceId, 0, new Uint8Array([3, 2, 1]))).status).toBe(422);
     // The digest is checked before B2 assembles the parts, so nothing was published.
@@ -221,6 +230,29 @@ describe("Worker media transfers and durable metadata", () => {
     expect(f.accounting.commitLfs).not.toHaveBeenCalled();
     expect(f.accounting.releaseLfs).toHaveBeenCalledOnce();
     expect(await f.storage.get(`lfs:${oid}`)).toBeUndefined();
+    expect(await f.storage.get("lfsCount")).toBe(0);
+  });
+  it("validates PATCH headers before the DO checks the upload resource", async () => {
+    const f = fixture(), bytes = new Uint8Array([1, 2, 3]), oid = hash(bytes);
+    const base = `https://beutl.test/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/tus`;
+    const patch = (headers: Record<string, string>) => appendTusUpload(new Request(base, {
+      method: "PATCH", headers: { "Content-Type": "application/offset+octet-stream", "Content-Length": "3",
+        "Upload-Offset": "0", ...headers }, body: bytes,
+    }), f.object(oid), "missing");
+    expect((await patch({ "Content-Type": "application/octet-stream" })).status).toBe(415);
+    const badState = await patch({ "Beutl-Sha256-State": "invalid" });
+    expect(badState.status).toBe(400);
+    expect(await badState.text()).toBe("Invalid Beutl-Sha256-State");
+    expect((await patch({ "Upload-Offset": "-1" })).status).toBe(400);
+    expect((await patch({ "Content-Length": String(PART + 1) })).status).toBe(400);
+    expect(f.mediaCalls).toEqual([]);
+
+    expect((await patch({})).status).toBe(404);
+    expect(f.mediaCalls).toEqual(["part"]);
+    const { url, record } = await f.reserve(oid, bytes.length);
+    expect((await f.transfer(url, oid, "wrong-resource", 0, bytes)).status).toBe(404);
+    await f.storage.put(`lfs:${oid}`, { ...record, expiresAt: Date.now() - 1 });
+    expect((await f.transfer(url, oid, record.resourceId, 0, bytes)).status).toBe(410);
   });
   it("recovers an accepted PATCH after its response was lost", async () => {
     const f = fixture(), bytes = new Uint8Array(5 * 1024 ** 2 + 1), oid = hash(bytes);
@@ -234,29 +266,93 @@ describe("Worker media transfers and durable metadata", () => {
   it("continues the SHA-256 across PATCH requests and never reads stored bytes back", async () => {
     const f = fixture(), bytes = Uint8Array.from({ length: 10 * 1024 ** 2 + 77 }, (_, i) => i * 31 % 251), oid = hash(bytes);
     const { url, record } = await f.reserve(oid, bytes.length);
+    const head = vi.spyOn(f.bucket, "head");
+    f.mediaCalls.length = 0;
     // Part sizes that are not multiples of the SHA-256 block keep a tail in the stored state.
     const cut = 5 * 1024 ** 2 + 13;
     const first = await f.transfer(url, oid, record.resourceId, 0, bytes.slice(0, cut));
+    expect(first.status).toBe(204);
     expect(first.headers.get("upload-verified")).toBe("false");
+    expect(f.mediaCalls.splice(0)).toEqual(["part", "accept"]);
     const stored = (await f.storage.get<LfsRecord>(`lfs:${oid}`))!;
     expect(stored.offset).toBe(cut);
     expect(atob(stored.hash!.tail)).toHaveLength(cut % 64);
     const last = await f.transfer(url, oid, record.resourceId, cut, bytes.slice(cut));
     expect(last.status).toBe(204);
     expect(last.headers.get("upload-verified")).toBe("true");
+    expect(f.mediaCalls).toEqual(["part", "accept"]);
     expect(await f.storage.get(`lfs:${oid}`)).toMatchObject({ verified: true, versionId: "version-1", digest: oid });
     expect(f.bucket.completions).toBe(1);
+    expect(head).not.toHaveBeenCalled();
     expect(f.accounting.commitLfs).toHaveBeenCalledOnce();
   });
-  it("publishes after a lost completion response when the client asks for the offset", async () => {
+  it("retries completion from the stored receipt when B2 failed before assembly", async () => {
     const f = fixture(), bytes = new TextEncoder().encode("lost completion"), oid = hash(bytes);
     const { url, record } = await f.reserve(oid, bytes.length);
+    const bucketHead = vi.spyOn(f.bucket, "head");
     f.bucket.failNextCompletion = true;
     await expect(f.transfer(url, oid, record.resourceId, 0, bytes)).rejects.toThrow();
     expect(await f.storage.get(`lfs:${oid}`)).toMatchObject({ offset: bytes.length, verified: false, digest: oid });
+    expect(bucketHead).toHaveBeenCalledExactlyOnceWith(lfsKey(repoId, oid));
+    expect(f.bucket.completions).toBe(0);
+    f.mediaCalls.length = 0;
     const head = await f.transfer(url, oid, record.resourceId, 0);
     expect(head.headers.get("upload-verified")).toBe("true");
+    expect(f.mediaCalls).toEqual(["status", "complete"]);
+    expect(bucketHead).toHaveBeenCalledOnce();
     expect(f.accounting.commitLfs).toHaveBeenCalledOnce();
+  });
+  it("recovers the pinned version when B2 completed but lost its response", async () => {
+    const f = fixture(), bytes = new TextEncoder().encode("already assembled"), oid = hash(bytes);
+    const { url, record } = await f.reserve(oid, bytes.length);
+    const resume = f.bucket.resumeMultipartUpload.bind(f.bucket);
+    const original = resume(lfsKey(repoId, oid), record.uploadId!);
+    const complete = vi.fn<typeof original.complete>()
+      .mockImplementationOnce(async (parts) => {
+        await original.complete(parts);
+        throw new Error("B2 completion response lost after assembly");
+      })
+      .mockRejectedValueOnce(new Error("NoSuchUpload"));
+    vi.spyOn(f.bucket, "resumeMultipartUpload").mockImplementation((key, uploadId) => ({ ...resume(key, uploadId), complete }));
+    const bucketHead = vi.spyOn(f.bucket, "head").mockRejectedValueOnce(new Error("B2 HEAD unavailable"));
+    await expect(f.transfer(url, oid, record.resourceId, 0, bytes)).rejects.toThrow("B2 HEAD unavailable");
+    expect(await f.storage.get(`lfs:${oid}`)).toMatchObject({ offset: bytes.length, verified: false, digest: oid });
+
+    const head = await f.transfer(url, oid, record.resourceId, 0);
+    expect(head.headers.get("upload-verified")).toBe("true");
+    expect(await f.storage.get(`lfs:${oid}`)).toMatchObject({ verified: true, versionId: "version-1" });
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(bucketHead.mock.calls).toEqual([[lfsKey(repoId, oid)], [lfsKey(repoId, oid)]]);
+    expect(f.bucket.completions).toBe(1);
+    expect(f.accounting.commitLfs).toHaveBeenCalledOnce();
+  });
+  it.each([true, false])("resolves S3 secrets on the final receipt (matching digest: %s)", async (matches) => {
+    const key = vi.fn(async () => "access-key"), secret = vi.fn(async () => "secret-key");
+    vi.stubEnv("BEUTL_S3_ACCESS_KEY_ID", undefined);
+    vi.stubEnv("BEUTL_S3_SECRET_ACCESS_KEY", undefined);
+    try {
+      const f = fixture({ BEUTL_S3_ACCESS_KEY_ID: { get: key }, BEUTL_S3_SECRET_ACCESS_KEY: { get: secret } });
+      const bytes = new Uint8Array([1, 2, 3]), oid = matches ? hash(bytes) : "a".repeat(64);
+      const resourceId = crypto.randomUUID();
+      const url = `https://beutl.test/api/v3/git/${repoId}.git/info/lfs/objects/${oid}/tus/${resourceId}`;
+      await f.storage.put<LfsRecord>(`lfs:${oid}`, { resourceId, size: bytes.length, expiresAt: Date.now() + 60_000,
+        verified: false, offset: 0, partCount: 0, uploadId: "upload-1" });
+
+      const response = await f.transfer(url, oid, resourceId, 0, bytes);
+      expect(f.mediaCalls).toEqual(["part", "accept"]);
+      expect(key).toHaveBeenCalledOnce();
+      expect(secret).toHaveBeenCalledOnce();
+      if (matches) {
+        expect(response.status).toBe(204);
+        expect(response.headers.get("upload-verified")).toBe("true");
+      } else {
+        expect(response.status).toBe(422);
+        expect(await response.text()).toBe("LFS SHA-256 mismatch");
+        expect(await f.storage.get(`lfs:${oid}`)).toBeUndefined();
+        expect(await f.storage.get("lfsCount")).toBeUndefined();
+        expect(f.accounting.releaseLfs).toHaveBeenCalledExactlyOnceWith(repoId, oid);
+      }
+    } finally { vi.unstubAllEnvs(); }
   });
   it("keeps the reservation of an upload that is still making progress", async () => {
     const f = fixture(), bytes = Uint8Array.from({ length: 10 * 1024 ** 2 }, (_, i) => i % 199), oid = hash(bytes);
@@ -342,9 +438,40 @@ function media(size: number) {
 }
 
 describe("Parallel tus parts", () => {
+  it("resolves DO storage credentials only when a media receipt needs to discard an upload", async () => {
+    const key = vi.fn(async () => "access-key"), secret = vi.fn(async () => "secret-key");
+    vi.stubEnv("BEUTL_S3_ACCESS_KEY_ID", undefined);
+    vi.stubEnv("BEUTL_S3_SECRET_ACCESS_KEY", undefined);
+    try {
+      const f = fixture({ BEUTL_S3_ACCESS_KEY_ID: { get: key }, BEUTL_S3_SECRET_ACCESS_KEY: { get: secret } });
+      const oid = "a".repeat(64), { repository, access } = f.object(oid);
+      const resourceId = crypto.randomUUID();
+      await f.storage.put<LfsRecord>(`lfs:${oid}`, { resourceId, size: PART + 1, expiresAt: Date.now() + 60_000,
+        verified: false, parallel: true, offset: 0, partCount: 0, uploadId: "upload-1" });
+      const lease = () => repository.media(access, oid, "part", { resourceId, offset: 0, length: PART });
+      expect((await repository.media(access, oid, "status")).status).toBe(200);
+      const { leaseId, partNumber } = await (await lease()).json();
+      expect((await repository.media(access, oid, "cancel", { resourceId, leaseId, partNumber })).status).toBe(200);
+      const first = await (await lease()).json();
+      expect(key).not.toHaveBeenCalled();
+      expect(secret).not.toHaveBeenCalled();
+
+      await f.storage.put<LfsPart>(partKey(oid, 2), { partNumber: 2, length: 1, etag: "tail", digest: oid,
+        start: { words: Array(8).fill(1), tail: "" } });
+      const response = await repository.media(access, oid, "accept", { resourceId, leaseId: first.leaseId, partNumber: 1,
+        etag: "first", hash: { words: Array(8).fill(0), tail: "" } });
+      expect(response.status).toBe(422);
+      expect(await response.text()).toBe("LFS SHA-256 mismatch");
+      expect(key).toHaveBeenCalledOnce();
+      expect(secret).toHaveBeenCalledOnce();
+      expect(f.accounting.releaseLfs).toHaveBeenCalledExactlyOnceWith(repoId, oid);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it("accepts 32 MiB parts out of order and publishes once they join up", async () => {
     const f = fixture(), bytes = media(2 * PART + 1000), oid = hash(bytes);
     const { url, record } = await f.reserve(oid, bytes.length);
+    f.mediaCalls.length = 0;
     const part = (n: number) => f.transfer(url, oid, record.resourceId, n * PART,
       bytes.subarray(n * PART, Math.min(bytes.length, (n + 1) * PART)), stateAfter(bytes, n * PART));
     const last = await part(2);
@@ -356,6 +483,7 @@ describe("Parallel tus parts", () => {
     expect(first.status).toBe(204);
     expect(first.headers.get("upload-offset")).toBe(String(bytes.length));
     expect(first.headers.get("upload-verified")).toBe("true");
+    expect(f.mediaCalls).toEqual(["part", "accept", "part", "accept", "part", "accept"]);
     expect(f.bucket.completions).toBe(1);
     expect(hash(f.bucket.versions.get("version-1")!.bytes)).toBe(oid);
     expect(f.accounting.commitLfs).toHaveBeenCalledOnce();
@@ -394,7 +522,9 @@ describe("Parallel tus parts", () => {
     const send = (offset: number, length: number, state = stateAfter(bytes, offset)) =>
       f.transfer(url, oid, record.resourceId, offset, bytes.subarray(offset, offset + length), state);
     expect((await send(PART, 5 * 1024 ** 2)).status).toBe(400);
-    expect((await send(PART + 64, PART)).status).toBe(409);
+    const wrong = await send(PART + 64, PART);
+    expect(wrong.status).toBe(409);
+    expect(wrong.headers.get("upload-offset")).toBe("0");
     expect((await send(PART, PART, "not a state")).status).toBe(400);
     expect(f.bucket.uploads).toBe(0);
     // An upload that began with a shorter sequential part cannot number later parts by offset.
@@ -418,7 +548,10 @@ describe("Parallel tus parts", () => {
     // The resend fails, so the earlier receipt stands and completes the object.
     expect((await repository.media(access, oid, "cancel",
       { resourceId: record.resourceId, leaseId: again.leaseId, partNumber: again.partNumber })).status).toBe(200);
+    expect(f.bucket.completions).toBe(0);
+    f.mediaCalls.length = 0;
     expect((await f.transfer(url, oid, record.resourceId, 0)).headers.get("upload-verified")).toBe("true");
+    expect(f.mediaCalls).toEqual(["status", "complete"]);
     expect(hash(f.bucket.versions.get("version-1")!.bytes)).toBe(oid);
   });
   it("refuses a late receipt for a part the accepted offset already passed", async () => {
@@ -454,6 +587,90 @@ describe("Parallel tus parts", () => {
     expect(partNumber).toBe(2);
     expect((await repository.media(access, oid, "cancel", { resourceId: record.resourceId, leaseId, partNumber })).status).toBe(200);
     expect((await lease()).status).toBe(200);
+  });
+});
+
+describe("LFS batch admission", () => {
+  const upload = (objects: { oid: string; size: number }[]) => ({ operation: "upload", transfers: ["beutl-tus"], objects });
+
+  it("reserves distinct objects once, preserves response order, and caches the object count", async () => {
+    const first = { oid: "a".repeat(64), size: 1 }, denied = { oid: "b".repeat(64), size: 2 };
+    const existing = { oid: "c".repeat(64), size: 3 }, next = { oid: "d".repeat(64), size: 4 };
+    const reserveLfsBatch = vi.fn<NonNullable<GitStorageAccounting["reserveLfsBatch"]>>()
+      .mockResolvedValueOnce(new Map([[first.oid, "reserved"], [denied.oid, "overQuota"], [existing.oid, "existing"]]))
+      .mockResolvedValueOnce(new Map([[next.oid, "reserved"]]));
+    const f = fixture({}, reserveLfsBatch);
+    const list = vi.spyOn(f.storage, "list"), get = vi.spyOn(f.storage, "get"), put = vi.spyOn(f.storage, "put");
+    const getAlarm = vi.spyOn(f.storage, "getAlarm");
+    const mismatch = { ...first, size: 5 };
+    const result = await f.batch(upload([first, denied, first, mismatch, existing, denied]));
+    expect(result.status).toBe(200);
+    expect(result.body.transfer).toBe("beutl-tus");
+    const [a, b, duplicate, conflict, c, duplicateDenied] = result.body.objects;
+    expect(a).toMatchObject({ ...first, authenticated: true, actions: { upload: { href: expect.stringMatching(/\/tus$/u) } } });
+    expect(duplicate).toEqual(a);
+    expect(b).toEqual({ ...denied, error: { code: 413, message: "Account storage quota exceeded" } });
+    expect(duplicateDenied).toEqual(b);
+    expect(conflict).toEqual({ ...mismatch, error: { code: 409, message: "LFS size differs from its reservation" } });
+    expect(c).toMatchObject({ ...existing, authenticated: true });
+    expect(get.mock.calls.filter(([key]) => key.startsWith("lfs:"))).toEqual([first, denied, existing].map(({ oid }) => [`lfs:${oid}`]));
+    const { expiresAt } = reserveLfsBatch.mock.calls[0][0].items[0];
+    expect(reserveLfsBatch).toHaveBeenCalledExactlyOnceWith({ repoId, ownerId: "owner",
+      items: [first, denied, existing].map((object) => ({ ...object, expiresAt })) });
+    expect(put.mock.calls.filter(([key]) => key === "lfsCount")).toEqual([["lfsCount", 0], ["lfsCount", 2]]);
+    expect(getAlarm).toHaveBeenCalledOnce();
+    expect(f.storage.alarm).toBe(expiresAt + 1000);
+
+    const second = await f.batch(upload([existing, next]));
+    expect(second.body.objects).toMatchObject([{ ...existing, authenticated: true }, { ...next, authenticated: true }]);
+    expect(reserveLfsBatch).toHaveBeenCalledTimes(2);
+    expect(reserveLfsBatch.mock.calls[1][0].items).toEqual([{ ...next, expiresAt: expect.any(Number) }]);
+    expect(f.accounting.reserveLfs).not.toHaveBeenCalled();
+    expect(list).toHaveBeenCalledExactlyOnceWith({ prefix: "lfs:" });
+    expect(await f.storage.get("lfsCount")).toBe(3);
+  });
+
+  it("admits unique objects in request order and rechecks a full counter after a direct deletion", async () => {
+    const f = fixture(), list = vi.spyOn(f.storage, "list");
+    const first = { oid: "a".repeat(64), size: 1 }, next = { oid: "b".repeat(64), size: 1 };
+    const stored = { size: 1, expiresAt: 0, verified: true, resourceId: "existing", offset: 1, partCount: 1 };
+    for (let i = 0; i < 9999; i++) {
+      f.storage.values.set(`lfs:${i.toString(16).padStart(64, "0")}`, stored);
+    }
+    const { body } = await f.batch(upload([first, first, next]));
+    expect(body.objects[0]).toMatchObject({ ...first, authenticated: true });
+    expect(body.objects[1]).toEqual(body.objects[0]);
+    expect(body.objects[2]).toEqual({ ...next, error: { code: 413, message: "Repositories are limited to 10,000 LFS objects" } });
+    expect(await f.storage.get("lfsCount")).toBe(10_000);
+    expect(list).toHaveBeenCalledExactlyOnceWith({ prefix: "lfs:" });
+
+    await f.storage.delete(`lfs:${first.oid}`);
+    const admitted = await f.batch(upload([next]));
+    expect(admitted.body.objects[0]).toMatchObject({ ...next, authenticated: true });
+    expect(await f.storage.get("lfsCount")).toBe(10_000);
+    expect(list.mock.calls).toEqual([[{ prefix: "lfs:" }], [{ prefix: "lfs:" }]]);
+    expect(f.accounting.reserveLfs.mock.calls.map(([input]) => input.oid)).toEqual([first.oid, next.oid]);
+  });
+
+  it("releases expired records before reserving replacements and clears the count on repository deletion", async () => {
+    const f = fixture(), obj = { oid: "a".repeat(64), size: 1 }, other = { oid: "b".repeat(64), size: 2 };
+    await f.batch(upload([obj]));
+    const expired = { ...(await f.storage.get<LfsRecord>(`lfs:${obj.oid}`))!, expiresAt: 0 };
+    await f.storage.put(`lfs:${obj.oid}`, expired);
+    const replacement = { ...obj, size: 2 };
+    expect((await f.batch(upload([other, replacement, replacement]))).body.objects).toMatchObject([
+      { ...other, authenticated: true }, { ...replacement, authenticated: true }, { ...replacement, authenticated: true },
+    ]);
+    expect(f.accounting.releaseLfs).toHaveBeenCalledExactlyOnceWith(repoId, obj.oid);
+    expect(f.accounting.releaseLfs.mock.invocationCallOrder[0]).toBeLessThan(f.accounting.reserveLfs.mock.invocationCallOrder[1]);
+    expect(await f.storage.get<LfsRecord>(`lfs:${obj.oid}`)).toMatchObject({ size: 2 });
+    expect(await f.storage.get("lfsCount")).toBe(2);
+
+    const deleted = await f.durable.fetch(new Request("https://git.internal/internal/git/cleanup", {
+      method: "DELETE", headers: { "x-beutl-repo-id": repoId, "x-beutl-git-scope": "admin" },
+    }));
+    expect(deleted.status).toBe(202);
+    expect(await f.storage.get("lfsCount")).toBeUndefined();
   });
 });
 
@@ -541,5 +758,19 @@ describe("Stock Git LFS basic transfers", () => {
     expect(f.bucket.presigned.at(-1)!.expiresIn).toBeGreaterThanOrEqual(119);
     expect(f.bucket.presigned.at(-1)!.expiresIn).toBeLessThanOrEqual(120);
     expect(Date.parse(entry.actions.upload.expires_at)).toBeLessThanOrEqual(Date.now() + 120_000);
+  });
+  it("presigns uploads in parallel and returns their actions in request order", async () => {
+    const f = fixture(), first = { oid: "a".repeat(64), size: 1 }, second = { oid: "b".repeat(64), size: 2 };
+    const presign = vi.spyOn(f.bucket, "presignUpload");
+    presign.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(presign).toHaveBeenCalledTimes(2);
+      return "https://b2.test/first";
+    }).mockResolvedValueOnce("https://b2.test/second");
+    const { body } = await f.batch({ operation: "upload", objects: [first, second] });
+    expect(body.objects).toMatchObject([
+      { ...first, actions: { upload: { href: "https://b2.test/first" } } },
+      { ...second, actions: { upload: { href: "https://b2.test/second" } } },
+    ]);
   });
 });

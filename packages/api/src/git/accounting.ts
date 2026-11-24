@@ -1,6 +1,6 @@
 import {
   commitGitLfs, extendGitLfsReservation, releaseGitLfs, releaseGitRepositoryStorage,
-  reserveGitHistory, reserveGitLfs, settleGitHistory,
+  reserveGitHistory, reserveGitLfs, reserveGitLfsBatch, settleGitHistory,
 } from "@beutl/db";
 import { runWithDbProvider, type PrismaClient } from "@beutl/db";
 import { PrismaClient as DatabaseClient } from "@prisma/client";
@@ -21,18 +21,27 @@ async function createGitDatabaseClient(env: GitDatabaseEnvironment): Promise<Pri
 export async function withGitDatabase<T>(
   env: GitDatabaseEnvironment, work: () => Promise<T>,
   createClient: () => Promise<PrismaClient> = () => createGitDatabaseClient(env),
+  waitUntil?: (promise: Promise<unknown>) => void,
 ): Promise<T> {
   let client: Promise<PrismaClient> | undefined;
   try {
     return await runWithDbProvider(() => client ??= createClient(), work);
   } finally {
-    if (client) await (await client).$disconnect();
+    if (client) {
+      const disconnect = client.then((db) => db.$disconnect());
+      if (waitUntil) waitUntil(disconnect.catch(() => {
+        // Pool shutdown runs after accounting has returned its result.
+      }));
+      else await disconnect;
+    }
   }
 }
 
 export interface GitStorageAccounting {
   reserveLfs(input: { repoId: string; oid: string; ownerId: string; size: number; expiresAt: number }):
     Promise<"reserved" | "existing" | "overQuota">;
+  reserveLfsBatch?(input: { repoId: string; ownerId: string; items: readonly { oid: string; size: number; expiresAt: number }[] }):
+    Promise<Map<string, "reserved" | "existing" | "overQuota">>;
   commitLfs(repoId: string, oid: string): Promise<void>;
   extendLfs(repoId: string, oid: string, expiresAt: number): Promise<void>;
   releaseLfs(repoId: string, oid: string): Promise<void>;
@@ -43,6 +52,7 @@ export interface GitStorageAccounting {
 
 export const databaseGitStorageAccounting: GitStorageAccounting = {
   reserveLfs: reserveGitLfs,
+  reserveLfsBatch: reserveGitLfsBatch,
   commitLfs: commitGitLfs,
   extendLfs: extendGitLfsReservation,
   releaseLfs: releaseGitLfs,

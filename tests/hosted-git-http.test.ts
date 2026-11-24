@@ -8,9 +8,11 @@ import { createServer } from "node:http";
 import { Readable } from "node:stream";
 import { createHash } from "node:crypto";
 import { deflateSync } from "node:zlib";
+import { getDb } from "@beutl/db";
+import { withGitDatabase } from "../packages/api/src/git/accounting";
 import { GitRepositoryDurableObject } from "../packages/api/src/git/repo-durable-object";
 import { advertiseGitRefs, MAX_GIT_REPOSITORY_BYTES, readGitRepository, receiveGitPack, uploadGitPack } from "../packages/api/src/git/git-http";
-import { createGitPack, packEntryHeader } from "../packages/api/src/git/pack-writer";
+import { createGitPack, gitIndexBytes, packEntryHeader } from "../packages/api/src/git/pack-writer";
 import { validateGitPack } from "../packages/api/src/git/pack-validation";
 import { GitObjectReader } from "../packages/api/src/git/object-reader";
 
@@ -59,9 +61,15 @@ async function receive(bucket: Bucket, body: Uint8Array, reserve = vi.fn(async (
 }
 
 // Frame requests independently from the server encoder, as an external Git client does.
-function refCommand(ref: string, before: string, after: string, capabilities = "report-status") {
-  const line = `${before} ${after} ${ref}\0${capabilities}\n`;
-  return Buffer.from(`${(Buffer.byteLength(line) + 4).toString(16).padStart(4, "0")}${line}0000`);
+function refCommands(updates: [string, string, string][], capabilities = "report-status") {
+  const packets = updates.map(([ref, before, after], i) => {
+    const line = `${before} ${after} ${ref}${i === 0 ? `\0${capabilities}` : ""}\n`;
+    return `${(Buffer.byteLength(line) + 4).toString(16).padStart(4, "0")}${line}`;
+  });
+  return Buffer.from(packets.join("") + "0000");
+}
+function refCommand(ref: string, before: string, after: string, capabilities?: string) {
+  return refCommands([[ref, before, after]], capabilities);
 }
 function packedObject(type: "commit" | "tree" | "blob" | "tag", data: Uint8Array) {
   return { type: { commit: 1, tree: 2, blob: 3, tag: 4 }[type], data,
@@ -70,6 +78,9 @@ function packedObject(type: "commit" | "tree" | "blob" | "tag", data: Uint8Array
 function commitObject(tree: string, parent?: string) {
   return packedObject("commit", Buffer.from(`tree ${tree}\n${parent ? `parent ${parent}\n` : ""}`
     + "author Test <test@example.com> 1 +0000\ncommitter Test <test@example.com> 1 +0000\n\nCommit\n"));
+}
+function treeEntry(mode: string, name: string, oid: string) {
+  return Buffer.concat([Buffer.from(`${mode} ${name}\0`), Buffer.from(oid, "hex")]);
 }
 it.each(["HEAD", "refs/heads/../../config", "refs/heads/.hidden", "refs/heads/a.lock", "refs/heads/a..b",
   "refs/heads/a@{b}", "refs/heads/a\\b", "refs/heads/a\nb", "refs/heads/a\rb", "refs//main"])(
@@ -133,6 +144,15 @@ it("rejects incomplete stored history on a ref-only update", async () => {
   expect(reserve).not.toHaveBeenCalled();
   expect([...bucket.objects.keys()].some((key) => key.includes("/refs/"))).toBe(false);
 });
+it("checks the existence and type of existing ref tips used as new branch targets", async () => {
+  const bucket = new Bucket(), data = Buffer.from("a tagged blob"), oid = blobOid(data);
+  expect(await (await receive(bucket, pushBody([{ data }], oid))).text()).toContain("ok refs/tags/");
+  const branch = refCommand("refs/heads/main", "0".repeat(40), oid);
+  expect(await (await receive(bucket, branch)).text()).toContain("ng refs/heads/main invalid target object");
+  await bucket.delete([...bucket.objects.keys()].filter((key) => /\.(pack|idx)$/u.test(key)));
+  const tag = refCommand("refs/tags/new", "0".repeat(40), oid);
+  expect(await (await receive(bucket, tag)).text()).toContain("ng refs/tags/new invalid target object");
+});
 it.each([false, true])("accepts incoming history sharing stored trees, parents and blobs while excluding submodule commits (loose blob=%s)", async (loose) => {
   const bucket = new Bucket(), blob = packedObject("blob", Buffer.from("stored file"));
   const tree = packedObject("tree", Buffer.concat([Buffer.from("100644 file.txt\0"), Buffer.from(blob.oid, "hex")]));
@@ -146,8 +166,14 @@ it.each([false, true])("accepts incoming history sharing stored trees, parents a
   const response = await receive(bucket, pushBody([nextTree, commit, tag], tag.oid));
   expect(await response.text()).toContain(`ok refs/tags/test-${tag.oid}`);
 });
-it("does not probe absent loose objects when pushing onto a packed 1,000-commit history", async () => {
-  const bucket = new Bucket(), tree = packedObject("tree", Buffer.alloc(0)), history = [tree];
+it.each([false, true])("skips old commits and unchanged subtrees of a packed 1,000-commit history (changed tree=%s)", async (changed) => {
+  const bucket = new Bucket(), blob = packedObject("blob", Buffer.from("initial content"));
+  const unchanged = packedObject("tree", treeEntry("100644", "kept.txt", blob.oid));
+  const directory = packedObject("tree", Buffer.concat([
+    treeEntry("100644", "edit.txt", blob.oid), treeEntry("40000", "kept", unchanged.oid),
+  ]));
+  const tree = packedObject("tree", treeEntry("40000", "dir", directory.oid));
+  const history = [blob, unchanged, directory, tree];
   let parent: string | undefined;
   for (let index = 0; index < 1000; index++) {
     const commit = commitObject(tree.oid, parent);
@@ -160,13 +186,38 @@ it("does not probe absent loose objects when pushing onto a packed 1,000-commit 
   await bucket.put(`${path}.pack`, new Uint8Array(await new Response(pack.stream()).arrayBuffer()));
   await bucket.put(`${path}.idx`, pack.index!);
   await bucket.put(`${root}refs/heads/main`, Buffer.from(`${parent}\n`));
-  const next = commitObject(tree.oid, parent), packed = pushBody([next], next.oid);
+  const edit = packedObject("blob", Buffer.from("edited content"));
+  const nextDirectory = packedObject("tree", Buffer.concat([
+    treeEntry("100644", "edit.txt", edit.oid), treeEntry("40000", "kept", unchanged.oid),
+  ]));
+  const nextTree = packedObject("tree", treeEntry("40000", "dir", nextDirectory.oid));
+  const next = commitObject(changed ? nextTree.oid : tree.oid, parent);
+  const packed = pushBody(changed ? [next, nextTree, nextDirectory, edit] : [next], next.oid);
   const body = Buffer.concat([refCommand("refs/heads/main", parent!, next.oid), packed.subarray(packed.indexOf("PACK"))]);
-  const get = vi.spyOn(bucket, "get");
-  expect(await (await receive(bucket, body)).text()).toContain("ok refs/heads/main");
-  const looseReads = get.mock.calls.filter(([key]) => /\/objects\/[0-9a-f]{2}\/[0-9a-f]{38}$/u.test(key));
-  expect(looseReads).toHaveLength(0);
-  expect(get.mock.calls.length).toBeLessThan(20);
+  const get = vi.spyOn(bucket, "get"), info = vi.spyOn(GitObjectReader.prototype, "info"), read = vi.spyOn(GitObjectReader.prototype, "read");
+  try {
+    expect(await (await receive(bucket, body)).text()).toContain("ok refs/heads/main");
+    const compared = changed ? [parent, tree.oid, directory.oid] : [parent];
+    expect(info.mock.calls.map(([oid]) => oid)).toEqual(compared);
+    expect(read.mock.calls.map(([oid]) => oid)).toEqual(compared);
+    expect(get.mock.calls.map(([key]) => key).filter((key) => key.includes("/objects/")))
+      .toEqual([`${path}.idx`, `${path}.pack`]);
+  } finally { info.mockRestore(); read.mockRestore(); }
+});
+it("validates an unreachable stored tree when a gitlink becomes a directory", async () => {
+  const bucket = new Bucket(), reserve = vi.fn(async () => true);
+  const broken = packedObject("tree", treeEntry("100644", "missing", "1".repeat(40)));
+  const tree = packedObject("tree", treeEntry("160000", "dir", broken.oid));
+  const parent = commitObject(tree.oid);
+  const initialPack = pushBody([broken, tree, parent], parent.oid);
+  expect(await (await receive(bucket, Buffer.concat([
+    refCommand("refs/heads/main", "0".repeat(40), parent.oid), initialPack.subarray(initialPack.indexOf("PACK")),
+  ]))).text()).toContain("ok refs/heads/main");
+  const nextTree = packedObject("tree", treeEntry("40000", "dir", broken.oid)), next = commitObject(nextTree.oid, parent.oid);
+  const pack = pushBody([nextTree, next], next.oid);
+  const push = Buffer.concat([refCommand("refs/heads/main", parent.oid, next.oid), pack.subarray(pack.indexOf("PACK"))]);
+  expect(await (await receive(bucket, push, reserve)).text()).toContain("ng refs/heads/main incomplete object graph");
+  expect(reserve).not.toHaveBeenCalled();
 });
 it.each([{ packed: false, full: false }, { packed: true, full: false }, { packed: false, full: true }])(
   "rejects replayed stale pushes without storing or reserving history (packed=$packed, full=$full)", async ({ packed, full }) => {
@@ -206,6 +257,24 @@ it("accepts valid ref updates alongside stale ones in the same push", async () =
   expect([...bucket.objects.keys()].filter((key) => key.endsWith(".pack"))).toHaveLength(2);
   expect(reserve).toHaveBeenCalledOnce();
 });
+it("updates a packed ref deletion from the pre-push snapshot without reading storage after the pack write", async () => {
+  const bucket = new Bucket(), original = Buffer.from("original"), next = Buffer.from("new");
+  const oid = blobOid(original), newOid = blobOid(next);
+  await receive(bucket, pushBody([{ data: original }], oid));
+  const packedKey = `git/repos/${repoId}/repo.git/packed-refs`;
+  await bucket.put(packedKey, Buffer.from(`# pack-refs with: peeled\n${oid} refs/tags/kept\n${oid} refs/tags/old\n^${oid}\n`));
+  const upload = pushBody([{ data: next }], newOid), packStart = upload.indexOf("PACK");
+  const deletion = `${oid} ${"0".repeat(40)} refs/tags/old\n`;
+  const body = Buffer.concat([upload.subarray(0, packStart - 4),
+    Buffer.from(`${(Buffer.byteLength(deletion) + 4).toString(16).padStart(4, "0")}${deletion}0000`), upload.subarray(packStart)]);
+  const get = vi.spyOn(bucket, "get"), put = vi.spyOn(bucket, "put");
+  const status = await (await receive(bucket, body)).text();
+  expect(status).toContain(`ok refs/tags/test-${newOid}`);
+  expect(status).toContain("ok refs/tags/old");
+  expect(Buffer.from(bucket.objects.get(packedKey)!).toString()).toBe(`# pack-refs with: peeled\n${oid} refs/tags/kept\n`);
+  const packWrite = put.mock.calls.findIndex(([key]) => key.endsWith(".pack"));
+  expect(get.mock.invocationCallOrder.every((call) => call < put.mock.invocationCallOrder[packWrite])).toBe(true);
+});
 it("keeps both packs when successive pushes have the same timestamp", async () => {
   const bucket = new Bucket(), time = vi.spyOn(Date, "now").mockReturnValue(10_000);
   try {
@@ -234,48 +303,97 @@ it("removes an incoming pack after an index write fails and leaves existing hist
   expect(Buffer.from(await reader.read(blobOid(original)))).toEqual(original);
   expect(await (await receive(bucket, pushBody([{ data: next }], blobOid(next)))).text()).toContain("ok refs/tags/");
 });
-it.each(["base", "delta"])("removes an incomplete index for a forward REF_DELTA before publishing its %s", async (target) => {
-  const bucket = new Bucket(), original = Buffer.from("original"), base = Buffer.from("a"), result = Buffer.from("ab");
-  await receive(bucket, pushBody([{ data: original }], blobOid(original)));
-  const before = new Map(bucket.objects), oid = blobOid(target === "base" ? base : result);
+it("accepts and indexes a forward REF_DELTA with the same v2 index as native Git", async () => {
+  const bucket = new Bucket(), base = Buffer.from("a"), result = Buffer.from("ab"), oid = blobOid(result);
   const entries = [{ type: 7, base: Buffer.from(blobOid(base), "hex"), data: Buffer.from([1, 2, 0x90, 1, 1, 98]) }, { data: base }];
-  // This valid pack passes validation, but the indexer cannot resolve a base
-  // that appears later and silently omits the delta from the written index.
-  await expect(receive(bucket, pushBody(entries, oid))).rejects.toThrow("Git pack index is incomplete");
-  expect(bucket.objects).toEqual(before);
+  const get = vi.spyOn(bucket, "get"), put = vi.spyOn(bucket, "put");
+  expect(await (await receive(bucket, pushBody(entries, oid))).text()).toContain(`ok refs/tags/test-${oid}`);
+  const packWrite = put.mock.calls.findIndex(([key]) => key.endsWith(".pack"));
+  const [packKey] = put.mock.calls[packWrite], indexKey = packKey.replace(/\.pack$/u, ".idx");
+  expect(put.mock.calls[packWrite + 1][0]).toBe(indexKey);
+  expect(get.mock.calls).not.toContainEqual([packKey]);
+  expect(get.mock.invocationCallOrder.every((call) => call < put.mock.invocationCallOrder[packWrite])).toBe(true);
+
+  const pack = bucket.objects.get(packKey)!, index = bucket.objects.get(indexKey)!;
+  expect(index.byteLength).toBe(gitIndexBytes(entries.length));
   const reader = new GitObjectReader(readGitRepository(bucket as never, repoId));
-  expect(Buffer.from(await reader.read(blobOid(original)))).toEqual(original);
-  expect(await (await receive(bucket, pushBody([...entries].reverse(), oid))).text()).toContain(`ok refs/tags/test-${oid}`);
-  const recovered = new GitObjectReader(readGitRepository(bucket as never, repoId));
-  expect(Buffer.from(await recovered.read(blobOid(result)))).toEqual(result);
+  expect(Buffer.from(await reader.read(oid))).toEqual(result);
+  expect(Buffer.from(await reader.read(blobOid(base)))).toEqual(base);
+
+  const root = mkdtempSync(join(tmpdir(), "beutl-git-index-"));
+  const git = (...args: string[]) => execute("git", ["--git-dir", root, ...args]);
+  try {
+    await git("init", "--bare", "--object-format=sha1", "-q");
+    const checksum = Buffer.from(pack.subarray(-20)).toString("hex");
+    const path = join(root, "objects", "pack", `pack-${checksum}`);
+    writeFileSync(`${path}.pack`, pack);
+    writeFileSync(`${path}.idx`, index);
+    writeFileSync(join(root, "refs", "tags", "test"), `${oid}\n`);
+    await git("index-pack", "--index-version=2", "-o", join(root, "native.idx"), `${path}.pack`);
+    expect(readFileSync(join(root, "native.idx"))).toEqual(Buffer.from(index));
+    await git("verify-pack", `${path}.idx`);
+    await git("fsck", "--strict");
+    expect((await git("cat-file", "blob", oid)).stdout).toBe(result.toString());
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
-it.each([false, true])("removes an incomplete index after a thin base read fails only during indexing (loose=%s)", async (loose) => {
+
+it.each([false, true])("indexes both entries for a duplicate OID (delta first=%s)", async (deltaFirst) => {
+  const bucket = new Bucket(), data = Buffer.alloc(0), oid = blobOid(data);
+  const delta = { type: 7, base: Buffer.from(oid, "hex"), data: Buffer.from([0, 0]) };
+  expect(await (await receive(bucket, pushBody(deltaFirst ? [delta, { data }] : [{ data }, delta], oid))).text())
+    .toContain(`ok refs/tags/test-${oid}`);
+  const [indexKey, index] = [...bucket.objects].find(([key]) => key.endsWith(".idx"))!;
+  const view = new DataView(index.buffer, index.byteOffset, index.byteLength);
+  expect(view.getUint32(1028)).toBe(2);
+  expect(index.byteLength).toBe(gitIndexBytes(2));
+  expect(Buffer.from(index.subarray(1032, 1072)).toString("hex")).toBe(oid.repeat(2));
+  expect(view.getUint32(1080)).toBe(12);
+  const first = deltaFirst ? delta : { type: 3, data, base: undefined };
+  expect(view.getUint32(1084)).toBe(12 + packEntryHeader(first.type, first.data.length).length
+    + (first.base?.length ?? 0) + deflateSync(first.data).length);
+  const reader = new GitObjectReader(readGitRepository(bucket as never, repoId));
+  expect(await reader.read(oid)).toEqual(new Uint8Array());
+  const entries = await reader.packEntries(indexKey.split("/").at(-1)!.replace(/\.idx$/u, ".pack"));
+  expect(entries.get(oid)?.type).toBe(3);
+});
+
+it.each([false, true])("writes a thin pack without storage reads after PUT and can retry a failed index write (loose=%s)", async (loose) => {
   const bucket = new Bucket(), base = Buffer.from("a"), target = Buffer.from("ab"), baseOid = blobOid(base);
-  const looseKey = `git/repos/${repoId}/repo.git/objects/${baseOid.slice(0, 2)}/${baseOid.slice(2)}`;
   if (loose) {
+    const looseKey = `git/repos/${repoId}/repo.git/objects/${baseOid.slice(0, 2)}/${baseOid.slice(2)}`;
     await bucket.put(looseKey, deflateSync(Buffer.concat([Buffer.from("blob 1\0"), base])));
     await receive(bucket, refCommand("refs/tags/base", "0".repeat(40), baseOid));
-  } else await receive(bucket, pushBody([{ data: base }], baseOid));
-  const before = new Map(bucket.objects), baseKey = loose ? looseKey : [...before.keys()].find((key) => key.endsWith(".pack"))!;
-  const get = bucket.get.bind(bucket), put = bucket.put.bind(bucket);
-  let indexing = false, failures = 0;
-  const writing = vi.spyOn(bucket, "put").mockImplementation(async (key, bytes) => {
-    await put(key, bytes);
-    if (key.endsWith(".pack")) indexing = true;
-  });
-  const reading = vi.spyOn(bucket, "get").mockImplementation(async (key) => {
-    if (indexing && key === baseKey) { failures++; throw new Error("B2 base read failed"); }
-    return get(key);
-  });
+  } else {
+    const ancestor = Buffer.from("x");
+    await receive(bucket, pushBody([{ data: ancestor }, {
+      type: 7, base: Buffer.from(blobOid(ancestor), "hex"), data: Buffer.from([1, 1, 1, 97]),
+    }], baseOid));
+  }
+  const before = new Map(bucket.objects), put = bucket.put.bind(bucket), failure = new Error("B2 index write failed");
   const body = pushBody([{ type: 7, base: Buffer.from(baseOid, "hex"), data: Buffer.from([1, 2, 0x90, 1, 1, 98]) }], blobOid(target));
-  try {
-    await expect(receive(bucket, body)).rejects.toThrow("Git pack index is incomplete");
-  } finally { reading.mockRestore(); writing.mockRestore(); }
-  expect(failures).toBeGreaterThan(0);
+  const read = vi.spyOn(bucket, "get"), remove = vi.spyOn(bucket, "delete");
+  let failIndex = true;
+  const write = vi.spyOn(bucket, "put").mockImplementation(async (key, bytes) => {
+    await put(key, bytes);
+    if (failIndex && key.endsWith(".idx")) throw failure;
+  });
+  const checkWrites = () => {
+    const [[packKey], [indexKey]] = write.mock.calls;
+    expect(packKey).toMatch(/\.pack$/u);
+    expect(indexKey).toBe(packKey.replace(/\.pack$/u, ".idx"));
+    expect(read.mock.calls).not.toContainEqual([packKey]);
+    expect(read.mock.invocationCallOrder.every((call) => call < write.mock.invocationCallOrder[0])).toBe(true);
+    return { packKey, indexKey };
+  };
+  await expect(receive(bucket, body)).rejects.toBe(failure);
+  const { packKey, indexKey } = checkWrites();
+  expect(remove.mock.calls).toEqual([[indexKey], [packKey]]);
   expect(bucket.objects).toEqual(before);
   const reader = new GitObjectReader(readGitRepository(bucket as never, repoId));
   expect(Buffer.from(await reader.read(baseOid))).toEqual(base);
+  failIndex = false; read.mockClear(); write.mockClear();
   expect(await (await receive(bucket, body)).text()).toContain(`ok refs/tags/test-${blobOid(target)}`);
+  checkWrites();
   const recovered = new GitObjectReader(readGitRepository(bucket as never, repoId));
   expect(Buffer.from(await recovered.read(blobOid(target)))).toEqual(target);
 });
@@ -743,8 +861,182 @@ it("accepts ordinary objects and a thin delta referencing stored history", async
 function memoryStorage() {
   const values = new Map<string, unknown>();
   return { values, get: async (key: string) => values.get(key), put: async (key: string, value: unknown) => { values.set(key, value); },
+    delete: async (key: string) => values.delete(key),
     getAlarm: async () => null, setAlarm: async () => undefined };
 }
+function accountedRepository() {
+  const bucket = new Bucket(), storage = memoryStorage();
+  const accounting = {
+    reserveHistory: vi.fn(async (_repoId: string, _ownerId: string, _bytes: number) => true),
+    settleHistory: vi.fn(async (_repoId: string, _bytes: number) => undefined),
+  };
+  const durable = new GitRepositoryDurableObject({ storage: storage as never }, {}, bucket as never, accounting as never);
+  const send = (path: string, body?: Uint8Array) => durable.fetch(new Request(
+    `https://git.internal/api/v3/git/${repoId}.git/${path}`, {
+      method: body === undefined ? "GET" : "POST", body,
+      headers: { "x-beutl-repo-id": repoId, "x-beutl-git-scope": "write", "x-beutl-git-owner-id": "owner" },
+    }));
+  return { bucket, storage, accounting, send };
+}
+const gitBytes = (bucket: Bucket) => [...bucket.objects.values()].reduce((sum, value) => sum + value.byteLength, 0);
+
+it.each([true, false])("shares a single repository listing between info/refs and a clean push (initialized=%s)", async (initialized) => {
+  const { bucket, storage, accounting, send } = accountedRepository();
+  const base = Buffer.from("base"), baseOid = blobOid(base);
+  await receive(bucket, pushBody([{ data: base }], baseOid));
+  await bucket.put(`git/repos/${repoId}/legacy-metadata`, Buffer.from("counted by history accounting"));
+  if (initialized) storage.values.set("gitInitialized", true);
+  const list = vi.spyOn(bucket, "list"), head = vi.spyOn(bucket, "head"), get = vi.spyOn(bucket, "get");
+  const advert = await send("info/refs?service=git-upload-pack");
+  expect(await advert.text()).toContain(`${baseOid} refs/tags/test-${baseOid}`);
+  expect(list).toHaveBeenCalledTimes(1);
+  expect(head).not.toHaveBeenCalled();
+  expect(get.mock.calls.some(([key]) => key.endsWith("packed-refs"))).toBe(false);
+  expect(storage.values.get("gitInitialized")).toBe(true);
+
+  list.mockClear(); get.mockClear();
+  accounting.reserveHistory.mockImplementationOnce(async () => {
+    expect(accounting.settleHistory).not.toHaveBeenCalled();
+    expect(storage.values.get("historyUnsettled")).toBe(true);
+    return true;
+  });
+  // The thin pack uses the base index and pack read while advertising the tag.
+  const nextOid = blobOid(Buffer.from("base!"));
+  const reply = await send("git-receive-pack", pushBody([{
+    data: Buffer.from([4, 5, 0x90, 4, 1, 33]), type: 7, base: Buffer.from(baseOid, "hex"),
+  }], nextOid));
+  expect(await reply.text()).toContain(`ok refs/tags/test-${nextOid}`);
+  expect(list).not.toHaveBeenCalled();
+  expect(head).not.toHaveBeenCalled();
+  expect(get).not.toHaveBeenCalled();
+  expect(accounting.reserveHistory).toHaveBeenCalledOnce();
+  expect(accounting.settleHistory).toHaveBeenCalledExactlyOnceWith(repoId, gitBytes(bucket));
+  expect(storage.values.has("historyUnsettled")).toBe(false);
+});
+
+it("skips accounting and maintenance for pushes that make no writes", async () => {
+  const { bucket, storage, accounting, send } = accountedRepository();
+  await advertiseGitRefs(bucket as never, repoId, "git-receive-pack");
+  const put = vi.spyOn(bucket, "put");
+  const rejected = await send("git-receive-pack", refCommand("refs/heads/main", "1".repeat(40), "0".repeat(40)));
+  expect(await rejected.text()).toContain("ng refs/heads/main stale ref");
+  expect((await send("git-receive-pack", Buffer.from("bad command"))).status).toBe(400);
+
+  accounting.reserveHistory.mockResolvedValueOnce(false);
+  const data = Buffer.from("over quota");
+  expect((await send("git-receive-pack", pushBody([{ data }], blobOid(data)))).status).toBe(413);
+  expect(put).not.toHaveBeenCalled();
+  expect(accounting.reserveHistory).toHaveBeenCalledOnce();
+  expect(accounting.settleHistory).not.toHaveBeenCalled();
+  for (const key of ["lastPushFinishedAt", "gitGcPending", "historyUnsettled"]) expect(storage.values.has(key)).toBe(false);
+});
+
+it("reconciles a failed push before the next reservation when its immediate recount fails", async () => {
+  const { bucket, storage, accounting, send } = accountedRepository();
+  await send("info/refs?service=git-receive-pack");
+  accounting.reserveHistory.mockClear();
+  accounting.settleHistory.mockClear();
+  const data = Buffer.from("first push"), oid = blobOid(data), body = pushBody([{ data }], oid);
+  const list = vi.spyOn(bucket, "list"), put = bucket.put.bind(bucket);
+  const failure = vi.spyOn(bucket, "put").mockImplementation(async (key, bytes) => {
+    if (key.endsWith(`/refs/tags/test-${oid}`)) {
+      list.mockRejectedValueOnce(new Error("B2 recount unavailable"));
+      throw new Error("B2 ref write failed");
+    }
+    await put(key, bytes);
+  });
+  await expect(send("git-receive-pack", body)).rejects.toThrow("B2 recount unavailable");
+  expect(accounting.reserveHistory).toHaveBeenCalledOnce();
+  expect(accounting.settleHistory).not.toHaveBeenCalled();
+  expect(storage.values.get("historyUnsettled")).toBe(true);
+  const afterFailure = gitBytes(bucket);
+
+  failure.mockRestore();
+  list.mockClear();
+  accounting.reserveHistory.mockImplementationOnce(async () => {
+    expect(accounting.settleHistory).toHaveBeenCalledExactlyOnceWith(repoId, afterFailure);
+    return true;
+  });
+  expect(await (await send("git-receive-pack", body)).text()).toContain(`ok refs/tags/test-${oid}`);
+  expect(list).toHaveBeenCalledOnce();
+  expect(accounting.settleHistory.mock.calls).toEqual([[repoId, afterFailure], [repoId, gitBytes(bucket)]]);
+  expect(storage.values.has("historyUnsettled")).toBe(false);
+});
+
+it("retries a reservation after reconciling a legacy outstanding DB reservation", async () => {
+  const { bucket, storage, accounting, send } = accountedRepository();
+  await advertiseGitRefs(bucket as never, repoId, "git-receive-pack");
+  const before = gitBytes(bucket), list = vi.spyOn(bucket, "list");
+  accounting.reserveHistory.mockRejectedValueOnce(new Error("Git history requires reconciliation"));
+  accounting.reserveHistory.mockImplementationOnce(async () => {
+    expect(accounting.settleHistory).toHaveBeenCalledExactlyOnceWith(repoId, before);
+    expect(storage.values.get("historyUnsettled")).toBe(true);
+    return true;
+  });
+  const data = Buffer.from("after reconciliation"), oid = blobOid(data);
+  expect(await (await send("git-receive-pack", pushBody([{ data }], oid))).text()).toContain(`ok refs/tags/test-${oid}`);
+  expect(accounting.reserveHistory).toHaveBeenCalledTimes(2);
+  expect(accounting.settleHistory.mock.calls).toEqual([[repoId, before], [repoId, gitBytes(bucket)]]);
+  expect(list).toHaveBeenCalledOnce();
+  expect(storage.values.has("historyUnsettled")).toBe(false);
+});
+
+it("updates and deletes loose refs in parallel, rewriting packed-refs once without a new reservation", async () => {
+  const bucket = new Bucket(), root = `git/repos/${repoId}/repo.git/`;
+  const first = Buffer.from("first"), second = Buffer.from("second");
+  const oldOid = blobOid(first), newOid = blobOid(second), zero = "0".repeat(40);
+  await receive(bucket, pushBody([{ data: first }, { data: second }], oldOid));
+  const moved = ["refs/tags/move-a", "refs/tags/move-b"], loose = ["refs/tags/drop-a", "refs/tags/drop-b"];
+  for (const name of [...moved, ...loose]) await bucket.put(root + name, Buffer.from(`${oldOid}\n\n`));
+  const removed = [...loose, "refs/tags/packed-only"];
+  const retained = `# pack-refs with: peeled\n${oldOid} refs/tags/keep\n`;
+  await bucket.put(root + "packed-refs", Buffer.from(retained + removed.map((name) => `${oldOid} ${name}\n^${oldOid}\n`).join("")));
+  const deletesDone = Promise.withResolvers<void>(), putsDone = Promise.withResolvers<void>();
+  const del = bucket.delete.bind(bucket), put = bucket.put.bind(bucket);
+  const remove = vi.spyOn(bucket, "delete").mockImplementation(async (key) => { await deletesDone.promise; await del(key); });
+  const write = vi.spyOn(bucket, "put").mockImplementation(async (key, value) => {
+    if (key.includes("/refs/")) await putsDone.promise;
+    await put(key, value);
+  });
+  const reserve = vi.fn(async () => true), beforeWrite = vi.fn(async () => undefined), onSettled = vi.fn();
+  const body = refCommands([
+    ...moved.map((key): [string, string, string] => [key, oldOid, newOid]),
+    ...removed.map((key): [string, string, string] => [key, oldOid, zero]),
+  ]);
+  const pending = receiveGitPack(new Request("https://git.example.test/git-receive-pack", { method: "POST", body }),
+    bucket as never, repoId, reserve, { beforeWrite, onSettled });
+  try {
+    await vi.waitFor(() => expect(remove.mock.calls).toEqual(loose.map((name) => [root + name])));
+    deletesDone.resolve();
+    await vi.waitFor(() => expect(write.mock.calls.map(([key]) => key)).toEqual([root + "packed-refs", ...moved.map((name) => root + name)]));
+  } finally { deletesDone.resolve(); putsDone.resolve(); }
+  const response = await (await pending).text();
+  for (const name of [...moved, ...removed]) expect(response).toContain(`ok ${name}`);
+  for (const name of moved) expect(Buffer.from(bucket.objects.get(root + name)!).toString()).toBe(`${newOid}\n`);
+  for (const name of loose) expect(bucket.objects.has(root + name)).toBe(false);
+  expect(Buffer.from(bucket.objects.get(root + "packed-refs")!).toString()).toBe(retained);
+  expect(reserve).not.toHaveBeenCalled();
+  expect(beforeWrite).toHaveBeenCalledOnce();
+  expect(onSettled).toHaveBeenCalledExactlyOnceWith({ wrote: true, bytes: gitBytes(bucket) });
+});
+
+it("schedules lazy Git DB disconnection without blocking the response", async () => {
+  const disconnected = Promise.withResolvers<void>();
+  const disconnect = vi.fn(() => disconnected.promise);
+  const connect = vi.fn(async () => ({ $disconnect: disconnect }) as never);
+  const waitUntil = vi.fn((_work: Promise<unknown>) => undefined);
+  expect(await withGitDatabase({}, async () => "no DB", connect, waitUntil)).toBe("no DB");
+  expect(connect).not.toHaveBeenCalled();
+  expect(waitUntil).not.toHaveBeenCalled();
+  try {
+    const result = await withGitDatabase({}, async () => { await getDb(); return "response"; }, connect, waitUntil);
+    expect(result).toBe("response");
+    expect(waitUntil).toHaveBeenCalledOnce();
+    expect(disconnect).toHaveBeenCalledOnce();
+  } finally { disconnected.resolve(); }
+  await waitUntil.mock.calls[0][0];
+});
+
 it("rejects unsupported Git routes and services before creating unreserved objects", async () => {
   const bucket = new Bucket();
   const durable = new GitRepositoryDurableObject({ storage: memoryStorage() as never }, {}, bucket as never);
@@ -763,6 +1055,7 @@ it("rejects unsupported Git routes and services before creating unreserved objec
 });
 it("validates the advertised service before reserving storage for an empty repository", async () => {
   const bucket = new Bucket();
+  const list = vi.spyOn(bucket, "list");
   const accounting = { reserveHistory: vi.fn(async () => true), settleHistory: vi.fn(async () => undefined) };
   const durable = new GitRepositoryDurableObject({ storage: memoryStorage() as never }, {}, bucket as never, accounting as never);
   const advertise = (query: string, scope: string) => durable.fetch(new Request(
@@ -772,11 +1065,35 @@ it("validates the advertised service before reserving storage for an empty repos
   expect((await advertise("", "write")).status).toBe(400);
   expect((await advertise("?service=git-receive-pack", "read")).status).toBe(403);
   expect(accounting.reserveHistory).not.toHaveBeenCalled();
+  expect(list).not.toHaveBeenCalled();
   expect(bucket.objects.size).toBe(0);
   // A valid advertisement reserves the initialization before writing HEAD/config.
   expect((await advertise("?service=git-upload-pack", "read")).status).toBe(200);
   expect(accounting.reserveHistory).toHaveBeenCalledWith(repoId, "owner", 4096);
+  expect(list).toHaveBeenCalledOnce();
+  expect(accounting.settleHistory).toHaveBeenCalledExactlyOnceWith(repoId, gitBytes(bucket));
   expect(bucket.objects.size).toBeGreaterThan(0);
+});
+it("repairs partial initialization and accounts for the missing file before marking the repository ready", async () => {
+  const { bucket, storage, accounting, send } = accountedRepository();
+  const head = `git/repos/${repoId}/repo.git/HEAD`, put = bucket.put.bind(bucket);
+  const write = vi.spyOn(bucket, "put").mockImplementation(async (key, bytes) => {
+    if (key === head) throw new Error("HEAD write failed");
+    await put(key, bytes);
+  });
+  const advertise = () => send("info/refs?service=git-receive-pack");
+  await expect(advertise()).rejects.toThrow("HEAD write failed");
+  const partial = gitBytes(bucket);
+  expect(partial).toBeGreaterThan(0);
+  expect(storage.values.has("gitInitialized")).toBe(false);
+
+  write.mockRestore();
+  const repaired = vi.spyOn(bucket, "put");
+  expect((await advertise()).status).toBe(200);
+  expect(repaired).toHaveBeenCalledExactlyOnceWith(head, Buffer.from("ref: refs/heads/main\n"));
+  expect(accounting.reserveHistory).toHaveBeenCalledExactlyOnceWith(repoId, "owner", 4096);
+  expect(accounting.settleHistory.mock.calls).toEqual([[repoId, partial], [repoId, gitBytes(bucket)]]);
+  expect(storage.values.get("gitInitialized")).toBe(true);
 });
 it("waits a full second after the previous push before writing Git objects to B2", async () => {
   vi.useFakeTimers();

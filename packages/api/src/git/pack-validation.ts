@@ -3,8 +3,10 @@ import { inflateSync } from "node:zlib";
 import { Buffer } from "node:buffer";
 import { MAX_GIT_OBJECT_BYTES } from "./git-object-store";
 import type { GitObjectInfo, GitObjectReader, GitObjectType } from "./object-reader";
+import { GitDeltaError, readDelta, readDeltaHeader } from "./pack-delta";
+import { buildGitPackIndex, crc32, type GitPackIndexRecord } from "./pack-writer";
 
-// Bound validation work and isomorphic-git's per-command chunk allocations.
+// Bound validation and subsequent delta replay work.
 // Share the budget across the pack rather than resetting it for each delta.
 const MAX_GIT_PACK_DELTA_OPERATIONS = 262_144;
 // Count entry visits and index probes, including cached indexes and base chains,
@@ -22,14 +24,6 @@ class Cursor {
     if (this.position >= this.bytes.length) throw new GitPackValidationError("Truncated Git pack");
     return this.bytes[this.position++];
   }
-  unsigned(): number {
-    let value: number, size = 0, scale = 1;
-    do {
-      value = this.byte(); size += (value & 127) * scale; scale *= 128;
-      if (!Number.isSafeInteger(size)) throw new GitPackValidationError("Invalid Git delta size");
-    } while (value & 128);
-    return size;
-  }
 }
 
 function checkSize(size: number, maximum: number): void {
@@ -42,32 +36,15 @@ function consumeOperations(budget: { remaining: number }, count: number): void {
   if (budget.remaining < 0) throw new GitPackLimitError("Git pack exceeds its delta operation budget");
 }
 
-/** Validate first, then optionally reconstruct into one bounded output buffer. */
-function readDelta(data: Uint8Array, budget?: { remaining: number }, base?: Uint8Array) {
-  const cursor = new Cursor(data), source = cursor.unsigned(), target = cursor.unsigned();
-  checkSize(Math.max(source, target), MAX_GIT_OBJECT_BYTES);
-  if (base && base.length !== source) throw new GitPackValidationError("Git delta base size mismatch");
-  const object = base ? new Uint8Array(target) : undefined;
-  let written = 0;
-  while (cursor.position < data.length) {
-    if (budget) consumeOperations(budget, 1);
-    const command = cursor.byte();
-    let length = 0, offset = 0;
-    if (command & 128) {
-      for (let i = 0; i < 4; i++) if (command & (1 << i)) offset += cursor.byte() * 2 ** (8 * i);
-      for (let i = 0; i < 3; i++) if (command & (16 << i)) length += cursor.byte() * 2 ** (8 * i);
-      length ||= 0x10000;
-      if (offset + length > source) throw new GitPackValidationError("Git delta exceeds its base");
-    } else {
-      if (!command || cursor.position + command > data.length) throw new GitPackValidationError("Invalid Git delta instruction");
-      offset = cursor.position; length = command; cursor.position += length;
-    }
-    written += length;
-    if (written > target) throw new GitPackValidationError("Git delta exceeds its declared output size");
-    if (object) object.set((command & 128 ? base! : data).subarray(offset, offset + length), written - length);
+function validateDelta(data: Uint8Array, budget?: { remaining: number }, base?: Uint8Array) {
+  try {
+    const header = readDeltaHeader(data);
+    checkSize(Math.max(header.source, header.target), MAX_GIT_OBJECT_BYTES);
+    return { ...header, object: readDelta(data, header, base, budget ? () => consumeOperations(budget, 1) : undefined) };
+  } catch (error) {
+    if (error instanceof GitDeltaError) throw new GitPackValidationError(error.message);
+    throw error;
   }
-  if (written !== target) throw new GitPackValidationError("Git delta output size mismatch");
-  return { source, target, object };
 }
 
 function inflateObject(data: Uint8Array, size: number) {
@@ -88,11 +65,22 @@ function inflateObject(data: Uint8Array, size: number) {
 }
 
 type GitObject = { type: GitObjectType; data: Uint8Array; operations: number; oid?: string };
-type Delta = { offset: number; data: Uint8Array; operations: number; baseOperations?: number; object?: GitObject };
+type Delta = { offset: number; data: Uint8Array; operations: number; baseOperations?: number; object?: GitObject; record?: GitPackIndexRecord };
 export type ValidatedGitObject = GitObjectInfo & { data?: Uint8Array };
 
-/** Bound expansion before indexing; keep non-blob contents for connectivity checks before storage. */
-export async function validateGitPack(pack: Uint8Array, maximum: number, reader: GitObjectReader): Promise<Map<string, ValidatedGitObject>> {
+export function validateGitPack(pack: Uint8Array, maximum: number, reader: GitObjectReader): Promise<Map<string, ValidatedGitObject>> {
+  return validatePack(pack, maximum, reader);
+}
+
+export async function validateAndIndexGitPack(pack: Uint8Array, maximum: number, reader: GitObjectReader) {
+  const records: GitPackIndexRecord[] = [];
+  const objects = await validatePack(pack, maximum, reader, records);
+  const index = pack.length ? buildGitPackIndex(records, pack.subarray(-20)) : new Uint8Array();
+  return { objects, index };
+}
+
+/** Bound expansion and keep non-blob contents for connectivity checks before storage. */
+async function validatePack(pack: Uint8Array, maximum: number, reader: GitObjectReader, records?: GitPackIndexRecord[]) {
   const objects = new Map<string, ValidatedGitObject>();
   if (!pack.length) return objects;
   if (createHash("sha1").update(pack.subarray(0, -20)).digest("hex") !== Buffer.from(pack.subarray(-20)).toString("hex"))
@@ -115,6 +103,7 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
       local.set(key, object);
       if (!queued.has(key)) { ready.push(key); queued.add(key); }
     }
+    return oid;
   };
   const resolve = () => {
     while (next < ready.length) {
@@ -128,11 +117,12 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
         const operations = base.operations + delta.operations;
         if (delta.object) delta.object = { ...delta.object, operations };
         else {
-          delta.object = { type: base.type, data: readDelta(delta.data, undefined, base.data).object!, operations };
+          delta.object = { type: base.type, data: validateDelta(delta.data, undefined, base.data).object!, operations };
           unresolved--;
         }
         delta.baseOperations = base.operations;
-        publish(delta.object, delta.offset);
+        const oid = publish(delta.object, delta.offset);
+        if (delta.record) delta.record.oid = oid;
       }
     }
   };
@@ -162,10 +152,16 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
     } else if (type < 1 || type > 4) throw new GitPackValidationError("Unsupported Git object type");
 
     const inflated = inflateObject(cursor.bytes.subarray(cursor.position), size);
-    cursor.position += inflated.engine.bytesWritten;
+    const end = cursor.position += inflated.engine.bytesWritten;
+    let record: GitPackIndexRecord | undefined;
+    if (records) {
+      // Each physical entry gets a row, even if its OID is shared by another entry.
+      record = { offset: start, crc: crc32([pack.subarray(start, end)]), oid: "" };
+      records.push(record);
+    }
     expanded += size;
     if (type === 6 || type === 7) {
-      const before = deltaBudget.remaining, delta = readDelta(inflated.buffer, deltaBudget);
+      const before = deltaBudget.remaining, delta = validateDelta(inflated.buffer, deltaBudget);
       if (baseSize !== undefined && baseSize !== delta.source) throw new GitPackValidationError("Git delta base size mismatch");
       expanded += delta.target;
       offsets.set(start, delta.target);
@@ -175,17 +171,17 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
         bases.set(base, delta.source);
       }
       const dependents = pending.get(base!) ?? [];
-      dependents.push({ offset: start, data: inflated.buffer, operations: before - deltaBudget.remaining });
+      dependents.push({ offset: start, data: inflated.buffer, operations: before - deltaBudget.remaining, record });
       pending.set(base!, dependents); unresolved++;
     } else {
-      publish({ type: OBJECT_TYPES[type], data: inflated.buffer, operations: 0 }, start);
+      const oid = publish({ type: OBJECT_TYPES[type], data: inflated.buffer, operations: 0 }, start);
+      if (record) record.oid = oid;
       offsets.set(start, size);
     }
     checkSize(expanded, maximum);
   }
   if (cursor.position !== cursor.bytes.length) throw new GitPackValidationError("Git pack object count mismatch");
-  // A thin pack can reference older stored objects. Reject oversized legacy
-  // bases before the library inflates them while resolving the incoming delta.
+  // Check the sizes of stored bases before applying incoming thin deltas.
   let lookupsRemaining = MAX_GIT_PACK_BASE_LOOKUPS;
   const consumeLookup = () => {
     if (--lookupsRemaining < 0) throw new GitPackLimitError("Git pack exceeds its base lookup budget");
@@ -197,20 +193,19 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
     const chain: string[] = [];
     const info = await reader.info(base, consumeLookup, (size) => checkSize(size, MAX_GIT_OBJECT_BYTES), (oid, entry) => {
       const cached = stored.get(oid);
-      // Cached validation saves parsing, but each stored chain visit can cause
-      // reconstruction during indexing and must still consume its operation budget.
+      // Keep the replay budget for every stored chain visit, including cached ones.
       if (cached) { consumeOperations(deltaBudget, cached.operations); return; }
       expanded += entry.size; checkSize(expanded, maximum);
       const header = entry.headerLength ?? 0;
       const data = inflateObject(entry.data, header + entry.size).buffer.subarray(header);
+      chain.push(oid);
       if (entry.base) {
-        const before = deltaBudget.remaining, delta = readDelta(data, deltaBudget);
+        const before = deltaBudget.remaining, delta = validateDelta(data, deltaBudget);
         expanded += delta.target; checkSize(expanded, maximum);
         stored.set(oid, { instructions: data, base: entry.base, operations: before - deltaBudget.remaining });
-      } else {
-        stored.set(oid, { object: { type: OBJECT_TYPES[entry.type], data, operations: 0 }, operations: 0 });
+        return data;
       }
-      chain.push(oid);
+      stored.set(oid, { object: { type: OBJECT_TYPES[entry.type], data, operations: 0 }, operations: 0 });
     });
     if (!info) continue; // A later stored base may unlock an incoming delta producing this OID.
     if (info.size !== source) throw new GitPackValidationError("Git delta base size mismatch");
@@ -218,7 +213,7 @@ export async function validateGitPack(pack: Uint8Array, maximum: number, reader:
       const entry = stored.get(oid)!;
       if (!entry.instructions) continue;
       const base = stored.get(entry.base!)!.object!;
-      entry.object = { type: base.type, data: readDelta(entry.instructions, undefined, base.data).object!,
+      entry.object = { type: base.type, data: validateDelta(entry.instructions, undefined, base.data).object!,
         operations: base.operations + entry.operations };
       entry.instructions = undefined;
     }

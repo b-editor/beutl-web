@@ -83,6 +83,59 @@ export async function reserveGitLfs({ repoId, oid, ownerId, size, expiresAt }: {
   });
 }
 
+export async function reserveGitLfsBatch({ repoId, ownerId, items }: {
+  repoId: string;
+  ownerId: string;
+  items: readonly { oid: string; size: number; expiresAt: number }[];
+}): Promise<Map<string, "reserved" | "existing" | "overQuota">> {
+  if (!items.length) return new Map();
+  return startRetryableTransaction(async (tx) => {
+    const unique = new Map<string, (typeof items)[number]>();
+    for (const item of items) {
+      const first = unique.get(item.oid);
+      if (!first) unique.set(item.oid, item);
+      else if (first.size !== item.size) throw new Error("Git LFS reservation mismatch");
+    }
+
+    await lockStorageAccount(ownerId, tx);
+    const repo = await tx.gitRepository.findFirst({ where: { id: repoId, ownerId, deletedAt: null }, select: { id: true } });
+    if (!repo) throw new Error("Git repository is unavailable for storage reservation");
+    const rows = await tx.gitLfsStorage.findMany({ where: { repoId, oid: { in: [...unique.keys()] } } });
+    const existing = new Set<string>();
+    for (const row of rows) {
+      if (row.ownerId !== ownerId || row.size !== BigInt(unique.get(row.oid)!.size))
+        throw new Error("Git LFS reservation mismatch");
+      existing.add(row.oid);
+    }
+
+    let available = BigInt(0);
+    if (existing.size < unique.size) {
+      const [quota, used] = await Promise.all([
+        resolveStorageQuota({ userId: ownerId, prisma: tx }), accountReserved(tx, ownerId),
+      ]);
+      available = BigInt(quota.quotaBytes) - used;
+    }
+    const results = new Map<string, "reserved" | "existing" | "overQuota">();
+    const toCreate = [];
+    for (const { oid, size, expiresAt } of unique.values()) {
+      if (existing.has(oid)) {
+        results.set(oid, "existing");
+        continue;
+      }
+      const bytes = BigInt(size);
+      if (bytes > available) {
+        results.set(oid, "overQuota");
+        continue;
+      }
+      available -= bytes;
+      results.set(oid, "reserved");
+      toCreate.push({ repoId, oid, ownerId, size: bytes, expiresAt: new Date(expiresAt) });
+    }
+    if (toCreate.length) await tx.gitLfsStorage.createMany({ data: toCreate });
+    return results;
+  });
+}
+
 export async function commitGitLfs(repoId: string, oid: string): Promise<void> {
   await startRetryableTransaction(async (tx) => {
     const reservation = await tx.gitLfsStorage.findUnique({ where: { repoId_oid: { repoId, oid } } });

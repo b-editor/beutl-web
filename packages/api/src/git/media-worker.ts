@@ -43,12 +43,12 @@ async function recordFrom(response: Response): Promise<LfsRecord> {
  * the last part yields the digest without reading the stored bytes back.
  */
 async function uploadPart(
-  object: LfsObject, record: LfsRecord, offset: number, length: number, body: ReadableStream<Uint8Array>,
+  object: LfsObject, resourceId: string, offset: number, length: number, body: ReadableStream<Uint8Array>,
   start?: Sha256State,
 ): Promise<Response> {
-  const prepare = await metadata(object, "part", { resourceId: record.resourceId, offset, length, start });
+  const prepare = await metadata(object, "part", { resourceId, offset, length, start });
   if (!prepare.ok) return prepare;
-  const lease = await prepare.json() as { uploadId: string; partNumber: number; leaseId: string; hash?: Sha256State };
+  const lease = await prepare.json() as { uploadId: string; partNumber: number; leaseId: string; hash?: Sha256State; size: number };
   const hash = new ResumableSha256(lease.hash, offset);
   let received = 0;
   const bounded = body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
@@ -63,12 +63,12 @@ async function uploadPart(
   try {
     const part = await object.bucket.resumeMultipartUpload(lfsKey(object.access.repoId, object.oid), lease.uploadId)
       .uploadPart(lease.partNumber, bounded, length);
-    return await metadata(object, "accept", { resourceId: record.resourceId, leaseId: lease.leaseId, ...part,
-      ...(offset + length === record.size ? { digest: hash.digestHex() } : { hash: hash.snapshot() }) });
+    return await metadata(object, "accept", { resourceId, leaseId: lease.leaseId, ...part,
+      ...(offset + length === lease.size ? { digest: hash.digestHex() } : { hash: hash.snapshot() }) });
   } catch (error) {
     // The part failure below is what the client must see. A lost cancel only
     // leaves the lease to expire, after which the client can retry the part.
-    await metadata(object, "cancel", { resourceId: record.resourceId, leaseId: lease.leaseId, partNumber: lease.partNumber })
+    await metadata(object, "cancel", { resourceId, leaseId: lease.leaseId, partNumber: lease.partNumber })
       .catch(() => undefined);
     throw error;
   }
@@ -106,17 +106,17 @@ export async function readTusUpload(object: LfsObject, resourceId: string): Prom
 }
 
 export async function appendTusUpload(request: Request, object: LfsObject, resourceId: string): Promise<Response> {
-  const record = await currentUpload(object, resourceId);
-  if (record instanceof Response) return record;
   if (request.headers.get("content-type")?.toLowerCase() !== "application/offset+octet-stream") return tus(415);
   const offset = integer(request.headers.get("upload-offset"));
   const length = integer(request.headers.get("content-length"));
   const start = readHashState(request.headers.get("beutl-sha256-state"));
   if (start === null) return tus(400, {}, "Invalid Beutl-Sha256-State");
-  if (offset !== record.offset && !start) return tus(409, { "Upload-Offset": String(record.offset) });
-  if (!request.body || length < 0 || length > MAX_GIT_LFS_PART_BYTES) return tus(400);
-  const receipt = await uploadPart(object, record, offset, length, request.body, start);
-  if (!receipt.ok) return tus(receipt.status, {}, await receipt.text());
+  if (!request.body || offset < 0 || length < 0 || length > MAX_GIT_LFS_PART_BYTES) return tus(400);
+  const receipt = await uploadPart(object, resourceId, offset, length, request.body, start);
+  if (!receipt.ok) {
+    const currentOffset = receipt.headers.get("upload-offset");
+    return tus(receipt.status, currentOffset === null ? {} : { "Upload-Offset": currentOffset }, await receipt.text());
+  }
   return finishTusUpload(object, await recordFrom(receipt), 204);
 }
 

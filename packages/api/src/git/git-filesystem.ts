@@ -77,6 +77,8 @@ export class GitFileSystem {
   };
 
   /** A request-local hint; the repository queue prevents concurrent writes while it is used. */
+  setNoLooseObjects(value: boolean): void { this.noLooseObjects = value; }
+
   async detectLooseObjects(gitdir: string): Promise<void> {
     if (!this.looseObjectHints) return;
     const prefix = `${this.key(gitdir)}/objects/`, listing = await this.store.list(prefix, { delimiter: "/" });

@@ -15,18 +15,39 @@ const crcTable = Uint32Array.from({ length: 256 }, (_, byte) => {
   for (let i = 0; i < 8; i++) byte = byte & 1 ? 0xedb88320 ^ (byte >>> 1) : byte >>> 1;
   return byte >>> 0;
 });
-function crc32(chunks: Uint8Array[]): number {
+export function crc32(chunks: readonly Uint8Array[]): number {
   let crc = 0xffffffff;
   for (const chunk of chunks) for (const byte of chunk) crc = crcTable[(crc ^ byte) & 255] ^ (crc >>> 8);
   return (crc ^ 0xffffffff) >>> 0;
 }
 export const gitIndexBytes = (count: number) => 1072 + count * 28;
 
+export type GitPackIndexRecord = { oid: string; crc: number; offset: number };
+
+export function buildGitPackIndex(records: GitPackIndexRecord[], packChecksum: Uint8Array): Uint8Array<ArrayBuffer> {
+  records.sort((a, b) => a.oid < b.oid ? -1 : a.oid > b.oid ? 1 : a.offset - b.offset);
+  const index = new Uint8Array(gitIndexBytes(records.length)), table = new DataView(index.buffer);
+  table.setUint32(0, 0xff744f63); table.setUint32(4, 2);
+  const names = 1032, crcs = names + records.length * 20, offsets = crcs + records.length * 4;
+  const fanout = new Uint32Array(256);
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i], oid = Buffer.from(record.oid, "hex");
+    fanout[oid[0]]++;
+    index.set(oid, names + i * 20);
+    table.setUint32(crcs + i * 4, record.crc);
+    table.setUint32(offsets + i * 4, record.offset);
+  }
+  for (let i = 0, total = 0; i < 256; i++) { total += fanout[i]; table.setUint32(8 + i * 4, total); }
+  index.set(packChecksum, index.byteLength - 40);
+  index.set(createHash("sha1").update(index.subarray(0, -20)).digest(), index.byteLength - 20);
+  return index;
+}
+
 /** Reuse verified compressed entries, converting relative deltas to named bases without inflating them. */
 export function createGitPack(entries: { oid: string; entry: PackedGitEntry }[], { index = false } = {}) {
   const header = new Uint8Array(12), view = new DataView(header.buffer);
   view.setUint32(0, 0x5041434b); view.setUint32(4, 2); view.setUint32(8, entries.length);
-  const chunks: Uint8Array[] = [header], records: { oid: string; crc: number; offset: number }[] = [];
+  const chunks: Uint8Array[] = [header], records: GitPackIndexRecord[] = [];
   const hash = createHash("sha1"); hash.update(header);
   let position = 12;
   for (const { oid, entry } of entries) {
@@ -35,23 +56,7 @@ export function createGitPack(entries: { oid: string; entry: PackedGitEntry }[],
     for (const part of data) { chunks.push(part); hash.update(part); position += part.byteLength; }
   }
   const checksum = hash.digest(); chunks.push(checksum);
-  let indexBytes: Uint8Array<ArrayBuffer> | undefined;
-  if (index) {
-    records.sort((a, b) => a.oid.localeCompare(b.oid));
-    indexBytes = new Uint8Array(gitIndexBytes(records.length));
-    const table = new DataView(indexBytes.buffer);
-    table.setUint32(0, 0xff744f63); table.setUint32(4, 2);
-    const fanout = new Uint32Array(256);
-    for (const record of records) fanout[parseInt(record.oid.slice(0, 2), 16)]++;
-    for (let i = 0, total = 0; i < 256; i++) { total += fanout[i]; table.setUint32(8 + i * 4, total); }
-    for (let i = 0; i < records.length; i++) {
-      const record = records[i]; indexBytes.set(Buffer.from(record.oid, "hex"), 1032 + i * 20);
-      table.setUint32(1032 + records.length * 20 + i * 4, record.crc);
-      table.setUint32(1032 + records.length * 24 + i * 4, record.offset);
-    }
-    indexBytes.set(checksum, indexBytes.byteLength - 40);
-    indexBytes.set(createHash("sha1").update(indexBytes.subarray(0, -20)).digest(), indexBytes.byteLength - 20);
-  }
+  const indexBytes = index ? buildGitPackIndex(records, checksum) : undefined;
   return { byteLength: position + 20, checksum: checksum.toString("hex"), index: indexBytes, stream: () => chunksStream(chunks) };
 }
 
