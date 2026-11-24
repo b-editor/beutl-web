@@ -6,13 +6,24 @@ import { gitRepositoryObject, type GitEnvironment } from "./environment";
 // Every query is scoped to the caller's account; another account's repository
 // is indistinguishable from a missing one.
 
-type RepositoryRow = { id: string; name: string; createdAt: Date; updatedAt: Date };
+type RepositoryRow = {
+  id: string;
+  name: string;
+  createdAt: Date;
+  updatedAt: Date;
+  thumbnailUpdatedAt?: Date | null;
+};
 
-function summary(row: RepositoryRow, origin: string): GitRepositorySummary {
+export function gitRepositorySummary(row: RepositoryRow, origin: string): GitRepositorySummary {
   return {
     id: row.id, name: row.name, url: `${origin}/api/v3/git/${row.id}.git`,
     createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString(),
+    thumbnailUpdatedAt: row.thumbnailUpdatedAt ? row.thumbnailUpdatedAt.toISOString() : null,
   };
+}
+
+function summary(row: RepositoryRow, origin: string): GitRepositorySummary {
+  return gitRepositorySummary(row, origin);
 }
 
 export async function listGitRepositories(ownerId: string, origin: string): Promise<GitRepositorySummary[]> {

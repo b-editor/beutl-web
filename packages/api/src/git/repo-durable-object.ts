@@ -17,6 +17,7 @@ import { referencedLfsOids } from "./lfs-references";
 import { ResumableSha256, type Sha256State } from "./resumable-sha256";
 import type { GitScope } from "./tokens";
 import { resolveWorkerSecrets, S3_SECRET_NAMES, type WorkerSecretBindings } from "../worker-secrets";
+import { gitRepositoryThumbnailPrefix } from "./thumbnails";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const MEDIA = "/internal/git/media/:oid{[0-9a-f]{64}}";
@@ -310,6 +311,7 @@ export class GitRepositoryDurableObject {
     await bucket.cleanupMultipartUploads?.(`git-lfs/repos/${repoId}/`, [], Infinity);
     await bucket.deletePrefix?.(`${gitRepositoryPrefix(repoId)}/`);
     await bucket.deletePrefix?.(`git-lfs/repos/${repoId}/`);
+    await bucket.deletePrefix?.(gitRepositoryThumbnailPrefix(repoId));
     // A final abort covers parts that were in flight at the first abort.
     if (Date.now() < deletedAt + DELETION_GRACE_MS) {
       await scheduleGitMaintenance(storage, deletedAt + DELETION_GRACE_MS); return false;

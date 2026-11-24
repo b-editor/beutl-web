@@ -15,6 +15,7 @@
     "./git/environment": "./src/git/environment.ts",
     "./git/repositories": "./src/git/repositories.ts",
     "./git/repository-browser": "./src/git/repository-browser.ts",
+    "./git/thumbnails": "./src/git/thumbnails.ts",
     "./ai/entitlements": "./src/ai/entitlements.ts",
     "./ai/job-input": "./src/ai/job-input.ts",
     "./ai/job-retry": "./src/ai/job-retry.ts",
