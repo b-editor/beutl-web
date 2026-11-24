@@ -1170,6 +1170,39 @@ it.each([false, true])("reads and rewrites a pack whose OFS_DELTA targets the se
   expect(Buffer.from(await reopened.read(bOid))).toEqual(bData);
   expect((await reader.packed(aOid)).base).not.toBe(bOid);
 });
+it("accepts a thin push referencing a stored object whose OFS_DELTA chain traverses duplicate OID representations", async () => {
+  const bucket = new Bucket();
+  const aData = Buffer.from("ca"), bData = Buffer.from("cab"), cData = Buffer.from("cab!"), dData = Buffer.from("cab?");
+  const bOid = blobOid(bData), cOid = blobOid(cData), dOid = blobOid(dData);
+  const aIdentity = Buffer.from([2, 2, 0x90, 2]); // Copy 2 bytes of "ca" -> "ca" (identity OFS_DELTA A' -> A)
+  const bFromA = Buffer.from([2, 3, 0x90, 2, 1, 98]); // Copy "ca" + insert "b" -> "cab"
+  const cFromB = Buffer.from([3, 4, 0x90, 3, 1, 33]); // Copy "cab" + insert "!" -> "cab!"
+  const dFromB = Buffer.from([3, 4, 0x90, 3, 1, 63]); // Copy "cab" + insert "?" -> "cab?"
+  const entryLen = (type: number, data: Buffer, base?: Buffer) =>
+    packEntryHeader(type, data.length).length + (base?.length ?? 0) + deflateSync(data).length;
+  const fullALen = entryLen(3, aData);
+  const identityALen = entryLen(6, aIdentity, Buffer.from([fullALen]));
+  const firstPush = await receive(bucket, pushBody([
+    { type: 3, data: aData },
+    { type: 6, base: Buffer.from([fullALen]), data: aIdentity },
+    { type: 6, base: Buffer.from([identityALen]), data: bFromA },
+  ], bOid));
+  expect(firstPush.status).toBe(200);
+  expect(await firstPush.text()).toContain(`ok refs/tags/test-${bOid}`);
+
+  // Subsequent thin push referencing B must reconstruct B -> A' -> A using physical entry keys.
+  const thinPush = await receive(bucket, pushBody([
+    { type: 7, base: Buffer.from(bOid, "hex"), data: cFromB },
+    { type: 7, base: Buffer.from(bOid, "hex"), data: dFromB },
+  ], cOid));
+  expect(thinPush.status).toBe(200);
+  expect(await thinPush.text()).toContain(`ok refs/tags/test-${cOid}`);
+
+  const reader = new GitObjectReader(readGitRepository(bucket as never, repoId));
+  expect(Buffer.from(await reader.read(bOid))).toEqual(bData);
+  expect(Buffer.from(await reader.read(cOid))).toEqual(cData);
+  expect(Buffer.from(await reader.read(dOid))).toEqual(dData);
+});
 it("waits a full second after the previous push before writing Git objects to B2", async () => {
   vi.useFakeTimers();
   try {

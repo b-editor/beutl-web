@@ -186,39 +186,40 @@ async function validatePack(pack: Uint8Array, maximum: number, reader: GitObject
   const consumeLookup = () => {
     if (--lookupsRemaining < 0) throw new GitPackLimitError("Git pack exceeds its base lookup budget");
   };
-  const stored = new Map<string, { object?: GitObject; instructions?: Uint8Array; base?: string; operations: number }>();
+  const stored = new Map<string, { object?: GitObject; instructions?: Uint8Array; operations: number }>();
   resolve();
   for (const [base, source] of bases) {
     if (local.has(base)) continue;
     const chain: string[] = [];
     const info = await reader.info(base, consumeLookup, (size) => checkSize(size, MAX_GIT_OBJECT_BYTES), (oid, entry) => {
-      const cached = stored.get(oid);
+      const key = entry.packId ?? oid;
+      chain.push(key);
+      const cached = stored.get(key);
       // Keep the replay budget for every stored chain visit, including cached ones.
       if (cached) { consumeOperations(deltaBudget, cached.operations); return; }
       expanded += entry.size; checkSize(expanded, maximum);
       const header = entry.headerLength ?? 0;
       const data = inflateObject(entry.data, header + entry.size).buffer.subarray(header);
-      chain.push(oid);
       if (entry.base) {
         const before = deltaBudget.remaining, delta = validateDelta(data, deltaBudget);
         expanded += delta.target; checkSize(expanded, maximum);
-        stored.set(oid, { instructions: data, base: entry.base, operations: before - deltaBudget.remaining });
+        stored.set(key, { instructions: data, operations: before - deltaBudget.remaining });
         return data;
       }
-      stored.set(oid, { object: { type: OBJECT_TYPES[entry.type], data, operations: 0 }, operations: 0 });
+      stored.set(key, { object: { type: OBJECT_TYPES[entry.type], data, operations: 0 }, operations: 0 });
     });
     if (!info) continue; // A later stored base may unlock an incoming delta producing this OID.
     if (info.size !== source) throw new GitPackValidationError("Git delta base size mismatch");
-    for (const oid of chain.reverse()) {
-      const entry = stored.get(oid)!;
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const entry = stored.get(chain[i])!;
       if (!entry.instructions) continue;
-      const base = stored.get(entry.base!)!.object!;
-      entry.object = { type: base.type, data: validateDelta(entry.instructions, undefined, base.data).object!,
-        operations: base.operations + entry.operations };
+      const baseObject = stored.get(chain[i + 1])!.object!;
+      entry.object = { type: baseObject.type, data: validateDelta(entry.instructions, undefined, baseObject.data).object!,
+        operations: baseObject.operations + entry.operations };
       entry.instructions = undefined;
     }
     prepaidBases.add(base);
-    publish(stored.get(base)!.object!);
+    publish(stored.get(chain[0])!.object!);
     resolve();
   }
   if (unresolved) throw new GitPackValidationError("Git delta base is missing");
