@@ -54,6 +54,22 @@ export async function createGitRepositoryForOwner(ownerId: string, name: string,
 }
 
 async function accountReserved(tx: PrismaTransaction, userId: string): Promise<bigint> {
+  if (typeof (tx as { $queryRaw?: unknown }).$queryRaw === "function") {
+    const rows = await tx.$queryRaw<Array<{ total: bigint | number | string }>>`
+      SELECT (
+        COALESCE((SELECT SUM("f"."size") FROM "File" AS "f"
+          WHERE "f"."userId" = ${userId}
+            AND NOT EXISTS (SELECT 1 FROM "AiJob" AS "j" WHERE "j"."resultFileId" = "f"."id")), 0)::INT8
+        + COALESCE((SELECT SUM("size") FROM "StorageUpload"
+          WHERE "userId" = ${userId} AND "completedFileId" IS NULL), 0)::INT8
+        + COALESCE((SELECT SUM("size") FROM "GitLfsStorage"
+          WHERE "ownerId" = ${userId}), 0)::INT8
+        + COALESCE((SELECT SUM("historyBytes" + "historyReservedBytes") FROM "GitRepository"
+          WHERE "ownerId" = ${userId}), 0)::INT8
+      ) AS "total"
+    `;
+    return BigInt(rows[0]?.total ?? 0);
+  }
   const [files, uploads, gitCommitted, gitReserved] = await Promise.all([
     tx.file.aggregate({ where: { userId, aiJobResult: null }, _sum: { size: true } }),
     tx.storageUpload.aggregate({ where: { userId, completedFileId: null }, _sum: { size: true } }),
@@ -145,21 +161,63 @@ export async function reserveGitLfsBatch({ repoId, ownerId, items, maxReservatio
 }
 
 export async function commitGitLfs(repoId: string, oid: string): Promise<void> {
+  // Committing flips an already-reserved row from pending to verified without
+  // changing accountReserved, so Serializable isolation protects quota and
+  // repository checks without serializing concurrent uploads on User.storageRevision.
   await startRetryableTransaction(async (tx) => {
-    const reservation = await tx.gitLfsStorage.findUnique({ where: { repoId_oid: { repoId, oid } } });
-    if (!reservation?.ownerId) throw new Error("Git LFS account reservation is missing");
-    await lockStorageAccount(reservation.ownerId, tx);
-    if (!await tx.gitRepository.findFirst({ where: { id: repoId, ownerId: reservation.ownerId, deletedAt: null } }))
-      throw new Error("Git repository is unavailable for storage commit");
-    // A successful account commit can precede the DO flag write. Its replay
-    // must recover that receipt even if the account plan subsequently changed.
-    if (reservation.verified) return;
-    const [quota, used] = await Promise.all([
-      resolveStorageQuota({ userId: reservation.ownerId, prisma: tx }), accountReserved(tx, reservation.ownerId),
-    ]);
+    let ownerId: string;
+    let used: bigint;
+    if (typeof (tx as { $queryRaw?: unknown }).$queryRaw === "function") {
+      const rows = await tx.$queryRaw<Array<{
+        ownerId: string | null;
+        verified: boolean;
+        repoActive: boolean;
+        used: bigint | number | string;
+      }>>`
+        SELECT
+          "r"."ownerId" AS "ownerId",
+          "r"."verified" AS "verified",
+          EXISTS (
+            SELECT 1 FROM "GitRepository" AS "g"
+            WHERE "g"."id" = "r"."repoId" AND "g"."ownerId" = "r"."ownerId" AND "g"."deletedAt" IS NULL
+          ) AS "repoActive",
+          CASE WHEN "r"."verified" THEN 0::INT8 ELSE (
+            COALESCE((SELECT SUM("f"."size") FROM "File" AS "f"
+              WHERE "f"."userId" = "r"."ownerId"
+                AND NOT EXISTS (SELECT 1 FROM "AiJob" AS "j" WHERE "j"."resultFileId" = "f"."id")), 0)::INT8
+            + COALESCE((SELECT SUM("size") FROM "StorageUpload"
+              WHERE "userId" = "r"."ownerId" AND "completedFileId" IS NULL), 0)::INT8
+            + COALESCE((SELECT SUM("size") FROM "GitLfsStorage"
+              WHERE "ownerId" = "r"."ownerId"), 0)::INT8
+            + COALESCE((SELECT SUM("historyBytes" + "historyReservedBytes") FROM "GitRepository"
+              WHERE "ownerId" = "r"."ownerId"), 0)::INT8
+          ) END AS "used"
+        FROM "GitLfsStorage" AS "r"
+        WHERE "r"."repoId" = ${repoId} AND "r"."oid" = ${oid}
+      `;
+      const row = rows[0];
+      if (!row?.ownerId) throw new Error("Git LFS account reservation is missing");
+      if (!row.repoActive) throw new Error("Git repository is unavailable for storage commit");
+      // A successful account commit can precede the DO flag write. Its replay
+      // must recover that receipt even if the account plan subsequently changed.
+      if (row.verified) return;
+      ownerId = row.ownerId;
+      used = BigInt(row.used);
+    } else {
+      const reservation = await tx.gitLfsStorage.findUnique({ where: { repoId_oid: { repoId, oid } } });
+      if (!reservation?.ownerId) throw new Error("Git LFS account reservation is missing");
+      if (!await tx.gitRepository.findFirst({ where: { id: repoId, ownerId: reservation.ownerId, deletedAt: null } }))
+        throw new Error("Git repository is unavailable for storage commit");
+      // A successful account commit can precede the DO flag write. Its replay
+      // must recover that receipt even if the account plan subsequently changed.
+      if (reservation.verified) return;
+      ownerId = reservation.ownerId;
+      used = await accountReserved(tx, ownerId);
+    }
+    const quota = await resolveStorageQuota({ userId: ownerId, prisma: tx });
     if (used > BigInt(quota.quotaBytes)) throw new GitLfsQuotaExceededError();
     const changed = await tx.gitLfsStorage.updateMany({
-      where: { repoId, oid, ownerId: reservation.ownerId, verified: false }, data: { verified: true },
+      where: { repoId, oid, ownerId, verified: false }, data: { verified: true },
     });
     if (changed.count !== 1) throw new Error("Git LFS account reservation changed before commit");
   }, { isolationLevel: "Serializable" });

@@ -71,8 +71,11 @@ export async function revokeGitAccessToken(ownerId: string, repoId: string, toke
  * request is unauthenticated; `active: false` means the token is valid but its
  * repository is gone or changed owner.
  */
-export async function findGitAccess(authorization: string | null, repoId: string):
-  Promise<{ ownerId: string; scope: GitScope; active: boolean } | null> {
+export async function findGitAccess(
+  authorization: string | null,
+  repoId: string,
+  waitUntil?: (promise: Promise<unknown>) => void,
+): Promise<{ ownerId: string; scope: GitScope; active: boolean } | null> {
   const token = gitAccessTokenFrom(authorization);
   if (!token) return null;
   const db = await getDb();
@@ -86,10 +89,12 @@ export async function findGitAccess(authorization: string | null, repoId: string
   const now = new Date();
   if (!row.lastUsedAt || now.getTime() - row.lastUsedAt.getTime() > LAST_USED_PRECISION_MS) {
     // Concurrent Git requests race on this row; last use is advisory and never refuses a credential.
-    await db.gitAccessToken.updateMany({
+    const update = db.gitAccessToken.updateMany({
       where: { id: row.id, OR: [{ lastUsedAt: null }, { lastUsedAt: { lt: new Date(now.getTime() - LAST_USED_PRECISION_MS) } }] },
       data: { lastUsedAt: now },
     }).catch((error) => console.error("Git access token last-use update failed", { tokenId: row.id, error }));
+    if (waitUntil) waitUntil(update);
+    else await update;
   }
   return {
     ownerId: row.ownerId, scope: row.scope,

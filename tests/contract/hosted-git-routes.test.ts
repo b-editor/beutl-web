@@ -181,10 +181,12 @@ describe("Hosted Git routes in the Worker and the Next.js v3 route", () => {
     ["GET", "info/refs?service=git-receive-pack", false, 200],
     ["POST", "git-receive-pack", false, 200],
     ["POST", "info/lfs/objects/batch", false, 200],
-    ["OPTIONS", `info/lfs/objects/${oid}/tus`, true, 204],
-    ["HEAD", `info/lfs/objects/${oid}/tus/${repoId}`, true, 412],
+    ["OPTIONS", `info/lfs/objects/${oid}/tus`, false, 204],
+    ["POST", `info/lfs/objects/${oid}/tus`, false, 412],
+    ["HEAD", `info/lfs/objects/${oid}/tus/${repoId}`, false, 412],
+    ["PATCH", `info/lfs/objects/${oid}/tus/${repoId}`, true, 412],
     ["GET", `info/lfs/objects/${oid}/download`, true, 404],
-    ["POST", `info/lfs/objects/${oid}/verify`, true, 200],
+    ["POST", `info/lfs/objects/${oid}/verify`, false, 200],
   ] as const)("scopes Worker secrets on %s %s", async (method, path, usesS3, status) => {
     const key = vi.fn(async () => "access-key"), secret = vi.fn(async () => "secret-key");
     const sessionToken = vi.fn(async () => "session-token");

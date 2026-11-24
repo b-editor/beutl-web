@@ -183,11 +183,32 @@ describe("Backblaze B2 S3 storage adapter", () => {
     expect(await upload.uploadPart(1, body, 4)).toEqual({ partNumber: 1, etag: '"opaque-etag"' });
     expect(await upload.complete([{ partNumber: 1, etag: '"opaque-etag"' }]))
       .toEqual({ size: 4, versionId: "version-1" });
+    const headCountBefore = requests.filter((item) => item.method === "HEAD").length;
+    expect(await upload.complete([{ partNumber: 1, etag: '"opaque-etag"' }], 4))
+      .toEqual({ size: 4, versionId: "version-1" });
+    expect(requests.filter((item) => item.method === "HEAD")).toHaveLength(headCountBefore);
     await upload.abort();
     expect(requests.find((item) => item.url.searchParams.has("partNumber"))?.length).toBe("4");
     expect(requests.find((item) => item.method === "POST" && item.url.searchParams.has("uploadId"))?.body)
       .toContain("&quot;opaque-etag&quot;");
     expect(requests.at(-1)?.method).toBe("DELETE");
+  });
+
+  it("pins checksum and returns the stored versionId from putStream when provided", async () => {
+    const requests: Request[] = [];
+    const bucket = new S3GitObjectBucket(env, (async (request: Request) => {
+      requests.push(request);
+      expect(await request.text()).toBe("data");
+      return response("", { "x-amz-version-id": "put-stream-v1" });
+    }) as typeof fetch);
+    const checksum = sha256Base64(createHash("sha256").update("data").digest("hex"));
+    const body = new ReadableStream<Uint8Array>({ start(controller) {
+      controller.enqueue(new TextEncoder().encode("data")); controller.close();
+    } });
+    await expect(bucket.putStream("git-lfs/item", body, 4, { checksumSha256: checksum }))
+      .resolves.toEqual({ versionId: "put-stream-v1" });
+    expect(requests[0].headers.get("x-amz-checksum-sha256")).toBe(checksum);
+    expect(requests[0].headers.get("authorization")).toContain("x-amz-checksum-sha256");
   });
 
   it("deletes version IDs rather than leaving hidden B2 versions", async () => {

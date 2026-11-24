@@ -76,6 +76,7 @@ async function readLfsCount(storage: GitDurableStorage, newObjects: number): Pro
 export async function cleanupLfs(
   storage: GitDurableStorage, bucket: GitObjectBucket, accounting: GitStorageAccounting | undefined,
   repoId: string, oid: string, record?: LfsRecord,
+  withCountLock?: <T>(work: () => Promise<T>) => Promise<T>,
 ): Promise<void> {
   const recordKey = `lfs:${oid}`;
   record ??= await storage.get<LfsRecord>(recordKey);
@@ -88,17 +89,26 @@ export async function cleanupLfs(
   await accounting?.releaseLfs(repoId, oid);
   const parts = await storage.list({ prefix: partPrefix(oid) });
   if (parts.size) await storage.delete([...parts.keys()]);
-  const count = record ? await storage.get<number>("lfsCount") : undefined;
-  await Promise.all([
-    storage.delete(recordKey),
-    count === undefined ? undefined : storage.put("lfsCount", Math.max(0, count - 1)),
-  ]);
+  const updateCount = async () => {
+    const count = record ? await storage.get<number>("lfsCount") : undefined;
+    await Promise.all([
+      storage.delete(recordKey),
+      count === undefined ? undefined : storage.put("lfsCount", Math.max(0, count - 1)),
+    ]);
+  };
+  await (withCountLock ? withCountLock(updateCount) : updateCount());
 }
 
 export async function handleLfsBatch(
-  request: Request, bucket: GitObjectBucket, storage: GitDurableStorage, repoId: string, scope: GitScope,
-  accounting?: GitStorageAccounting,
+  request: Request, bucket: GitObjectBucket | (() => Promise<GitObjectBucket>), storage: GitDurableStorage,
+  repoId: string, scope: GitScope, accounting?: GitStorageAccounting,
+  options?: {
+    waitForOids?: (oids: string[]) => Promise<void>;
+    withCountLock?: <T>(work: () => Promise<T>) => Promise<T>;
+  },
 ): Promise<Response> {
+  let resolvedBucket: GitObjectBucket | undefined;
+  const getBucket = async () => resolvedBucket ??= typeof bucket === "function" ? await bucket() : bucket;
   let input: any;
   try { input = await readJson(request); } catch {
     // Malformed batch JSON is the client's protocol error.
@@ -120,13 +130,16 @@ export async function handleLfsBatch(
   const base = `${new URL(request.url).origin}/api/v3/git/${repoId}.git/info/lfs/objects`;
   const requested = input.objects as { oid: string; size: number }[];
   const oids = [...new Set(requested.map(({ oid }) => oid))];
+  await options?.waitForOids?.(oids);
   const records = new Map(await Promise.all(oids.map(async (oid) =>
     [oid, await storage.get<LfsRecord>(`lfs:${oid}`)] as const)));
-  for (const [oid, record] of records) {
-    if (record && !record.verified && record.expiresAt <= Date.now()) {
-      await cleanupLfs(storage, bucket, accounting, repoId, oid, record);
+  const expired = [...records].filter(([, record]) => record && !record.verified && record.expiresAt <= Date.now());
+  if (expired.length) {
+    const resolved = await getBucket();
+    await Promise.all(expired.map(async ([oid, record]) => {
+      await cleanupLfs(storage, resolved, accounting, repoId, oid, record, options?.withCountLock);
       records.delete(oid);
-    }
+    }));
   }
 
   const now = Date.now();
@@ -158,36 +171,43 @@ export async function handleLfsBatch(
   });
 
   const overQuota = new Set<string>();
-  let count = 0, created = 0;
-  if (toReserve.size) {
-    count = await readLfsCount(storage, toReserve.size);
-    const remainingSlots = Math.max(0, MAX_LFS_OBJECTS - count);
-    if (remainingSlots > 0) {
-      const candidates = [...toReserve.values()];
-      const reservations = accounting?.reserveLfsBatch
-        ? await accounting.reserveLfsBatch({ repoId, ownerId, items: candidates, maxReservations: remainingSlots })
-        : undefined;
-      for (const item of candidates) {
-        if (created >= remainingSlots) break;
-        const result = reservations ? reservations.get(item.oid) : await accounting?.reserveLfs({ repoId, ownerId, ...item });
-        if (result === "overQuota") {
-          overQuota.add(item.oid);
-          continue;
+  const reserveAndPersist = async () => {
+    let count = 0, created = 0;
+    if (toReserve.size) {
+      count = await readLfsCount(storage, toReserve.size);
+      const remainingSlots = Math.max(0, MAX_LFS_OBJECTS - count);
+      if (remainingSlots > 0) {
+        const candidates = [...toReserve.values()];
+        const reservations = accounting?.reserveLfsBatch
+          ? await accounting.reserveLfsBatch({ repoId, ownerId, items: candidates, maxReservations: remainingSlots })
+          : undefined;
+        for (const item of candidates) {
+          if (created >= remainingSlots) break;
+          const result = reservations ? reservations.get(item.oid) : await accounting?.reserveLfs({ repoId, ownerId, ...item });
+          if (result === "overQuota") {
+            overQuota.add(item.oid);
+            continue;
+          }
+          if (result === "limitReached") continue;
+          const record = { size: item.size, expiresAt, verified: false, resourceId: crypto.randomUUID(), offset: 0, partCount: 0 };
+          writes.set(item.oid, record);
+          records.set(item.oid, record);
+          created++;
         }
-        if (result === "limitReached") continue;
-        const record = { size: item.size, expiresAt, verified: false, resourceId: crypto.randomUUID(), offset: 0, partCount: 0 };
-        writes.set(item.oid, record);
-        records.set(item.oid, record);
-        created++;
       }
     }
-  }
-  // Coalesce new records and their counter update into the same storage write batch.
-  await Promise.all([
-    ...[...writes].map(([oid, record]) => storage.put(`lfs:${oid}`, record)),
-    created ? storage.put("lfsCount", count + created) : undefined,
-  ]);
-  if (created) await scheduleGitMaintenance(storage, expiresAt + 1000);
+    // Coalesce new records and their counter update into the same storage write batch.
+    await Promise.all([
+      ...[...writes].map(([oid, record]) => storage.put(`lfs:${oid}`, record)),
+      created ? storage.put("lfsCount", count + created) : undefined,
+    ]);
+    if (created) await scheduleGitMaintenance(storage, expiresAt + 1000);
+  };
+  await (toReserve.size && options?.withCountLock ? options.withCountLock(reserveAndPersist) : reserveAndPersist());
+
+  const needsPresign = transfer === "basic" && requested.some(({ oid }, index) => !ready[index] && records.has(oid));
+  const presignBucket = needsPresign ? await getBucket() : undefined;
+  if (needsPresign && !presignBucket?.presignUpload) throw new Error("Object storage cannot presign LFS uploads");
 
   const objects = await Promise.all(requested.map(async ({ oid, size }, index) => {
     if (ready[index]) return ready[index];
@@ -201,12 +221,11 @@ export async function handleLfsBatch(
       return { oid, size, authenticated: true, actions: {
         upload: { href: `${base}/${oid}/tus`, header: credential, expires_at: reservedUntil }, verify,
       } };
-    if (!bucket.presignUpload) throw new Error("Object storage cannot presign LFS uploads");
     const lifetime = Math.max(1000, Math.min(UPLOAD_URL_LIFETIME_MS, record.expiresAt - Date.now()));
     return { oid, size, authenticated: true, actions: {
       // B2 stores the PUT body only if its length and SHA-256 match this object.
       upload: {
-        href: await bucket.presignUpload(lfsKey(repoId, oid), size, oid, Math.floor(lifetime / 1000)),
+        href: await presignBucket!.presignUpload!(lfsKey(repoId, oid), size, oid, Math.floor(lifetime / 1000)),
         header: { "x-amz-checksum-sha256": sha256Base64(oid) },
         expires_at: new Date(Date.now() + lifetime).toISOString(),
       },

@@ -155,11 +155,15 @@ export class S3GitObjectBucket implements GitObjectBucket {
     return { versionId: response.headers.get("x-amz-version-id") ?? undefined };
   }
 
-  async putStream(key: string, body: ReadableStream<Uint8Array>, length: number) {
-    await this.send("PUT", this.url(key), knownLengthStream(body, length), {
+  async putStream(key: string, body: ReadableStream<Uint8Array>, length: number,
+    options?: { checksumSha256?: string }): Promise<{ versionId: string } | undefined> {
+    const response = await this.send("PUT", this.url(key), knownLengthStream(body, length), {
       "Content-Type": "application/octet-stream", "Content-Length": String(length),
       "X-Amz-Content-Sha256": "UNSIGNED-PAYLOAD",
+      ...(options?.checksumSha256 ? { "x-amz-checksum-sha256": options.checksumSha256 } : {}),
     });
+    const versionId = response.headers.get("x-amz-version-id");
+    return versionId ? { versionId } : undefined;
   }
 
   async list({ prefix, delimiter, cursor, limit }: {
@@ -346,7 +350,7 @@ export class S3GitObjectBucket implements GitObjectBucket {
         if (!etag || etag.length > 256) throw new Error("S3 returned no valid part ETag");
         return { partNumber, etag };
       },
-      complete: async (parts) => {
+      complete: async (parts, expectedSize) => {
         const body = `<CompleteMultipartUpload>${parts.map(({ partNumber, etag }) =>
           `<Part><PartNumber>${partNumber}</PartNumber><ETag>${escapeXml(etag)}</ETag></Part>`).join("")}</CompleteMultipartUpload>`;
         const response = await this.send("POST", this.url(key, { uploadId }), body,
@@ -356,6 +360,7 @@ export class S3GitObjectBucket implements GitObjectBucket {
         if (!result.CompleteMultipartUploadResult || result.Error) throw new Error("S3 multipart completion failed");
         const versionId = response.headers.get("x-amz-version-id");
         if (!versionId) throw new Error("S3 completed object has no version ID");
+        if (expectedSize !== undefined) return { size: expectedSize, versionId };
         const head = await this.head(key, versionId);
         if (!head || head.versionId !== versionId) throw new Error("S3 completed object version is not visible");
         return head;

@@ -306,7 +306,7 @@ describe("Worker media transfers and durable metadata", () => {
     const f = fixture(), bytes = new TextEncoder().encode("already assembled"), oid = hash(bytes);
     const { url, record } = await f.reserve(oid, bytes.length);
     const resume = f.bucket.resumeMultipartUpload.bind(f.bucket);
-    const original = resume(lfsKey(repoId, oid), record.uploadId!);
+    const original = resume(lfsKey(repoId, oid), "upload-1");
     const complete = vi.fn<typeof original.complete>()
       .mockImplementationOnce(async (parts) => {
         await original.complete(parts);
@@ -801,5 +801,103 @@ describe("Stock Git LFS basic transfers", () => {
       { ...first, actions: { upload: { href: "https://b2.test/first" } } },
       { ...second, actions: { upload: { href: "https://b2.test/second" } } },
     ]);
+  });
+});
+
+describe("Single-PUT fast path and per-OID media concurrency", () => {
+  it("uploads <= 32 MiB tus objects in one checksum-pinned PUT without multipart or DO S3 secrets", async () => {
+    const key = vi.fn(async () => "access-key"), secret = vi.fn(async () => "secret-key");
+    vi.stubEnv("BEUTL_S3_ACCESS_KEY_ID", undefined);
+    vi.stubEnv("BEUTL_S3_SECRET_ACCESS_KEY", undefined);
+    try {
+      const f = fixture({ BEUTL_S3_ACCESS_KEY_ID: { get: key }, BEUTL_S3_SECRET_ACCESS_KEY: { get: secret } });
+      const putStream = vi.fn(async (objectKey: string, body: ReadableStream<Uint8Array>, length: number,
+        options?: { checksumSha256?: string }) => {
+        const data = new Uint8Array(await new Response(body).arrayBuffer());
+        expect(data.byteLength).toBe(length);
+        if (options?.checksumSha256 && checksum(hash(data)) !== options.checksumSha256) {
+          throw new Error("S3 PUT failed: HTTP 400 BadDigest");
+        }
+        const versionId = `single-${f.bucket.versions.size + 1}`;
+        f.bucket.versions.set(versionId, { key: objectKey, bytes: data, size: length, checksum: options?.checksumSha256 });
+        return { versionId };
+      });
+      (f.bucket as any).putStream = putStream;
+      const createMultipart = vi.spyOn(f.bucket, "createMultipartUpload");
+      const head = vi.spyOn(f.bucket, "head");
+      const bytes = new TextEncoder().encode("small asset uploaded via beutl-tus");
+      const oid = hash(bytes);
+
+      const { url, record } = await f.reserve(oid, bytes.length);
+      expect(record.uploadId).toBeUndefined();
+      // Even when the parallel client sends the initial Beutl-Sha256-State, a full <= 32 MiB object uses single-PUT.
+      const response = await f.transfer(url, oid, record.resourceId, 0, bytes, stateAfter(bytes, 0));
+      expect(response.status).toBe(204);
+      expect(response.headers.get("upload-verified")).toBe("true");
+      expect(putStream).toHaveBeenCalledOnce();
+      expect(createMultipart).not.toHaveBeenCalled();
+      expect(f.bucket.completions).toBe(0);
+      expect(head).not.toHaveBeenCalled();
+      expect(key).not.toHaveBeenCalled();
+      expect(secret).not.toHaveBeenCalled();
+      expect(f.accounting.commitLfs).toHaveBeenCalledOnce();
+      expect(await f.storage.get(`lfs:${oid}`)).toMatchObject({ verified: true, versionId: "single-1" });
+
+      // A subsequent verify call returns 200 without touching S3 or secrets.
+      expect((await f.verify(oid, { oid, size: bytes.length })).status).toBe(200);
+      expect(head).not.toHaveBeenCalled();
+      expect(key).not.toHaveBeenCalled();
+
+      // Corrupt bytes rejected by B2 BadDigest still return 422 and release the reservation.
+      const badBytes = new Uint8Array([1, 2, 3, 4]), badOid = hash(badBytes);
+      const bad = await f.reserve(badOid, badBytes.length);
+      const mismatch = await f.transfer(bad.url, badOid, bad.record.resourceId, 0, new Uint8Array([4, 3, 2, 1]));
+      expect(mismatch.status).toBe(422);
+      expect(await mismatch.text()).toBe("LFS SHA-256 mismatch");
+      expect(f.accounting.releaseLfs).toHaveBeenCalledWith(repoId, badOid);
+      expect(await f.storage.get(`lfs:${badOid}`)).toBeUndefined();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("processes distinct LFS OIDs concurrently inside the Durable Object while serializing deletion", async () => {
+    const f = fixture();
+    const firstBytes = new TextEncoder().encode("first"), firstOid = hash(firstBytes);
+    const secondBytes = new TextEncoder().encode("second"), secondOid = hash(secondBytes);
+    const { body } = await f.batch({ operation: "upload", objects: [
+      { oid: firstOid, size: firstBytes.length },
+      { oid: secondOid, size: secondBytes.length },
+    ] });
+    expect(f.bucket.presignedPut(body.objects[0].actions.upload.href, body.objects[0].actions.upload.header, firstBytes)).toBe(200);
+    expect(f.bucket.presignedPut(body.objects[1].actions.upload.href, body.objects[1].actions.upload.header, secondBytes)).toBe(200);
+
+    const firstStarted = Promise.withResolvers<void>();
+    const releaseFirst = Promise.withResolvers<void>();
+    const originalHead = f.bucket.head.bind(f.bucket);
+    vi.spyOn(f.bucket, "head").mockImplementation(async (objectKey, versionId, options) => {
+      if (objectKey.endsWith(firstOid)) {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+      }
+      return originalHead(objectKey, versionId, options);
+    });
+
+    const firstVerify = f.verify(firstOid, { oid: firstOid, size: firstBytes.length });
+    await firstStarted.promise;
+
+    // While the first OID is waiting on B2/DB, the second OID verifies without being blocked.
+    const secondResponse = await f.verify(secondOid, { oid: secondOid, size: secondBytes.length });
+    expect(secondResponse.status).toBe(200);
+    expect((await f.storage.get<LfsRecord>(`lfs:${secondOid}`))?.verified).toBe(true);
+
+    // Repository cleanup waits for the in-flight first OID and rejects new media calls immediately.
+    const cleanup = f.durable.fetch(new Request("https://git.internal/internal/git/cleanup", {
+      method: "DELETE", headers: { "x-beutl-repo-id": repoId, "x-beutl-git-scope": "admin" },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect((await f.verify(secondOid, { oid: secondOid, size: secondBytes.length })).status).toBe(410);
+
+    releaseFirst.resolve();
+    expect((await firstVerify).status).toBe(200);
+    expect((await cleanup).status).toBe(202);
   });
 });

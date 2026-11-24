@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { runWithDbProvider, extendGitLfsReservation, reserveGitLfs, reserveGitLfsBatch, createFileWithStorageQuota, createDedicatedStorageReservation, commitDedicatedStorageReservation, sumFileSizeByUserId, sumStorageUploadSizeByUserId } from "@beutl/db";
+import { runWithDbProvider, commitGitLfs, extendGitLfsReservation, reserveGitLfs, reserveGitLfsBatch, createFileWithStorageQuota, createDedicatedStorageReservation, commitDedicatedStorageReservation, sumFileSizeByUserId, sumStorageUploadSizeByUserId } from "@beutl/db";
 import { getStorageEntitlement } from "@beutl/api";
 import { STORAGE_FREE_QUOTA_BYTES } from "@beutl/core";
 import { createInMemoryPrisma } from "./stubs/in-memory-prisma";
@@ -98,11 +98,11 @@ describe("batched Git LFS storage admission", () => {
     Object.assign(prisma.gitLfsStorage, { findMany, createMany });
     const transaction = vi.spyOn(prisma, "$transaction");
     const lock = vi.spyOn(prisma.user, "update");
-    const files = vi.spyOn(prisma.file, "aggregate");
+    const queryRaw = vi.spyOn(prisma, "$queryRaw");
     const subscription = vi.spyOn(prisma.subscription, "findUnique");
     const reserve = (items: Parameters<typeof reserveGitLfsBatch>[0]["items"], maxReservations?: number) =>
       runWithDbProvider(async () => prisma as never, () => reserveGitLfsBatch({ repoId, ownerId, items, maxReservations }));
-    return { state, findFirst, findMany, createMany, transaction, lock, files, subscription, reserve };
+    return { prisma, state, findFirst, findMany, createMany, transaction, lock, queryRaw, subscription, reserve };
   }
 
   it("reserves the objects that fit in one transaction and one insert", async () => {
@@ -117,7 +117,7 @@ describe("batched Git LFS storage admission", () => {
     expect(db.lock).toHaveBeenCalledExactlyOnceWith({ where: { id: ownerId }, data: { storageRevision: { increment: 1 } } });
     expect(db.findFirst).toHaveBeenCalledExactlyOnceWith({ where: { id: repoId, ownerId, deletedAt: null }, select: { id: true } });
     expect(db.findMany).toHaveBeenCalledExactlyOnceWith({ where: { repoId, oid: { in: [first.oid, existing.oid, tooLarge.oid, last.oid] } } });
-    expect(db.files).toHaveBeenCalledOnce();
+    expect(db.queryRaw).toHaveBeenCalledOnce();
     expect(db.subscription).toHaveBeenCalledOnce();
     expect(db.createMany).toHaveBeenCalledExactlyOnceWith({ data: [first, last].map(({ oid, size }) =>
       ({ repoId, ownerId, oid, size: BigInt(size), expiresAt: new Date(expiresAt) })) });
@@ -127,7 +127,7 @@ describe("batched Git LFS storage admission", () => {
     const db = database(), existing = item("a", 3);
     db.state.gitLfsStorage.set(`${repoId}:${existing.oid}`, { ownerId, size: 3n, verified: false });
     expect(await db.reserve([existing, existing])).toEqual(new Map([[existing.oid, "existing"]]));
-    expect(db.files).not.toHaveBeenCalled();
+    expect(db.queryRaw).not.toHaveBeenCalled();
     expect(db.subscription).not.toHaveBeenCalled();
     expect(db.createMany).not.toHaveBeenCalled();
   });
@@ -141,7 +141,7 @@ describe("batched Git LFS storage admission", () => {
     const objects = mismatch === "duplicate size" ? [object, { ...object, size: 4 }] : [object];
     await expect(db.reserve([item("b", 1), ...objects])).rejects.toThrow("Git LFS reservation mismatch");
     expect(db.createMany).not.toHaveBeenCalled();
-    expect(db.files).not.toHaveBeenCalled();
+    expect(db.queryRaw).not.toHaveBeenCalled();
   });
 
   it("counts only admitted reservations against maxReservations when earlier items exceed quota", async () => {
@@ -160,5 +160,35 @@ describe("batched Git LFS storage admission", () => {
     const provider = vi.fn(async () => createInMemoryPrisma().prisma as never);
     expect(await runWithDbProvider(provider, () => reserveGitLfsBatch({ repoId, ownerId, items: [] }))).toEqual(new Map());
     expect(provider).not.toHaveBeenCalled();
+  });
+
+  it("commits an LFS reservation in one read query without locking User.storageRevision", async () => {
+    const db = database(), oid = "a".repeat(64);
+    db.state.gitRepositories.set(repoId, { ownerId, deletedAt: null, historyBytes: 0n, historyReservedBytes: 0n });
+    db.state.gitLfsStorage.set(`${repoId}:${oid}`, { ownerId, size: 128n, verified: false });
+    const updateMany = vi.fn(async ({ where, data }: { where: { repoId: string; oid: string; verified: boolean }; data: { verified: boolean } }) => {
+      const row = db.state.gitLfsStorage.get(`${where.repoId}:${where.oid}`);
+      if (!row || row.verified !== where.verified) return { count: 0 };
+      row.verified = data.verified;
+      return { count: 1 };
+    });
+    Object.assign(db.prisma.gitLfsStorage, { updateMany });
+
+    await runWithDbProvider(async () => db.prisma as never, () => commitGitLfs(repoId, oid));
+    expect(db.lock).not.toHaveBeenCalled();
+    expect(db.queryRaw).toHaveBeenCalledOnce();
+    expect(updateMany).toHaveBeenCalledOnce();
+    expect(db.state.gitLfsStorage.get(`${repoId}:${oid}`)?.verified).toBe(true);
+
+    // Replaying an already-committed reservation succeeds even after a quota reduction.
+    db.state.files.set("huge", { id: "huge", userId: ownerId, size: STORAGE_FREE_QUOTA_BYTES + 1 } as never);
+    await runWithDbProvider(async () => db.prisma as never, () => commitGitLfs(repoId, oid));
+    expect(updateMany).toHaveBeenCalledOnce();
+
+    // A pending reservation that now exceeds the reduced quota is rejected.
+    const over = "b".repeat(64);
+    db.state.gitLfsStorage.set(`${repoId}:${over}`, { ownerId, size: 64n, verified: false });
+    await expect(runWithDbProvider(async () => db.prisma as never, () => commitGitLfs(repoId, over)))
+      .rejects.toThrow("Account storage quota exceeded at LFS completion");
   });
 });
