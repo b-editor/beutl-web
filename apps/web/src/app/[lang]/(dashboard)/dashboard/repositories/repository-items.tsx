@@ -3,12 +3,13 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Check, Copy, FolderOpen, GitBranch, KeyRound, LockKeyhole, MoreVertical, Pencil, Trash2 } from "lucide-react";
+import { AppWindow, Check, Copy, FolderOpen, GitBranch, KeyRound, LockKeyhole, MoreVertical, Pencil, Trash2 } from "lucide-react";
 import type { GitRepositorySummary } from "@beutl/core";
 import { useTranslation } from "@beutl/ui/i18n-client";
 import { Button } from "@beutl/ui/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@beutl/ui/ui/context-menu";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@beutl/ui/ui/dropdown-menu";
+import { desktopOpenRepositoryUrl } from "@/lib/desktop-install";
 
 export type RepositoryHandlers = {
   connect: (repository: GitRepositorySummary) => void;
@@ -36,6 +37,12 @@ function MenuItems({ repository, lang, disabled, copied, handlers, context = fal
   const Separator = context ? ContextMenuSeparator : DropdownMenuSeparator;
   return <>
     <Item disabled={disabled} onSelect={() => router.push(repositoryPageHref(lang, repository))}><FolderOpen className="mr-2 size-4" aria-hidden />{t("dashboard:repositories.browse")}</Item>
+    <Item asChild disabled={disabled}>
+      <a href={disabled ? undefined : desktopOpenRepositoryUrl(repository.id)}>
+        <AppWindow className="mr-2 size-4" aria-hidden />
+        {t("dashboard:repositories.openInBeutl")}
+      </a>
+    </Item>
     <Item disabled={disabled} onSelect={() => handlers.connect(repository)}><KeyRound className="mr-2 size-4" aria-hidden />{t("dashboard:repositories.connect")}</Item>
     <Item onSelect={() => handlers.copyUrl(repository)}>{copied ? <Check className="mr-2 size-4" aria-hidden /> : <Copy className="mr-2 size-4" aria-hidden />}{t("dashboard:repositories.copyUrl")}</Item>
     <Item disabled={disabled} onSelect={() => handlers.rename(repository)}><Pencil className="mr-2 size-4" aria-hidden />{t("dashboard:repositories.rename")}</Item>

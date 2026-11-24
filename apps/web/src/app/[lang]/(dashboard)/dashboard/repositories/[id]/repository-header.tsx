@@ -14,6 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@beutl/ui/ui/dropdown-menu";
+import { OpenInBeutlButton } from "@/components/open-in-beutl-button";
 import { repositoryHref, shortOid } from "./links";
 import { PendingLink, useRepositoryNavigation } from "./navigation";
 
@@ -56,7 +57,7 @@ export function RepositoryHeader({
   const tabLink = (target: "files" | "commits") => repositoryHref(lang, repository.id, target, { ref: current ?? undefined });
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       <Link prefetch={false}
         href={`/${lang}/dashboard/repositories`}
         className="inline-flex w-fit items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
@@ -64,15 +65,26 @@ export function RepositoryHeader({
         <ArrowLeft className="size-4" aria-hidden />
         {t("dashboard:repositories.title")}
       </Link>
-      <div className="flex min-w-0 items-center gap-2">
-        <GitBranch className="size-6 shrink-0 text-muted-foreground" aria-hidden />
-        <h1 className="truncate text-2xl font-bold" title={repository.name}>{repository.name}</h1>
+      <div className="grid min-w-0 items-start gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-primary/15 bg-primary/5 text-primary">
+            <GitBranch className="size-5" aria-hidden />
+          </span>
+          <h1 className="min-w-0 break-words text-2xl font-semibold tracking-tight" title={repository.name}>{repository.name}</h1>
+        </div>
+        <OpenInBeutlButton
+          lang={lang}
+          repositoryId={repository.id}
+          refName={current}
+          className="font-semibold"
+          containerClassName="sm:items-end sm:text-right"
+        />
       </div>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b pb-3">
         {current !== null && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="max-w-64 gap-2" aria-label={t("dashboard:repositories.browser.switchRef")}>
+              <Button variant="outline" size="sm" className="max-w-full gap-2 sm:max-w-64" aria-label={t("dashboard:repositories.browser.switchRef")}>
                 <CurrentIcon className="size-4 shrink-0" aria-hidden />
                 <span className="truncate">{shown?.kind === "commit" ? shortOid(shown.name) : shown?.name}</span>
                 <ChevronDown className="size-4 shrink-0 text-muted-foreground" aria-hidden />
@@ -104,15 +116,15 @@ export function RepositoryHeader({
         {commit && shown?.kind !== "commit" && (
           <span className="font-mono text-xs text-muted-foreground" title={commit}>{shortOid(commit)}</span>
         )}
-        <nav className="ml-auto flex rounded-md border p-0.5" aria-label={t("dashboard:repositories.browser.views")}>
+        <nav className="flex gap-1 rounded-lg bg-muted/55 p-1 sm:ml-auto" aria-label={t("dashboard:repositories.browser.views")}>
           {(["files", "commits"] as const).map((target) => (
             <PendingLink
               key={target}
               href={tabLink(target)}
               aria-current={tab === target ? "page" : undefined}
               className={cn(
-                "rounded-sm px-3 py-1 text-sm transition-colors",
-                tab === target ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground hover:text-foreground",
+                "rounded-md px-3 py-1 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+                tab === target ? "bg-background font-medium text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground",
               )}
             >
               {t(`dashboard:repositories.browser.${target}`)}

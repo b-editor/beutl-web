@@ -76,6 +76,33 @@ Web Worker entry and by the Next.js `/api/v3` route alike:
 The Web dashboard calls the same repository functions directly with the
 signed-in account, without an API token.
 
+## Using Beutl Desktop
+
+Sign in to Beutl Desktop to use your Hosted Git repositories. In the
+**Version Control** tab, use **Set Remote** or **Publish** to create a Beutl
+repository or connect one you already own. Beutl creates the access token and
+saves it through the OS credential helper. The Git remote URL contains only the
+repository address. An existing `origin`, including one with only a push URL,
+is preserved unless you explicitly change it.
+
+The start screen's **Projects** list includes repositories from your Beutl
+account. **Local copy** entries open directly. Select a **Cloud** entry to
+choose where to clone it. **Clone Repository** on
+the start screen and in the **File** menu also accepts a Git URL. Beutl opens
+the `.bep` project it finds after cloning, or lets you pick one if there are
+several.
+
+For a project connected to Hosted Git, **Open on Web** opens its dashboard
+page at the current branch. The history menu can open a specific commit on
+the web.
+
+In the dashboard, choose **Open in Beutl** from the repository detail page,
+or the list’s actions or context menu. The link uses
+`beutl://repo/open?id={repositoryId}` and includes a URL-encoded `ref` when
+launched from a detail page showing a branch, tag, or commit. These are the
+only link parameters. Beutl Desktop uses its signed-in account to open an
+existing local project or prepare the repository for cloning.
+
 ## Access tokens
 
 Create and revoke repository keys under **Account → Security → API keys**,
@@ -100,11 +127,9 @@ recorded at most once an hour.
 
 ## Transfers and limits
 
-The desktop's **Create Beutl remote** action creates a repository only when
-`origin` is absent. Existing origin configuration is preserved even if it has
-only a push URL. Hosted pushes require one destination; configure separate
-remotes for additional destinations. External Git remotes retain their existing
-behavior. Git and Git LFS must be installed on the client.
+Hosted pushes require one destination. Configure separate remotes for
+additional destinations. External Git remotes retain their existing behavior.
+Git and Git LFS must be installed on the client.
 
 Git smart HTTP supports small project history: an 8 MiB push, 16 MiB of current
 repository objects, 128 refs and 9,000 history objects.
