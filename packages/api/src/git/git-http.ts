@@ -287,10 +287,13 @@ export async function receiveGitPack(
   const packBytes = parsed.packData.length ? parsed.packData.byteLength + gitIndexBytes(count) : 0;
   const refGrowth = (changes: CheckedRefUpdate[]) => changes.reduce((bytes, { refName, newOid, error }) =>
     !error && newOid !== ZERO_OID ? bytes + Math.max(0, 41 - (refSizes.get(root + refName) ?? 0)) : bytes, 0);
-  const newRefs = updates.filter(({ refName, newOid, error }) => !error && newOid !== ZERO_OID && !refSizes.has(root + refName));
+  const projectedRefs = new Set(refs.keys());
+  for (const { refName, newOid, error } of updates) {
+    if (!error && newOid !== ZERO_OID) projectedRefs.add(refName);
+  }
   // Do not credit deletions until they succeed: a stale deletion must not
   // create room for new refs in the same request. Existing refs stay mutable.
-  if (newRefs.length && refSizes.size + newRefs.length > MAX_GIT_REPOSITORY_REFS) {
+  if (projectedRefs.size > refs.size && projectedRefs.size > MAX_GIT_REPOSITORY_REFS) {
     return finish(new Response("Git repository ref count limit exceeded", { status: 413 }));
   }
   if (packBytes && repository.objectCount + 2 > MAX_GIT_REPOSITORY_OBJECTS) {

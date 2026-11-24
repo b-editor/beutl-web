@@ -11,7 +11,8 @@ const toHex = (bytes: Uint8Array) => Buffer.from(bytes).toString("hex");
 type Repository = ReturnType<typeof readGitRepository>;
 export type GitObjectType = "commit" | "tree" | "blob" | "tag";
 export type PackedGitEntry = { type: number; size: number; base?: string; data: Uint8Array };
-type Entry = PackedGitEntry & { headerLength?: number; loose?: true };
+type BaseOffset = { packPath: string; index: Index; pack: Uint8Array; ordinal: number };
+type Entry = PackedGitEntry & { headerLength?: number; loose?: true; packId?: string; baseOffset?: BaseOffset };
 type Index = { bytes: Uint8Array; view: DataView; count: number; order: Uint32Array; offsets: Uint32Array };
 export type GitObjectInfo = { type: GitObjectType; size: number };
 const NAMES = 1032;
@@ -124,35 +125,124 @@ export class GitObjectReader {
     }
     return low;
   }
-  private packedEntry(index: Index, pack: Uint8Array, ordinal: number): Entry {
+  private packedEntry(packPath: string, index: Index, pack: Uint8Array, ordinal: number): Entry {
     const start = index.offsets[ordinal], position = this.offsetPosition(index, start);
     const end = position + 1 < index.count ? index.offsets[index.order[position + 1]] : pack.byteLength - 20;
     const bytes = pack.subarray(start, end), cursor = { position: 0 };
     let value = byte(bytes, cursor), size = value & 15, scale = 16;
     const type = (value >> 4) & 7;
     while (value & 128) { value = byte(bytes, cursor); size = safeSize(size + (value & 127) * scale); scale *= 128; }
-    let base: string | undefined;
+    let base: string | undefined, baseOffset: BaseOffset | undefined;
     if (type === 6) {
       value = byte(bytes, cursor); let distance = value & 127;
       while (value & 128) { value = byte(bytes, cursor); distance = safeSize((distance + 1) * 128 + (value & 127)); }
       const basePosition = this.offsetPosition(index, start - distance);
       if (basePosition >= index.count || index.offsets[index.order[basePosition]] !== start - distance)
         throw new Error("Git delta names no base");
-      base = this.oid(index, index.order[basePosition]);
+      const baseOrdinal = index.order[basePosition];
+      base = this.oid(index, baseOrdinal);
+      baseOffset = { packPath, index, pack, ordinal: baseOrdinal };
     } else if (type === 7) {
       const from = cursor.position;
       for (let i = 0; i < 20; i++) byte(bytes, cursor);
       base = toHex(bytes.subarray(from, cursor.position));
     } else if (!TYPES[type]) throw new Error("Unsupported Git object type");
-    return { type, size, base, data: bytes.subarray(cursor.position) };
+    return { type, size, base, baseOffset, packId: `${packPath}@${start}`, data: bytes.subarray(cursor.position) };
+  }
+  private findOrdinalsInIndex(index: Index, oidBytes: Uint8Array): number[] {
+    const firstByte = oidBytes[0];
+    const end = index.view.getUint32(8 + firstByte * 4);
+    let low = firstByte === 0 ? 0 : index.view.getUint32(8 + (firstByte - 1) * 4), high = end;
+    if (low > high || high > index.count) throw new Error("Invalid Git pack index fanout");
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (compareOid(index.bytes, NAMES + middle * 20, oidBytes) < 0) low = middle + 1; else high = middle;
+    }
+    const matches: number[] = [];
+    for (let i = low; i < end && compareOid(index.bytes, NAMES + i * 20, oidBytes) === 0; i++) matches.push(i);
+    return matches;
+  }
+  /** Prefer the shallowest representation in the pack so OID-based exports stay acyclic. */
+  private chooseDuplicateEntry(packPath: string, index: Index, pack: Uint8Array, ordinals: number[]): Entry {
+    const entries = ordinals.map((ordinal) => this.packedEntry(packPath, index, pack, ordinal));
+    const full = entries.find((entry) => !entry.base);
+    if (full) return full;
+    const depths = new Map<number, number>(), visiting = new Set<number>();
+    const depthOf = (ordinal: number): number => {
+      const cached = depths.get(ordinal);
+      if (cached !== undefined) return cached;
+      if (visiting.has(ordinal)) return Infinity;
+      visiting.add(ordinal);
+      const entry = this.packedEntry(packPath, index, pack, ordinal);
+      let depth: number;
+      if (!entry.base) depth = 0;
+      else if (entry.baseOffset) depth = 1 + depthOf(entry.baseOffset.ordinal);
+      else {
+        const baseOrdinals = this.findOrdinalsInIndex(index, Buffer.from(entry.base, "hex"));
+        depth = baseOrdinals.length ? 1 + Math.min(...baseOrdinals.map(depthOf)) : 1;
+      }
+      visiting.delete(ordinal);
+      depths.set(ordinal, depth);
+      return depth;
+    };
+    let best = entries[0], bestDepth = depthOf(ordinals[0]);
+    for (let i = 1; i < ordinals.length; i++) {
+      const candidateDepth = depthOf(ordinals[i]);
+      if (candidateDepth < bestDepth) { best = entries[i]; bestDepth = candidateDepth; }
+    }
+    return best;
+  }
+  private async recompress(oid: string, entry: Entry): Promise<PackedGitEntry> {
+    const info = await this.infoEntry(oid, entry);
+    const input = (await this.streamEntry(oid, entry)).pipeThrough(new TransformStream<Uint8Array, BufferSource>({
+      transform(chunk, controller) { controller.enqueue(Uint8Array.from(chunk)); },
+    })).pipeThrough(new CompressionStream("deflate"));
+    const reader = input.getReader(), chunks: Uint8Array[] = [];
+    let length = 0;
+    try {
+      for (;;) {
+        const next = await reader.read(); if (next.done) break;
+        length += next.value.byteLength;
+        if (length > MAX_GIT_OBJECT_BYTES) throw new RangeError("Compressed Git object exceeds the serving limit");
+        chunks.push(next.value);
+      }
+    } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
+    const data = new Uint8Array(length); let position = 0;
+    for (const chunk of chunks) { data.set(chunk, position); position += chunk.byteLength; }
+    return { type: TYPE_CODES[info.type], size: info.size, data };
   }
   async packEntries(name: string): Promise<Map<string, PackedGitEntry>> {
     const path = `${this.repository.repo.gitdir}/objects/pack/${name}`;
     const index = await this.index(path.replace(/\.pack$/u, ".idx")), pack = await this.pack(path, index);
-    const entries = new Map<string, PackedGitEntry>();
+    const entries = new Map<string, Entry>();
+    const duplicates = new Map<string, number[]>();
     for (let i = 0; i < index.count; i++) {
-      const oid = this.oid(index, i), previous = entries.get(oid);
-      if (!previous || previous.base === oid) entries.set(oid, this.packedEntry(index, pack, i));
+      const oid = this.oid(index, i);
+      const group = duplicates.get(oid);
+      if (group) group.push(i);
+      else if (entries.has(oid)) duplicates.set(oid, [i - 1, i]);
+      else entries.set(oid, this.packedEntry(path, index, pack, i));
+    }
+    for (const [oid, ordinals] of duplicates) {
+      entries.set(oid, this.chooseDuplicateEntry(path, index, pack, ordinals));
+    }
+    if (duplicates.size) {
+      // Break any residual cycle introduced by converting OFS_DELTA bases to OIDs.
+      const state = new Map<string, "visiting" | "done">();
+      const breakCycle = async (oid: string): Promise<void> => {
+        if (state.get(oid) === "done") return;
+        state.set(oid, "visiting");
+        const entry = entries.get(oid);
+        if (entry?.base && entries.has(entry.base)) {
+          if (state.get(entry.base) === "visiting") {
+            entries.set(oid, await this.recompress(oid, entry));
+          } else {
+            await breakCycle(entry.base);
+          }
+        }
+        state.set(oid, "done");
+      };
+      for (const oid of entries.keys()) await breakCycle(oid);
     }
     return entries;
   }
@@ -162,6 +252,14 @@ export class GitObjectReader {
     let pending = this.entries.get(oid);
     if (!pending) { pending = this.findEntry(oid, consumeLookup); this.entries.set(oid, pending); }
     return pending;
+  }
+  private async baseOf(entry: Entry, consumeLookup?: () => void): Promise<Entry | null> {
+    if (entry.baseOffset) {
+      consumeLookup?.();
+      const { packPath, index, pack, ordinal } = entry.baseOffset;
+      return this.packedEntry(packPath, index, pack, ordinal);
+    }
+    return entry.base ? this.entry(entry.base, consumeLookup) : null;
   }
   private async findEntry(oid: string, consumeLookup?: () => void): Promise<Entry | null> {
     const { repo, fs } = this.repository;
@@ -177,30 +275,17 @@ export class GitObjectReader {
     this.names ??= fs.promises.readdir(directory).then((names) => names.filter((name) => name.endsWith(".idx")))
       .catch((error) => { if (error.code === "ENOENT") return []; throw error; });
     const names = await this.names, oidBytes = Buffer.from(oid, "hex");
-    const firstByte = oidBytes[0];
     for (let i = 0; i < names.length; i++) {
       consumeLookup?.();
       const path = `${directory}/${names[i]}`, index = await this.index(path);
-      const end = index.view.getUint32(8 + firstByte * 4);
-      let low = firstByte === 0 ? 0 : index.view.getUint32(8 + (firstByte - 1) * 4), high = end;
-      if (low > high || high > index.count) throw new Error("Invalid Git pack index fanout");
-      while (low < high) {
-        const middle = Math.floor((low + high) / 2);
-        if (compareOid(index.bytes, NAMES + middle * 20, oidBytes) < 0) low = middle + 1; else high = middle;
+      const ordinals = this.findOrdinalsInIndex(index, oidBytes);
+      if (ordinals.length) {
+        const packPath = path.replace(/\.idx$/u, ".pack"), pack = await this.pack(packPath, index);
+        return ordinals.length === 1
+          ? this.packedEntry(packPath, index, pack, ordinals[0])
+          : this.chooseDuplicateEntry(packPath, index, pack, ordinals);
       }
-      if (low < end && compareOid(index.bytes, NAMES + low * 20, oidBytes) === 0) {
-        const pack = await this.pack(path.replace(/\.idx$/u, ".pack"), index);
-        const entry = this.packedEntry(index, pack, low);
-        // An identity delta can precede a full representation of the same OID.
-        if (entry.base === oid) {
-          for (let next = low + 1; next < end && compareOid(index.bytes, NAMES + next * 20, oidBytes) === 0; next++) {
-            const duplicate = this.packedEntry(index, pack, next);
-            if (duplicate.base !== oid) return duplicate;
-          }
-        }
-        return entry;
-      }
-      if (i === 0 && names.length > 1 && !this.prefetchedIndexes) {
+      if (!consumeLookup && i === 0 && names.length > 1 && !this.prefetchedIndexes) {
         this.prefetchedIndexes = true;
         for (let next = 1; next < names.length; next++) {
           // Keep errors on the cached promises so the ordered probes observe them.
@@ -227,28 +312,34 @@ export class GitObjectReader {
     checkSize?.(source); checkSize?.(target);
     return target;
   }
+  private async infoEntry(oid: string, entry: Entry, consumeLookup?: () => void, checkSize?: (size: number) => void,
+    inspect?: (oid: string, entry: Entry) => Uint8Array | void): Promise<GitObjectInfo> {
+    const size = await this.entrySize(entry, checkSize, inspect && (() => inspect(oid, entry)));
+    let current = entry;
+    const seen = new Set([current.packId ?? oid]);
+    while (current.base) {
+      const sourceOid = current.base;
+      const source = await this.baseOf(current, consumeLookup);
+      if (!source) throw new Error(`Git delta base ${sourceOid} is missing`);
+      const sourceKey = source.packId ?? sourceOid;
+      if (seen.has(sourceKey)) throw new Error("Git delta bases form a cycle");
+      seen.add(sourceKey);
+      if (checkSize || inspect) {
+        await this.entrySize(source, checkSize, inspect && (() => inspect(sourceOid, source)));
+      }
+      current = source;
+    }
+    const info = { type: TYPES[current.type], size };
+    if (!info.type) throw new Error("Unsupported Git object type");
+    return info;
+  }
   async info(oid: string, consumeLookup?: () => void, checkSize?: (size: number) => void,
     inspect?: (oid: string, entry: Entry) => Uint8Array | void): Promise<GitObjectInfo | null> {
     const cached = this.infos.get(oid);
     if (cached && !checkSize && !inspect) return cached;
     const entry = await this.entry(oid, consumeLookup);
     if (!entry) return null;
-    const size = await this.entrySize(entry, checkSize, inspect && (() => inspect(oid, entry)));
-    let type = entry.type, base = entry.base;
-    const seen = new Set([oid]);
-    while (base) {
-      if (seen.has(base)) throw new Error("Git delta bases form a cycle");
-      seen.add(base);
-      const source = await this.entry(base, consumeLookup);
-      if (!source) throw new Error(`Git delta base ${base} is missing`);
-      if (checkSize || inspect) {
-        const sourceOid = base;
-        await this.entrySize(source, checkSize, inspect && (() => inspect(sourceOid, source)));
-      }
-      type = source.type; base = source.base;
-    }
-    const info = { type: TYPES[type], size };
-    if (!info.type) throw new Error("Unsupported Git object type");
+    const info = await this.infoEntry(oid, entry, consumeLookup, checkSize, inspect);
     this.infos.set(oid, info); return info;
   }
   async size(oid: string, consumeLookup?: () => void, checkSize?: (size: number) => void): Promise<number | null> {
@@ -261,19 +352,24 @@ export class GitObjectReader {
     const instructions = target.base && target.size <= MAX_GIT_OBJECT_BYTES ? inflateEntry(target) : undefined;
     const size = target.base ? await this.entrySize(target, undefined, () => instructions) : target.size;
     if (size > maximum) throw new RangeError("Git metadata exceeds the read limit");
-    const readStream = async () => streamBytes(await this.stream(oid), size);
+    const readStream = async () => streamBytes(await this.streamEntry(oid, target), size);
     if (size > MAX_GIT_OBJECT_BYTES) return readStream();
-    if (!target.base) return Uint8Array.from(inflateEntry(target));
+    if (!target.base) {
+      const raw = inflateEntry(target);
+      return new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+    }
 
-    const chain: Entry[] = [], seen = new Set([oid]);
+    const chain: Entry[] = [], seen = new Set([target.packId ?? oid]);
     let entry = target;
     while (entry.base) {
       if (entry.size > MAX_GIT_OBJECT_BYTES) return readStream();
       chain.push(entry);
-      if (seen.has(entry.base)) throw new Error("Git delta bases form a cycle");
-      seen.add(entry.base);
-      const base = await this.entry(entry.base);
-      if (!base) throw new Error(`Git delta base ${entry.base} is missing`);
+      const baseOid = entry.base;
+      const base = await this.baseOf(entry);
+      if (!base) throw new Error(`Git delta base ${baseOid} is missing`);
+      const baseKey = base.packId ?? baseOid;
+      if (seen.has(baseKey)) throw new Error("Git delta bases form a cycle");
+      seen.add(baseKey);
       entry = base;
     }
     if (entry.size > MAX_GIT_OBJECT_BYTES) return readStream();
@@ -285,9 +381,8 @@ export class GitObjectReader {
     }
     return result;
   }
-  async stream(oid: string, range?: { offset: number; length: number }): Promise<ReadableStream<Uint8Array>> {
-    const info = await this.info(oid), entry = await this.entry(oid);
-    if (!info || !entry) throw new Error(`Git object ${oid} is missing`);
+  private async streamEntry(oid: string, entry: Entry, range?: { offset: number; length: number }): Promise<ReadableStream<Uint8Array>> {
+    const info = await this.infoEntry(oid, entry);
     const start = range?.offset ?? 0, length = range?.length ?? info.size;
     if (!Number.isSafeInteger(start) || !Number.isSafeInteger(length) || start < 0 || length < 0 || start + length > info.size)
       throw new RangeError("Invalid Git object byte range");
@@ -295,13 +390,19 @@ export class GitObjectReader {
       (entry.headerLength ?? 0) + info.size);
     return iteratorStream(this.delta(entry, info.size, start, length));
   }
+  async stream(oid: string, range?: { offset: number; length: number }): Promise<ReadableStream<Uint8Array>> {
+    const entry = await this.entry(oid);
+    if (!entry) throw new Error(`Git object ${oid} is missing`);
+    return this.streamEntry(oid, entry, range);
+  }
   private async *delta(entry: Entry, size: number, start: number, length: number): AsyncGenerator<Uint8Array, void> {
     const instructions = new ByteReader(inflateStream(entry.data));
     let baseReader: ByteReader | undefined, basePosition = 0, position = 0;
     const end = start + length;
     try {
-      const baseInfo = await this.info(entry.base!);
-      if (!baseInfo || await instructions.unsigned() !== baseInfo.size || await instructions.unsigned() !== size)
+      const base = await this.baseOf(entry);
+      const baseInfo = base ? await this.infoEntry(entry.base!, base) : null;
+      if (!base || !baseInfo || await instructions.unsigned() !== baseInfo.size || await instructions.unsigned() !== size)
         throw new Error("Git delta size differs from its base or result");
       while (position < end) {
         const opcode = await instructions.byte();
@@ -315,7 +416,7 @@ export class GitObjectReader {
           if (to > from) {
             const needed = offset + from - position;
             if (!baseReader || needed < basePosition) {
-              await baseReader?.cancel(); baseReader = new ByteReader(await this.stream(entry.base!)); basePosition = 0;
+              await baseReader?.cancel(); baseReader = new ByteReader(await this.streamEntry(entry.base!, base)); basePosition = 0;
             }
             await baseReader.skip(needed - basePosition); basePosition = needed;
             let remaining = to - from;
@@ -341,26 +442,21 @@ export class GitObjectReader {
       if (end === size && await instructions.take(1)) throw new Error("Git delta has excess instructions");
     } finally { await instructions.cancel(); await baseReader?.cancel(); }
   }
-  /** The raw compressed entry for pack rewrites; loose objects are recompressed as a stream. */
+  /** The raw compressed entry for pack rewrites; loose or cyclic OID-exported objects are recompressed. */
   async packed(oid: string): Promise<PackedGitEntry> {
     const entry = await this.entry(oid);
     if (!entry) throw new Error(`Git object ${oid} is missing`);
-    if (!entry.loose) return entry;
-    const input = (await this.stream(oid)).pipeThrough(new TransformStream<Uint8Array, BufferSource>({
-      transform(chunk, controller) { controller.enqueue(Uint8Array.from(chunk)); },
-    })).pipeThrough(new CompressionStream("deflate"));
-    const reader = input.getReader(), chunks: Uint8Array[] = [];
-    let length = 0;
-    try {
-      for (;;) {
-        const next = await reader.read(); if (next.done) break;
-        length += next.value.byteLength;
-        if (length > MAX_GIT_OBJECT_BYTES) throw new RangeError("Compressed Git object exceeds the serving limit");
-        chunks.push(next.value);
+    if (entry.loose) return this.recompress(oid, entry);
+    if (entry.base) {
+      // Ensure OID-based pack export stays acyclic when duplicate representations exist.
+      const seen = new Set([oid]);
+      let base: string | undefined = entry.base;
+      while (base) {
+        if (seen.has(base)) return this.recompress(oid, entry);
+        seen.add(base);
+        base = (await this.entry(base))?.base;
       }
-    } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
-    const data = new Uint8Array(length); let position = 0;
-    for (const chunk of chunks) { data.set(chunk, position); position += chunk.byteLength; }
-    return { type: entry.type, size: entry.size, data };
+    }
+    return entry;
   }
 }

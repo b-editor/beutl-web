@@ -112,7 +112,7 @@ describe("Git blob size metadata", () => {
     expect(new Uint8Array(await new Response(range).arrayBuffer())).toEqual(new Uint8Array(contents[1].subarray(offset, offset + length)));
   });
 
-  it("prefetches indexes after the first miss and reports a storage error only when its index is probed", async () => {
+  it("prefetches indexes on ordinary reads and skips speculative prefetch when a lookup budget applies", async () => {
     const path = `${prefix}objects/pack/`, files = new Map(packed.get("ref")!.files);
     const unavailable = `${path}z.idx`, failure = new Error("B2 index read failed");
     files.set(unavailable, new Uint8Array());
@@ -129,12 +129,18 @@ describe("Git blob size metadata", () => {
     expect(direct.bucket.get).not.toHaveBeenCalledWith(unavailable);
 
     for (const [key, bytes] of await packFiles("a", [])) files.set(key, bytes);
-    const { reader, bucket } = monitored(), consume = vi.fn();
-    expect(await reader.size(oids[3], consume)).toBe(0);
-    expect(consume).toHaveBeenCalledTimes(3); // Entry visit and two index probes.
-    expect(bucket.get.mock.calls.map(([key]) => key).filter((key) => key.startsWith(path)))
+    const ordinary = monitored();
+    expect(await ordinary.reader.size(oids[3])).toBe(0);
+    expect(ordinary.bucket.get.mock.calls.map(([key]) => key).filter((key) => key.startsWith(path)))
       .toEqual([`${path}a.idx`, `${path}ref.idx`, unavailable, `${path}ref.pack`]);
-    await expect(reader.size("f".repeat(40))).rejects.toBe(failure);
+    await expect(ordinary.reader.size("f".repeat(40))).rejects.toBe(failure);
+
+    const budgeted = monitored();
+    let remaining = 2;
+    const consume = vi.fn(() => { if (--remaining < 0) throw new Error("budget exceeded"); });
+    await expect(budgeted.reader.size(oids[3], consume)).rejects.toThrow("budget exceeded");
+    expect(budgeted.bucket.get.mock.calls.map(([key]) => key).filter((key) => key.startsWith(path)))
+      .toEqual([`${path}a.idx`]);
   });
 
   it("enforces the read limit and can still stream a small delta based on a legacy loose blob", async () => {

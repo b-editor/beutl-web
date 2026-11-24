@@ -121,7 +121,7 @@ export class GitRepositoryDurableObject {
       const empty = await this.gitBytes(repoId) === 0;
       if (empty && !await this.reserveHistory(repoId, ownerOf(c), 4096))
         return c.text("Account storage quota exceeded", 413);
-      let needsSettlement = empty;
+      let needsSettlement = empty || await storage.get<boolean>("historyUnsettled") === true;
       let initial: Awaited<ReturnType<typeof initializeGitRepository>> | undefined;
       try {
         initial = await initializeGitRepository(this.objectBucket(), repoId, { store: this.repoStore(repoId) }, async () => {

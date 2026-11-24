@@ -1074,7 +1074,7 @@ it("validates the advertised service before reserving storage for an empty repos
   expect(accounting.settleHistory).toHaveBeenCalledExactlyOnceWith(repoId, gitBytes(bucket));
   expect(bucket.objects.size).toBeGreaterThan(0);
 });
-it("repairs partial initialization and accounts for the missing file before marking the repository ready", async () => {
+it("repairs partial initialization and retries unsettled accounting before marking the repository ready", async () => {
   const { bucket, storage, accounting, send } = accountedRepository();
   const head = `git/repos/${repoId}/repo.git/HEAD`, put = bucket.put.bind(bucket);
   const write = vi.spyOn(bucket, "put").mockImplementation(async (key, bytes) => {
@@ -1094,6 +1094,81 @@ it("repairs partial initialization and accounts for the missing file before mark
   expect(accounting.reserveHistory).toHaveBeenCalledExactlyOnceWith(repoId, "owner", 4096);
   expect(accounting.settleHistory.mock.calls).toEqual([[repoId, partial], [repoId, gitBytes(bucket)]]);
   expect(storage.values.get("gitInitialized")).toBe(true);
+
+  // If both HEAD and config succeed but settleHistory fails, the next advertisement settles without rewriting either file.
+  const retry = accountedRepository();
+  retry.accounting.settleHistory.mockRejectedValueOnce(new Error("DB unavailable"));
+  await expect(retry.send("info/refs?service=git-upload-pack")).rejects.toThrow("DB unavailable");
+  expect(retry.storage.values.has("gitInitialized")).toBe(false);
+  expect(retry.storage.values.get("historyUnsettled")).toBe(true);
+  const retryPut = vi.spyOn(retry.bucket, "put");
+  expect((await retry.send("info/refs?service=git-upload-pack")).status).toBe(200);
+  expect(retryPut).not.toHaveBeenCalled();
+  expect(retry.accounting.reserveHistory).toHaveBeenCalledOnce();
+  expect(retry.accounting.settleHistory).toHaveBeenCalledTimes(2);
+  expect(retry.accounting.settleHistory).toHaveBeenLastCalledWith(repoId, gitBytes(retry.bucket));
+  expect(retry.storage.values.get("gitInitialized")).toBe(true);
+  expect(retry.storage.values.has("historyUnsettled")).toBe(false);
+});
+it("counts packed refs toward the 128-ref limit while allowing updates to existing packed-only refs", async () => {
+  const bucket = new Bucket(), root = `git/repos/${repoId}/repo.git/`;
+  const first = Buffer.from("one"), second = Buffer.from("two");
+  const firstOid = blobOid(first), secondOid = blobOid(second);
+  expect(await (await receive(bucket, pushBody([{ data: first }, { data: second }], firstOid))).text()).toContain("ok ");
+  await bucket.delete(`${root}refs/tags/test-${firstOid}`);
+  await bucket.put(`${root}packed-refs`, Buffer.from(`${firstOid} refs/tags/packed-0\n`));
+  for (let i = 1; i < 128; i++) {
+    await bucket.put(`${root}refs/tags/loose-${i}`, Buffer.from(`${firstOid}\n`));
+  }
+  // 127 loose refs + 1 packed-only ref = 128 total: creating a 129th ref must fail with 413.
+  const created = await receive(bucket, refCommand("refs/tags/overflow", "0".repeat(40), firstOid));
+  expect(created.status).toBe(413);
+  // Updating the existing packed-only ref does not increase the ref count and must succeed.
+  const updated = await receive(bucket, refCommand("refs/tags/packed-0", firstOid, secondOid));
+  expect(updated.status).toBe(200);
+  expect(await updated.text()).toContain("ok refs/tags/packed-0");
+});
+it.each([false, true])("reads and rewrites a pack whose OFS_DELTA targets the second representation of a duplicate OID (deltaOnly=%s)", async (deltaOnly) => {
+  const bucket = new Bucket();
+  const baseData = Buffer.from("c"), aData = Buffer.from("ca"), bData = Buffer.from("cab");
+  const baseOid = blobOid(baseData), aOid = blobOid(aData), bOid = blobOid(bData);
+  const aFromB = Buffer.from([3, 2, 0x90, 2]); // Copy first 2 bytes of "cab" -> "ca"
+  const aFromC = Buffer.from([1, 2, 0x90, 1, 1, 97]); // Copy "c" + insert "a" -> "ca"
+  const bFromA = Buffer.from([2, 3, 0x90, 2, 1, 98]); // Copy "ca" + insert "b" -> "cab"
+  const aSecondEntry = deltaOnly
+    ? { type: 7, base: Buffer.from(baseOid, "hex"), data: aFromC }
+    : { type: 3, data: aData };
+  const aSecondLength = packEntryHeader(aSecondEntry.type, aSecondEntry.data.length).length
+    + (aSecondEntry.base?.length ?? 0) + deflateSync(aSecondEntry.data).length;
+  const entries = [
+    ...(deltaOnly ? [{ type: 3, data: baseData }] : []),
+    // Entry A1 (REF_DELTA on B) appears before A2, while B is an OFS_DELTA referencing A2's exact offset.
+    { type: 7, base: Buffer.from(bOid, "hex"), data: aFromB },
+    aSecondEntry,
+    { type: 6, base: Buffer.from([aSecondLength]), data: bFromA },
+  ];
+  const response = await receive(bucket, pushBody(entries, bOid));
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain(`ok refs/tags/test-${bOid}`);
+
+  const reader = new GitObjectReader(readGitRepository(bucket as never, repoId));
+  expect(Buffer.from(await reader.read(aOid))).toEqual(aData);
+  expect(Buffer.from(await reader.read(bOid))).toEqual(bData);
+  expect(Buffer.from(await new Response(await reader.stream(aOid)).arrayBuffer())).toEqual(aData);
+  expect(Buffer.from(await new Response(await reader.stream(bOid)).arrayBuffer())).toEqual(bData);
+
+  // Rewriting the pack using OID-based entries (packEntries / packed) must stay acyclic and readable.
+  const packName = [...bucket.objects.keys()].find((key) => key.endsWith(".pack"))!.split("/").at(-1)!;
+  const exported = await reader.packEntries(packName);
+  const rewritten = createGitPack([...exported].map(([oid, entry]) => ({ oid, entry })), { index: true });
+  const copy = new Bucket();
+  const root = `git/repos/${repoId}/repo.git/objects/pack/rewritten`;
+  await copy.put(`${root}.pack`, new Uint8Array(await new Response(rewritten.stream()).arrayBuffer()));
+  await copy.put(`${root}.idx`, rewritten.index!);
+  const reopened = new GitObjectReader(readGitRepository(copy as never, repoId));
+  expect(Buffer.from(await reopened.read(aOid))).toEqual(aData);
+  expect(Buffer.from(await reopened.read(bOid))).toEqual(bData);
+  expect((await reader.packed(aOid)).base).not.toBe(bOid);
 });
 it("waits a full second after the previous push before writing Git objects to B2", async () => {
   vi.useFakeTimers();
