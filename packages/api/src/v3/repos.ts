@@ -140,7 +140,7 @@ const repos = new Hono<Routes>()
       return c.text("Not found", 404);
     }
     const declared = c.req.header("content-length");
-    if (declared !== null) {
+    if (declared !== undefined) {
       const length = Number(declared);
       if (!Number.isSafeInteger(length) || length < 0) return message(c, "Invalid content length", 400);
       if (length > MAX_GIT_REPOSITORY_THUMBNAIL_BYTES) return message(c, "Thumbnail is too large", 413);

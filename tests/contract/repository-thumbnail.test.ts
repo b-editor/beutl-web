@@ -1,7 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { deflateSync } from "node:zlib";
+import { sign } from "hono/jwt";
 import { apiRequestBodyLimit, MAX_API_JSON_REQUEST_BYTES, MAX_GIT_REPOSITORY_THUMBNAIL_BYTES } from "@beutl/core";
 import { runWithDbProvider, type PrismaClient } from "@beutl/db";
+import { api } from "@beutl/api/app";
 import {
   gitRepositoryThumbnailKey,
   gitRepositoryThumbnailPrefix,
@@ -108,7 +110,7 @@ const env: GitEnvironment = {
 
 function memoryBucket() {
   const stored = new Map<string, Uint8Array>();
-  const pruneVersions = vi.fn(async () => undefined);
+  const pruneGitVersions = vi.fn(async () => undefined);
   const del = vi.fn(async (key: string | string[]) => {
     for (const k of Array.isArray(key) ? key : [key]) stored.delete(k);
   });
@@ -136,8 +138,8 @@ function memoryBucket() {
   });
   return {
     stored,
-    bucket: { get, head, put, delete: del, pruneVersions } satisfies GitRepositoryThumbnailBucket,
-    mocks: { get, head, put, delete: del, pruneVersions },
+    bucket: { get, head, put, delete: del, pruneGitVersions } satisfies GitRepositoryThumbnailBucket,
+    mocks: { get, head, put, delete: del, pruneGitVersions },
   };
 }
 
@@ -190,7 +192,7 @@ describe("repository thumbnail storage and metadata", () => {
     const key = gitRepositoryThumbnailKey(repoId);
     expect(key.startsWith(gitRepositoryThumbnailPrefix(repoId))).toBe(true);
     expect(stored.get(key)).toEqual(validPng);
-    expect(mocks.pruneVersions).toHaveBeenCalledWith(key, ["v2"]);
+    expect(mocks.pruneGitVersions).toHaveBeenCalledWith(gitRepositoryThumbnailPrefix(repoId));
 
     const loaded = await runWithDbProvider(async () => db, () =>
       readGitRepositoryThumbnail(env, "owner", repoId, { bucket }));
@@ -289,5 +291,71 @@ describe("dashboard repository thumbnail route", () => {
     expect(headRes.status).toBe(200);
     expect(headRes.headers.get("Content-Length")).toBe(String(validPng.byteLength));
     expect(headRes.body).toBeNull();
+  });
+});
+
+describe("v3 repository thumbnail upload without Content-Length", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("accepts a streamed PNG upload when no Content-Length header is present", async () => {
+    vi.stubEnv("JWT_SECRET", "thumbnail-route-secret");
+    vi.stubEnv("JWT_ISSUER", "");
+    vi.stubEnv("JWT_AUDIENCE", "");
+    const token = await sign(
+      {
+        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": "owner",
+        exp: Math.floor(Date.now() / 1000) + 60,
+      },
+      "thumbnail-route-secret",
+      "HS256",
+    );
+    const row = {
+      id: repoId,
+      ownerId: "owner",
+      name: "Demo",
+      createdAt,
+      updatedAt: createdAt,
+      thumbnailUpdatedAt: null as Date | null,
+    };
+    const db = {
+      gitRepository: {
+        findFirst: vi.fn(async () => ({ id: repoId })),
+        update: vi.fn(async ({ data }) => ({ ...row, thumbnailUpdatedAt: data.thumbnailUpdatedAt })),
+      },
+    } as unknown as PrismaClient;
+
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("versions=")) {
+        return new Response("<ListVersionsResult><IsTruncated>false</IsTruncated></ListVersionsResult>", { status: 200 });
+      }
+      return new Response(null, { status: 200, headers: { "x-amz-version-id": "v1" } });
+    }));
+
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(validPng);
+        controller.close();
+      },
+    });
+    const request = new Request(`${origin}/api/v3/repos/${repoId}/thumbnail`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "image/png" },
+      body: stream,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    expect(request.headers.get("content-length")).toBeNull();
+
+    const response = await runWithDbProvider(async () => db, () =>
+      api.fetch(request, {
+        ...env,
+        BEUTL_GIT_REPOSITORIES: { idFromName: (n: string) => n, get: () => ({ fetch: async () => new Response(null, { status: 204 }) }) },
+      }));
+    expect(response.status).toBe(200);
+    const body = await response.json() as { thumbnailUpdatedAt: string | null };
+    expect(body.thumbnailUpdatedAt).not.toBeNull();
   });
 });

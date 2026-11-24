@@ -10,7 +10,7 @@ import type { GitObjectBucket } from "./git-object-store";
 import { gitRepositorySummary, ownsActiveGitRepository } from "./repositories";
 import { S3GitObjectBucket } from "./s3-object-store";
 
-export type GitRepositoryThumbnailBucket = Pick<GitObjectBucket, "get" | "head" | "put" | "delete" | "pruneVersions">;
+export type GitRepositoryThumbnailBucket = Pick<GitObjectBucket, "get" | "head" | "put" | "delete" | "pruneGitVersions">;
 
 export function gitRepositoryThumbnailPrefix(repoId: string): string {
   return `git-thumbnails/repos/${repoId}/`;
@@ -33,6 +33,7 @@ export async function validateGitRepositoryThumbnail(bytes: Uint8Array, signal?:
     return metadata.width <= MAX_GIT_REPOSITORY_THUMBNAIL_DIMENSION &&
       metadata.height <= MAX_GIT_REPOSITORY_THUMBNAIL_DIMENSION;
   } catch {
+    // Malformed or unsupported PNG bytes fail validation unless the caller aborted.
     signal?.throwIfAborted();
     return false;
   }
@@ -77,11 +78,7 @@ export async function saveGitRepositoryThumbnail(
 
   const bucket = options.bucket ?? new S3GitObjectBucket(env);
   const key = gitRepositoryThumbnailKey(repoId);
-  const putResult = await bucket.put(key, bytes);
-  const versionId = typeof putResult === "object" && putResult !== null && "versionId" in putResult &&
-    typeof putResult.versionId === "string"
-    ? putResult.versionId
-    : undefined;
+  await bucket.put(key, bytes);
 
   let row;
   try {
@@ -91,17 +88,18 @@ export async function saveGitRepositoryThumbnail(
     });
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "P2025") {
-      await bucket.delete(key).catch(() => undefined);
+      await bucket.delete(key).catch((cleanupError) => {
+        console.error("Failed to remove orphaned repository thumbnail", { repoId, error: cleanupError });
+      });
       return { status: "notFound" };
     }
     throw error;
   }
 
-  if (versionId) {
-    await bucket.pruneVersions?.(key, [versionId]).catch((error) => {
-      console.error("Failed to prune old repository thumbnail versions", { repoId, error });
-    });
-  }
+  // Keep whatever version S3 currently marks as latest so overlapping uploads never delete each other's latest object.
+  await bucket.pruneGitVersions?.(gitRepositoryThumbnailPrefix(repoId)).catch((error) => {
+    console.error("Failed to prune old repository thumbnail versions", { repoId, error });
+  });
 
   return { status: "updated", repository: gitRepositorySummary(row, origin) };
 }
