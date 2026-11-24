@@ -72,6 +72,12 @@ async function uploadPart(
     flush() { if (received !== length) throw new Error("tus body is incomplete"); },
   }));
   const key = lfsKey(object.access.repoId, object.oid);
+  const cancelLease = (payload: Record<string, unknown>) =>
+    metadata(object, "cancel", payload).catch(() => {
+      // The part failure below is what the client must see. A lost cancel only
+      // leaves the lease to expire, after which the client can retry the part.
+      return undefined;
+    });
   if (lease.mode === "single") {
     let stored: { versionId?: string } | void;
     try {
@@ -83,8 +89,7 @@ async function uploadPart(
           return await metadata(object, "accept", { resourceId, leaseId: lease.leaseId, singlePut: true, digest });
         }
       }
-      await metadata(object, "cancel", { resourceId, leaseId: lease.leaseId, singlePut: true })
-        .catch(() => undefined);
+      await cancelLease({ resourceId, leaseId: lease.leaseId, singlePut: true });
       throw error;
     }
     try {
@@ -94,8 +99,7 @@ async function uploadPart(
         ...(versionId ? { versionId } : {}),
       });
     } catch (error) {
-      await metadata(object, "cancel", { resourceId, leaseId: lease.leaseId, singlePut: true })
-        .catch(() => undefined);
+      await cancelLease({ resourceId, leaseId: lease.leaseId, singlePut: true });
       throw error;
     }
   }
@@ -107,10 +111,7 @@ async function uploadPart(
     return await metadata(object, "accept", { resourceId, leaseId: lease.leaseId, ...part,
       ...(digest !== undefined ? { digest } : { hash: resumableHash!.snapshot() }) });
   } catch (error) {
-    // The part failure below is what the client must see. A lost cancel only
-    // leaves the lease to expire, after which the client can retry the part.
-    await metadata(object, "cancel", { resourceId, leaseId: lease.leaseId, partNumber: lease.partNumber })
-      .catch(() => undefined);
+    await cancelLease({ resourceId, leaseId: lease.leaseId, partNumber: lease.partNumber });
     throw error;
   }
 }

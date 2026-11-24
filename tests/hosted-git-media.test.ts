@@ -890,14 +890,75 @@ describe("Single-PUT fast path and per-OID media concurrency", () => {
     expect((await f.storage.get<LfsRecord>(`lfs:${secondOid}`))?.verified).toBe(true);
 
     // Repository cleanup waits for the in-flight first OID and rejects new media calls immediately.
+    const cleanupMultipart = vi.spyOn(f.bucket, "cleanupMultipartUploads");
     const cleanup = f.durable.fetch(new Request("https://git.internal/internal/git/cleanup", {
       method: "DELETE", headers: { "x-beutl-repo-id": repoId, "x-beutl-git-scope": "admin" },
     }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect((await f.verify(secondOid, { oid: secondOid, size: secondBytes.length })).status).toBe(410);
+    // Requests targeting the in-flight OID itself also get 410 immediately without joining the draining queue.
+    expect((await f.verify(firstOid, { oid: firstOid, size: firstBytes.length })).status).toBe(410);
+    expect(cleanupMultipart).not.toHaveBeenCalled();
 
     releaseFirst.resolve();
     expect((await firstVerify).status).toBe(200);
     expect((await cleanup).status).toBe(202);
+    expect(cleanupMultipart).toHaveBeenCalledOnce();
+  });
+
+  it("re-reads LFS records under their OID queue during alarm maintenance and avoids double count decrements", async () => {
+    const f = fixture();
+    const expiredBytes = new TextEncoder().encode("expired"), expiredOid = hash(expiredBytes);
+    const racingBytes = new TextEncoder().encode("racing"), racingOid = hash(racingBytes);
+    const { body } = await f.batch({ operation: "upload", objects: [
+      { oid: expiredOid, size: expiredBytes.length },
+      { oid: racingOid, size: racingBytes.length },
+    ] });
+    expect(f.bucket.presignedPut(body.objects[1].actions.upload.href, body.objects[1].actions.upload.header, racingBytes)).toBe(200);
+    // Order expiredOid before racingOid in storage listing by forcing both to appear expired in the initial snapshot.
+    const firstKey = expiredOid < racingOid ? expiredOid : racingOid;
+    const secondKey = expiredOid < racingOid ? racingOid : expiredOid;
+    const firstRecord = (await f.storage.get<LfsRecord>(`lfs:${firstKey}`))!;
+    const secondRecord = (await f.storage.get<LfsRecord>(`lfs:${secondKey}`))!;
+    await f.storage.put(`lfs:${firstKey}`, { ...firstRecord, expiresAt: 0 });
+    await f.storage.put(`lfs:${secondKey}`, { ...secondRecord, expiresAt: 0 });
+
+    // While alarm awaits B2 deletion of the first expired record, the second record verifies.
+    const firstDeleteStarted = Promise.withResolvers<void>();
+    const releaseFirstDelete = Promise.withResolvers<void>();
+    const originalDelete = f.bucket.delete.bind(f.bucket);
+    vi.spyOn(f.bucket, "delete").mockImplementation(async (key) => {
+      if (key.endsWith(firstKey)) {
+        firstDeleteStarted.resolve();
+        await releaseFirstDelete.promise;
+      }
+      return originalDelete(key);
+    });
+    // Ensure the second OID is the one that verifies during the alarm sweep.
+    const verifyOid = secondKey;
+    const verifyBytes = verifyOid === racingOid ? racingBytes : expiredBytes;
+    if (verifyOid === expiredOid) {
+      expect(f.bucket.presignedPut(body.objects[0].actions.upload.href, body.objects[0].actions.upload.header, expiredBytes)).toBe(200);
+    }
+
+    const sweep = f.durable.alarm();
+    await firstDeleteStarted.promise;
+    // Renew expiry and verify the second record before the alarm reaches it.
+    await f.storage.put(`lfs:${verifyOid}`, { ...(await f.storage.get<LfsRecord>(`lfs:${verifyOid}`))!, expiresAt: Date.now() + 60_000 });
+    expect((await f.verify(verifyOid, { oid: verifyOid, size: verifyBytes.length })).status).toBe(200);
+    releaseFirstDelete.resolve();
+    await sweep;
+
+    // The verified record must survive the alarm sweep intact, and lfsCount must decrement only once.
+    expect(await f.storage.get<LfsRecord>(`lfs:${firstKey}`)).toBeUndefined();
+    expect(await f.storage.get<LfsRecord>(`lfs:${verifyOid}`)).toMatchObject({ verified: true });
+    expect(await f.storage.get<number>("lfsCount")).toBe(1);
+
+    // A second admin cleanup of the already-deleted OID must not decrement lfsCount again.
+    const admin = await f.durable.fetch(new Request(`https://git.internal/internal/git/lfs-cleanup/${firstKey}`, {
+      method: "POST", headers: { "x-beutl-repo-id": repoId, "x-beutl-git-scope": "admin" },
+    }));
+    expect(admin.status).toBe(204);
+    expect(await f.storage.get<number>("lfsCount")).toBe(1);
   });
 });

@@ -90,10 +90,13 @@ export async function cleanupLfs(
   const parts = await storage.list({ prefix: partPrefix(oid) });
   if (parts.size) await storage.delete([...parts.keys()]);
   const updateCount = async () => {
-    const count = record ? await storage.get<number>("lfsCount") : undefined;
+    const [existing, count] = await Promise.all([
+      storage.get<LfsRecord>(recordKey),
+      storage.get<number>("lfsCount"),
+    ]);
     await Promise.all([
-      storage.delete(recordKey),
-      count === undefined ? undefined : storage.put("lfsCount", Math.max(0, count - 1)),
+      existing ? storage.delete(recordKey) : undefined,
+      existing && count !== undefined ? storage.put("lfsCount", Math.max(0, count - 1)) : undefined,
     ]);
   };
   await (withCountLock ? withCountLock(updateCount) : updateCount());
@@ -104,6 +107,7 @@ export async function handleLfsBatch(
   repoId: string, scope: GitScope, accounting?: GitStorageAccounting,
   options?: {
     waitForOids?: (oids: string[]) => Promise<void>;
+    runForOid?: <T>(oid: string, work: () => Promise<T>) => Promise<T>;
     withCountLock?: <T>(work: () => Promise<T>) => Promise<T>;
   },
 ): Promise<Response> {
@@ -136,10 +140,26 @@ export async function handleLfsBatch(
   const expired = [...records].filter(([, record]) => record && !record.verified && record.expiresAt <= Date.now());
   if (expired.length) {
     const resolved = await getBucket();
-    await Promise.all(expired.map(async ([oid, record]) => {
-      await cleanupLfs(storage, resolved, accounting, repoId, oid, record, options?.withCountLock);
-      records.delete(oid);
+    // Wait for every started cleanup before propagating an error so no sibling
+    // cleanup outlives this repository queue slot.
+    const settled = await Promise.allSettled(expired.map(async ([oid]) => {
+      const runCleanup = async () => {
+        const current = await storage.get<LfsRecord>(`lfs:${oid}`);
+        if (!current) {
+          records.delete(oid);
+          return;
+        }
+        if (current.verified || current.expiresAt > Date.now()) {
+          records.set(oid, current);
+          return;
+        }
+        await cleanupLfs(storage, resolved, accounting, repoId, oid, current, options?.withCountLock);
+        records.delete(oid);
+      };
+      await (options?.runForOid ? options.runForOid(oid, runCleanup) : runCleanup());
     }));
+    const failed = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failed) throw failed.reason;
   }
 
   const now = Date.now();

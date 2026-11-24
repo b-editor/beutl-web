@@ -104,16 +104,20 @@ export class GitRepositoryDurableObject {
     this.tail = result.then(() => undefined, () => undefined);
     return result;
   }
-  /** Serializes operations for one LFS OID while letting distinct objects run concurrently. */
-  private enqueueMedia<T>(oid: string, work: () => Promise<T>, { resolveStorage = false } = {}): Promise<T> {
+  /** Serializes work for one LFS OID without opening a nested DB context. */
+  private serializeOid<T>(oid: string, work: () => Promise<T>): Promise<T> {
     const previous = this.mediaQueues.get(oid) ?? Promise.resolve();
-    const result = previous.then(() => this.runWithBindings(work, resolveStorage));
+    const result = previous.then(work);
     const settled = result.then(() => undefined, () => undefined);
     this.mediaQueues.set(oid, settled);
     void settled.then(() => {
       if (this.mediaQueues.get(oid) === settled) this.mediaQueues.delete(oid);
     });
     return result;
+  }
+  /** Serializes operations for one LFS OID while letting distinct objects run concurrently. */
+  private enqueueMedia<T>(oid: string, work: () => Promise<T>, { resolveStorage = false } = {}): Promise<T> {
+    return this.serializeOid(oid, () => this.runWithBindings(work, resolveStorage));
   }
   private async drainMediaQueues(): Promise<void> {
     while (this.mediaQueues.size > 0) {
@@ -128,6 +132,9 @@ export class GitRepositoryDurableObject {
     const pathname = new URL(request.url).pathname;
     const mediaMatch = MEDIA_ROUTE.exec(pathname);
     if (mediaMatch) {
+      if (mediaMatch[1] === "media" && this.deleting) {
+        return Promise.resolve(new Response("Repository deleted", { status: 410 }));
+      }
       return this.enqueueMedia(mediaMatch[2], async () => this.app.fetch(request), { resolveStorage: mediaMatch[1] === "lfs-cleanup" });
     }
     const resolveStorage = !LFS_BATCH_ROUTE.test(pathname);
@@ -278,6 +285,7 @@ export class GitRepositoryDurableObject {
       .post("/api/v3/git/:repo/info/lfs/objects/batch", (c) => handleLfsBatch(c.req.raw, () => this.ensureBucket(), storage,
         c.get("repoId"), scopeOf(c) as GitScope, this.accounting, {
           waitForOids: (oids) => this.waitForMediaOids(oids),
+          runForOid: (oid, work) => this.serializeOid(oid, work),
           withCountLock: (work) => this.withCountLock(work),
         }))
       .get("/api/v3/git/:repo/info/refs", advertisedService, initialized, (c) =>
@@ -700,18 +708,28 @@ export class GitRepositoryDurableObject {
     if (!candidates.length || !changed) return false;
     const referenced = await referencedLfsOids(this.objectBucket(), repoId);
     const unreferenced = candidates.filter(([key]) => !referenced.has(key.slice(4)));
-    for (const [key, record] of unreferenced.slice(0, LFS_COLLECTION_BATCH)) {
+    let skippedBusy = false;
+    let collectedCount = 0;
+    for (const [key] of unreferenced.slice(0, LFS_COLLECTION_BATCH)) {
       const oid = key.slice(4);
-      if (this.mediaQueues.has(oid)) continue;
-      // Unpublish first; if deletion stops halfway, the expired reservation is
-      // cleaned up like an abandoned upload.
-      const abandoned = { ...record, verified: false, expiresAt: 0 };
-      await storage.put(key, abandoned);
-      await cleanupLfs(storage, this.objectBucket(), this.accounting, repoId, oid, abandoned,
-        (work) => this.withCountLock(work));
+      if (this.mediaQueues.has(oid)) {
+        skippedBusy = true;
+        continue;
+      }
+      await this.serializeOid(oid, async () => {
+        const current = await storage.get<Record>(key);
+        if (!current?.verified || (current.touchedAt ?? 0) + LFS_COLLECTION_GRACE_MS > now) return;
+        // Unpublish first; if deletion stops halfway, the expired reservation is
+        // cleaned up like an abandoned upload.
+        const abandoned = { ...current, verified: false, expiresAt: 0 };
+        await storage.put(key, abandoned);
+        await cleanupLfs(storage, this.objectBucket(), this.accounting, repoId, oid, abandoned,
+          (work) => this.withCountLock(work));
+        collectedCount++;
+      });
     }
-    if (unreferenced.length) console.info("Git LFS objects collected", { repoId, count: Math.min(unreferenced.length, LFS_COLLECTION_BATCH) });
-    if (unreferenced.length > LFS_COLLECTION_BATCH) return true;
+    if (collectedCount) console.info("Git LFS objects collected", { repoId, count: collectedCount });
+    if (unreferenced.length > LFS_COLLECTION_BATCH || skippedBusy) return true;
     await storage.put("lfsCollectionCheckedAt", now);
     return false;
   }
@@ -764,17 +782,22 @@ export class GitRepositoryDurableObject {
       }
       const records = await storage.list<Record>({ prefix: "lfs:", startAfter: cursor, limit: 50 });
       let failed = false;
-      for (const [key, record] of records) {
+      for (const [key] of records) {
         try {
           const oid = key.slice(4);
-          if (this.mediaQueues.has(oid)) continue;
-          if (!record.verified && record.expiresAt <= Date.now())
-            await cleanupLfs(storage, this.objectBucket(), this.accounting, repoId, oid, record,
-              (work) => this.withCountLock(work));
-          else if (record.verified && record.versionId && (fullSweep || !record.gcComplete)) {
-            await this.objectBucket().pruneVersions?.(lfsKey(repoId, oid), [record.versionId]);
-            await storage.put(key, { ...record, gcComplete: true });
-          }
+          // Serialize maintenance for each OID with concurrent media requests and
+          // re-read the record so an upload that verified or renewed meanwhile is kept.
+          await this.serializeOid(oid, async () => {
+            const current = await storage.get<Record>(key);
+            if (!current) return;
+            if (!current.verified && current.expiresAt <= Date.now()) {
+              await cleanupLfs(storage, this.objectBucket(), this.accounting, repoId, oid, current,
+                (work) => this.withCountLock(work));
+            } else if (current.verified && current.versionId && (fullSweep || !current.gcComplete)) {
+              await this.objectBucket().pruneVersions?.(lfsKey(repoId, oid), [current.versionId]);
+              await storage.put(key, { ...current, gcComplete: true });
+            }
+          });
         } catch (error) { failed = true; console.error("Git media cleanup failed", { repoId, oid: key.slice(4), error }); }
         await storage.put("maintenanceCursor", key);
       }
