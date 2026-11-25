@@ -9,7 +9,7 @@ type ByteRange = { start: number; end: number };
 // it would send most landing page views through the Worker for nothing.
 export const RANGE_SERVED_VIDEOS: ReadonlyMap<string, number> = new Map([
   ["/img/agent-demo.mp4", 16_520_404],
-  ["/img/showcase.mp4", 21_423_219],
+  ["/img/showcase.mp4", 21_706_291],
 ]);
 
 export function isRangeServedVideo(request: Request): boolean {
