@@ -64,4 +64,20 @@ describe("Git access token credentials", () => {
     expect(error).toHaveBeenCalledWith("Git access token last-use update failed", expect.objectContaining({ tokenId: write.row.id }));
     error.mockRestore();
   });
+
+  it("defers last-use updates to waitUntil without blocking authorization", async () => {
+    const repoId = "12345678-1234-1234-1234-123456789abc";
+    const write = await gitAccessTokenFixture({ repoId });
+    const delegate = gitAccessTokenDelegate([write.row]);
+    const gate = Promise.withResolvers<{ count: number }>();
+    delegate.updateMany.mockReturnValueOnce(gate.promise);
+    const background: Promise<unknown>[] = [];
+    await runWithDbProvider(async () => ({ gitAccessToken: delegate }) as never, async () => {
+      const access = await findGitAccess(basicCredential(write.token), repoId, (promise) => { background.push(promise); });
+      expect(access).toEqual({ ownerId: "owner", scope: "write", active: true });
+    });
+    expect(background).toHaveLength(1);
+    gate.resolve({ count: 1 });
+    await background[0];
+  });
 });

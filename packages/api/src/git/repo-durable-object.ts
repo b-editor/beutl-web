@@ -21,7 +21,8 @@ import { gitRepositoryThumbnailPrefix } from "./thumbnails";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const MEDIA = "/internal/git/media/:oid{[0-9a-f]{64}}";
-const MEDIA_WITHOUT_STORAGE = /^\/internal\/git\/media\/[0-9a-f]{64}\/(?:status|part|accept|cancel|complete)$/u;
+const MEDIA_ROUTE = /^\/internal\/git\/(media|lfs-cleanup)\/([0-9a-f]{64})(?:\/|$)/u;
+const LFS_BATCH_ROUTE = /^\/api\/v3\/git\/[^/]+\.git\/info\/lfs\/objects\/batch$/u;
 const DELETION_GRACE_MS = 2 * 60 * 60 * 1000;
 const BROWSE = "/internal/git/browse/";
 // Smart HTTP and browse share cached reads. Maintenance uses the bucket directly.
@@ -54,9 +55,13 @@ const sameHashState = (a: Sha256State | undefined, b: Sha256State | undefined) =
 const uploadOffsetMismatch = (offset: number) =>
   new Response("Upload offset mismatch", { status: 409, headers: { "Upload-Offset": String(offset) } });
 
-/** Serializes Git metadata and media receipts; media bodies stay in the Worker. */
+/** Serializes Git metadata and per-OID media receipts; media bodies stay in the Worker. */
 export class GitRepositoryDurableObject {
   private tail: Promise<unknown> = Promise.resolve();
+  private readonly mediaQueues = new Map<string, Promise<unknown>>();
+  private lfsCountTail: Promise<unknown> = Promise.resolve();
+  private deleting = false;
+  private boundRepoId?: string;
   private bucket?: GitObjectBucket;
   private resolvedEnv?: Environment;
   private repoCache?: { repoId: string; store: ObjectStore };
@@ -83,19 +88,56 @@ export class GitRepositoryDurableObject {
     await this.resolveStorageEnvironment();
     return this.objectBucket();
   }
+  private withCountLock<T>(work: () => Promise<T>): Promise<T> {
+    const result = this.lfsCountTail.then(work);
+    this.lfsCountTail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+  private async runWithBindings<T>(work: () => Promise<T>, resolveStorage: boolean): Promise<T> {
+    const env = resolveStorage ? await this.resolveStorageEnvironment() : this.env;
+    return this.accounting === databaseGitStorageAccounting
+      ? withGitDatabase(env, work, undefined, this.state.waitUntil?.bind(this.state))
+      : work();
+  }
   private enqueue<T>(work: () => Promise<T>, { resolveStorage = true } = {}): Promise<T> {
-    const run = async () => {
-      const env = resolveStorage ? await this.resolveStorageEnvironment() : this.env;
-      return this.accounting === databaseGitStorageAccounting
-        ? withGitDatabase(env, work, undefined, this.state.waitUntil?.bind(this.state))
-        : work();
-    };
-    const result = this.tail.then(run);
+    const result = this.tail.then(() => this.runWithBindings(work, resolveStorage));
     this.tail = result.then(() => undefined, () => undefined);
     return result;
   }
+  /** Serializes work for one LFS OID without opening a nested DB context. */
+  private serializeOid<T>(oid: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.mediaQueues.get(oid) ?? Promise.resolve();
+    const result = previous.then(work);
+    const settled = result.then(() => undefined, () => undefined);
+    this.mediaQueues.set(oid, settled);
+    void settled.then(() => {
+      if (this.mediaQueues.get(oid) === settled) this.mediaQueues.delete(oid);
+    });
+    return result;
+  }
+  /** Serializes operations for one LFS OID while letting distinct objects run concurrently. */
+  private enqueueMedia<T>(oid: string, work: () => Promise<T>, { resolveStorage = false } = {}): Promise<T> {
+    return this.serializeOid(oid, () => this.runWithBindings(work, resolveStorage));
+  }
+  private async drainMediaQueues(): Promise<void> {
+    while (this.mediaQueues.size > 0) {
+      await Promise.allSettled([...this.mediaQueues.values()]);
+    }
+  }
+  private async waitForMediaOids(oids: string[]): Promise<void> {
+    const active = oids.map((oid) => this.mediaQueues.get(oid)).filter((pending): pending is Promise<unknown> => pending !== undefined);
+    if (active.length) await Promise.allSettled(active);
+  }
   fetch(request: Request): Promise<Response> {
-    const resolveStorage = !MEDIA_WITHOUT_STORAGE.test(new URL(request.url).pathname);
+    const pathname = new URL(request.url).pathname;
+    const mediaMatch = MEDIA_ROUTE.exec(pathname);
+    if (mediaMatch) {
+      if (mediaMatch[1] === "media" && this.deleting) {
+        return Promise.resolve(new Response("Repository deleted", { status: 410 }));
+      }
+      return this.enqueueMedia(mediaMatch[2], async () => this.app.fetch(request), { resolveStorage: mediaMatch[1] === "lfs-cleanup" });
+    }
+    const resolveStorage = !LFS_BATCH_ROUTE.test(pathname);
     return this.enqueue(async () => this.app.fetch(request), { resolveStorage });
   }
 
@@ -106,7 +148,7 @@ export class GitRepositoryDurableObject {
       await next();
     });
     const active = createMiddleware<Routes>(async (c, next) => {
-      if (await storage.get<number>("deletedAt") !== undefined) return c.text("Repository deleted", 410);
+      if (this.deleting || await storage.get<number>("deletedAt") !== undefined) return c.text("Repository deleted", 410);
       await next();
     });
     // Bare-repository HEAD/config also consume account storage. Reserve the
@@ -167,9 +209,10 @@ export class GitRepositoryDurableObject {
       .use(async (c, next) => {
         const repoId = c.req.header("x-beutl-repo-id") ?? "";
         if (!UUID.test(repoId)) return c.text("Repository unavailable", 503);
-        const bound = await storage.get<string>("repoId");
+        const bound = this.boundRepoId ?? await storage.get<string>("repoId");
         if (bound && bound !== repoId) return c.text("Repository mismatch", 403);
         if (!bound) await storage.put("repoId", repoId);
+        this.boundRepoId = repoId;
         c.set("repoId", repoId);
         await next();
       })
@@ -188,7 +231,9 @@ export class GitRepositoryDurableObject {
         const repoId = c.get("repoId"), oid = c.req.param("oid");
         const r = await storage.get<Record>(`lfs:${oid}`);
         if (r?.verified) await this.accounting?.commitLfs(repoId, oid);
-        else if (!r || r.expiresAt <= Date.now()) await cleanupLfs(storage, this.objectBucket(), this.accounting, repoId, oid, r);
+        else if (!r || r.expiresAt <= Date.now()) {
+          await cleanupLfs(storage, this.objectBucket(), this.accounting, repoId, oid, r, (work) => this.withCountLock(work));
+        }
         return c.body(null, 204);
       })
       // Read-only views for the dashboard, whose Worker already checked the owner.
@@ -226,7 +271,7 @@ export class GitRepositoryDurableObject {
       })
       .post(`${MEDIA}/create`, scope("write"), media((repoId, oid, record, input) =>
         this.createUpload(repoId, oid, record, input), { resource: false }))
-      .post(`${MEDIA}/part`, scope("write"), media((_repoId, oid, record, input) => this.leasePart(oid, record, input)))
+      .post(`${MEDIA}/part`, scope("write"), media((repoId, oid, record, input) => this.leasePart(repoId, oid, record, input)))
       .post(`${MEDIA}/accept`, scope("write"), media((repoId, oid, record, input) => this.settlePart(repoId, oid, record, input, true)))
       .post(`${MEDIA}/cancel`, scope("write"), media((repoId, oid, record, input) => this.settlePart(repoId, oid, record, input, false)))
       .post(`${MEDIA}/complete`, scope("write"), media((repoId, oid, record) => this.completeUpload(repoId, oid, record)))
@@ -237,8 +282,12 @@ export class GitRepositoryDurableObject {
         if (c.req.param("repo") !== `${c.get("repoId")}.git`) return c.text("Not found", 404);
         await next();
       })
-      .post("/api/v3/git/:repo/info/lfs/objects/batch", (c) => handleLfsBatch(c.req.raw, this.objectBucket(), storage,
-        c.get("repoId"), scopeOf(c) as GitScope, this.accounting))
+      .post("/api/v3/git/:repo/info/lfs/objects/batch", (c) => handleLfsBatch(c.req.raw, () => this.ensureBucket(), storage,
+        c.get("repoId"), scopeOf(c) as GitScope, this.accounting, {
+          waitForOids: (oids) => this.waitForMediaOids(oids),
+          runForOid: (oid, work) => this.serializeOid(oid, work),
+          withCountLock: (work) => this.withCountLock(work),
+        }))
       .get("/api/v3/git/:repo/info/refs", advertisedService, initialized, (c) =>
         advertiseGitRefs(this.objectBucket(), c.get("repoId"), c.req.query("service") as GitService, this.repositoryOptions(c)))
       .post("/api/v3/git/:repo/git-upload-pack", initialized, (c) =>
@@ -302,10 +351,12 @@ export class GitRepositoryDurableObject {
     return reserved;
   }
   private async deleteRepository(repoId: string): Promise<boolean> {
+    this.deleting = true;
     this.repoCache = undefined;
     const storage = this.state.storage;
     let deletedAt = await storage.get<number>("deletedAt");
     if (deletedAt === undefined) { deletedAt = Date.now(); await storage.put("deletedAt", deletedAt); }
+    await this.drainMediaQueues();
     await storage.delete(["gitInitialized", "historyUnsettled", "lfsCount"]);
     const bucket = this.objectBucket();
     await bucket.cleanupMultipartUploads?.(`git-lfs/repos/${repoId}/`, [], Infinity);
@@ -366,28 +417,42 @@ export class GitRepositoryDurableObject {
     if (record.size === 0) {
       if (record.verified) return json(record);
       if (oid !== EMPTY_SHA256) {
-        await cleanupLfs(this.state.storage, this.objectBucket(), this.accounting, repoId, oid, record);
+        await cleanupLfs(this.state.storage, await this.ensureBucket(), this.accounting, repoId, oid, record,
+          (work) => this.withCountLock(work));
         return new Response("LFS SHA-256 mismatch", { status: 422 });
       }
       record.digest = oid;
       return this.publish(repoId, oid, record, async () => {
-        await this.objectBucket().put(lfsKey(repoId, oid), new Uint8Array());
-        return this.objectBucket().head(lfsKey(repoId, oid));
+        const bucket = await this.ensureBucket();
+        const stored = await bucket.put(lfsKey(repoId, oid), new Uint8Array());
+        const versionId = stored && typeof stored === "object" && "versionId" in stored && typeof stored.versionId === "string"
+          ? stored.versionId : undefined;
+        return versionId ? { size: 0, versionId } : bucket.head(lfsKey(repoId, oid));
       });
     }
-    if (!record.uploadId && !record.versionId) {
-      record.uploadId = (await this.objectBucket().createMultipartUpload(lfsKey(repoId, oid))).uploadId;
+    // Objects up to 32 MiB can finish in one checksum-pinned PUT without a B2
+    // multipart round trip. Larger objects always need a multipart upload ID.
+    if (record.size > MAX_GIT_LFS_PART_BYTES && !record.uploadId && !record.versionId) {
+      record.uploadId = (await (await this.ensureBucket()).createMultipartUpload(lfsKey(repoId, oid))).uploadId;
       await this.state.storage.put(`lfs:${oid}`, record);
     }
     return json(record);
   }
 
   /** Leases the next part to one PATCH and hands it the SHA-256 state at its offset. */
-  private async leasePart(oid: string, record: Record, input: any): Promise<Response> {
+  private async leasePart(repoId: string, oid: string, record: Record, input: any): Promise<Response> {
     const { offset, length } = input;
-    if (record.verified || record.versionId || !record.uploadId || (input.start === undefined && offset !== record.offset))
+    if (record.verified || record.versionId || (input.start === undefined && offset !== record.offset))
       return uploadOffsetMismatch(record.offset);
-    if (record.parallel || input.start !== undefined) return this.leaseParallelPart(oid, record, input);
+    if (!record.uploadId && !record.parallel && input.singlePut === true &&
+        offset === 0 && length === record.size && record.size <= MAX_GIT_LFS_PART_BYTES) {
+      if (record.lease && record.lease.until > Date.now())
+        return new Response("Upload part in progress", { status: 423, headers: { "Retry-After": "1" } });
+      record.lease = { id: crypto.randomUUID(), until: Date.now() + 15 * 60_000, offset: 0, length };
+      await this.state.storage.put(`lfs:${oid}`, record);
+      return json({ mode: "single", leaseId: record.lease.id, size: record.size });
+    }
+    if (record.parallel || input.start !== undefined) return this.leaseParallelPart(repoId, oid, record, input);
     if (!Number.isSafeInteger(length) || length <= 0 || length > MAX_GIT_LFS_PART_BYTES ||
         offset + length > record.size || (length < MIN_TUS_PART_BYTES && offset + length !== record.size))
       return new Response("Invalid tus part length", { status: 400 });
@@ -395,6 +460,9 @@ export class GitRepositoryDurableObject {
       return new Response("The upload needs larger parts to fit in 10,000", { status: 400 });
     if (record.lease && record.lease.until > Date.now())
       return new Response("Upload part in progress", { status: 423, headers: { "Retry-After": "1" } });
+    if (!record.uploadId) {
+      record.uploadId = (await (await this.ensureBucket()).createMultipartUpload(lfsKey(repoId, oid))).uploadId;
+    }
     record.lease = { id: crypto.randomUUID(), until: Date.now() + 15 * 60_000, offset, length };
     await this.state.storage.put(`lfs:${oid}`, record);
     return json({ uploadId: record.uploadId, partNumber: record.partCount + 1, leaseId: record.lease.id, hash: record.hash,
@@ -404,6 +472,27 @@ export class GitRepositoryDurableObject {
   /** Records an uploaded part's receipt and hash state, or releases the lease after a failed part. */
   private async settlePart(repoId: string, oid: string, record: Record, input: any, accepted: boolean): Promise<Response> {
     const storage = this.state.storage;
+    if (input.singlePut === true) {
+      if (!record.lease || input.leaseId !== record.lease.id) return new Response("Upload receipt changed", { status: 409 });
+      delete record.lease;
+      if (!accepted) {
+        await storage.put(`lfs:${oid}`, record);
+        return json(record);
+      }
+      if (typeof input.digest !== "string" || !/^[0-9a-f]{64}$/u.test(input.digest))
+        return new Response("Invalid upload receipt", { status: 400 });
+      if (input.digest !== oid) {
+        await cleanupLfs(storage, await this.ensureBucket(), this.accounting, repoId, oid, record,
+          (work) => this.withCountLock(work));
+        return new Response("LFS SHA-256 mismatch", { status: 422 });
+      }
+      record.offset = record.size;
+      record.digest = input.digest;
+      const versionId = typeof input.versionId === "string" && input.versionId.length > 0 ? input.versionId : undefined;
+      await this.extendReservation(repoId, oid, record);
+      return this.publish(repoId, oid, record, async () =>
+        versionId ? { size: record.size, versionId } : (await this.ensureBucket()).head(lfsKey(repoId, oid)));
+    }
     if (record.parallel) return this.settleParallelPart(repoId, oid, record, input, accepted);
     if (!record.lease || input.leaseId !== record.lease.id) return new Response("Upload receipt changed", { status: 409 });
     if (accepted) {
@@ -412,14 +501,19 @@ export class GitRepositoryDurableObject {
       if (typeof input.etag !== "string" || input.etag.length > 256 || input.partNumber !== record.partCount + 1 ||
           (complete ? !/^[0-9a-f]{64}$/u.test(input.digest) : !validHashState(input.hash, offset)))
         return new Response("Invalid upload receipt", { status: 400 });
-      await storage.put(partKey(oid, input.partNumber), { partNumber: input.partNumber, etag: input.etag });
       record.offset = offset; record.partCount++;
       if (complete) { record.digest = input.digest; delete record.hash; } else record.hash = input.hash;
+      delete record.lease;
       await this.extendReservation(repoId, oid, record);
+      await Promise.all([
+        storage.put(partKey(oid, input.partNumber), { partNumber: input.partNumber, etag: input.etag }),
+        storage.put(`lfs:${oid}`, record),
+      ]);
+      if (record.offset === record.size && !record.verified) return this.completeUpload(repoId, oid, record);
+      return json(record);
     }
     delete record.lease;
     await storage.put(`lfs:${oid}`, record);
-    if (accepted && record.offset === record.size && !record.verified) return this.completeUpload(repoId, oid, record);
     return json(record);
   }
 
@@ -438,7 +532,7 @@ export class GitRepositoryDurableObject {
    * part starts from the state its client names, which settleParallelPart
    * checks once the accepted offset reaches it.
    */
-  private async leaseParallelPart(oid: string, record: Record, input: any): Promise<Response> {
+  private async leaseParallelPart(repoId: string, oid: string, record: Record, input: any): Promise<Response> {
     const storage = this.state.storage;
     const { offset, length } = input;
     // Every part before the accepted offset is full, so offsets name part numbers.
@@ -456,11 +550,19 @@ export class GitRepositoryDurableObject {
     const part = await storage.get<LfsPart>(key) ?? { partNumber };
     if (part.lease && part.lease.until > Date.now())
       return new Response("Upload part in progress", { status: 423, headers: { "Retry-After": "1" } });
+    let recordChanged = false;
+    if (!record.uploadId) {
+      record.uploadId = (await (await this.ensureBucket()).createMultipartUpload(lfsKey(repoId, oid))).uploadId;
+      recordChanged = true;
+    }
     const start: Sha256State | undefined = offset === record.offset ? record.hash : input.start;
     // A failed re-upload leaves B2's earlier copy of the part, so its receipt stays until replaced.
     part.lease = { id: crypto.randomUUID(), until: Date.now() + 15 * 60_000, ...(start ? { start } : {}) };
-    await storage.put(key, part);
-    if (!record.parallel) { record.parallel = true; delete record.lease; await storage.put(`lfs:${oid}`, record); }
+    if (!record.parallel) { record.parallel = true; delete record.lease; recordChanged = true; }
+    await Promise.all([
+      storage.put(key, part),
+      recordChanged ? storage.put(`lfs:${oid}`, record) : undefined,
+    ]);
     return json({ uploadId: record.uploadId, partNumber, leaseId: part.lease.id, hash: start, size: record.size });
   }
 
@@ -477,8 +579,9 @@ export class GitRepositoryDurableObject {
     if (!part?.lease || input.leaseId !== part.lease.id) return new Response("Upload receipt changed", { status: 409 });
     const { start } = part.lease;
     delete part.lease;
+    let settledPart: LfsPart | undefined;
     if (!accepted) {
-      if (part.etag) await storage.put(key, part); else await storage.delete(key);
+      if (part.etag) { settledPart = part; await storage.put(key, part); } else await storage.delete(key);
     } else if (part.partNumber <= record.partCount) {
       // The lease expired and the accepted offset passed the earlier receipt,
       // whose digest the record now holds; B2 completion checks its ETag.
@@ -490,16 +593,20 @@ export class GitRepositoryDurableObject {
       if (typeof input.etag !== "string" || input.etag.length > 256 ||
           (end === record.size ? !/^[0-9a-f]{64}$/u.test(input.digest) : !validHashState(input.hash, end)))
         return new Response("Invalid upload receipt", { status: 400 });
-      await storage.put<LfsPart>(key, { partNumber: part.partNumber, etag: input.etag, length,
-        ...(start ? { start } : {}), ...(end === record.size ? { digest: input.digest } : { end: input.hash }) });
+      settledPart = { partNumber: part.partNumber, etag: input.etag, length,
+        ...(start ? { start } : {}), ...(end === record.size ? { digest: input.digest } : { end: input.hash }) };
+      await storage.put<LfsPart>(key, settledPart);
     }
     // A part being sent again is passed only once that upload settles: its
     // bytes may replace the stored part, and the receipt must match them.
-    for (let next = await storage.get<LfsPart>(partKey(oid, record.partCount + 1));
+    const nextPart = (n: number) => settledPart && settledPart.partNumber === n
+      ? Promise.resolve(settledPart) : storage.get<LfsPart>(partKey(oid, n));
+    for (let next = await nextPart(record.partCount + 1);
       next?.etag && next.length && !(next.lease && next.lease.until > Date.now());
-      next = await storage.get<LfsPart>(partKey(oid, record.partCount + 1))) {
+      next = await nextPart(record.partCount + 1)) {
       if (!sameHashState(next.start, record.hash)) {
-        await cleanupLfs(storage, await this.ensureBucket(), this.accounting, repoId, oid, record);
+        await cleanupLfs(storage, await this.ensureBucket(), this.accounting, repoId, oid, record,
+          (work) => this.withCountLock(work));
         return new Response("LFS SHA-256 mismatch", { status: 422 });
       }
       record.offset += next.length; record.partCount++;
@@ -523,7 +630,8 @@ export class GitRepositoryDurableObject {
       return new Response("Upload incomplete", { status: 409 });
     const bucket = await this.ensureBucket();
     if (record.digest !== oid) {
-      await cleanupLfs(this.state.storage, bucket, this.accounting, repoId, oid, record);
+      await cleanupLfs(this.state.storage, bucket, this.accounting, repoId, oid, record,
+        (work) => this.withCountLock(work));
       return new Response("LFS SHA-256 mismatch", { status: 422 });
     }
     const key = lfsKey(repoId, oid);
@@ -533,7 +641,7 @@ export class GitRepositoryDurableObject {
         .filter(p => p.partNumber <= record.partCount).sort((a, b) => a.partNumber - b.partNumber)
         .map(({ partNumber, etag }) => ({ partNumber, etag: etag! }));
       try {
-        return await bucket.resumeMultipartUpload(key, uploadId).complete(parts);
+        return await bucket.resumeMultipartUpload(key, uploadId).complete(parts, record.size);
       } catch (error) {
         // B2 may have assembled the object before its completion response was lost.
         const existing = await bucket.head(key);
@@ -551,11 +659,14 @@ export class GitRepositoryDurableObject {
     if (!object?.versionId || object.size !== record.size) throw new Error("B2 completion has no pinned version");
     await this.accounting?.commitLfs(repoId, oid);
     record.versionId = object.versionId; record.verified = true; record.touchedAt = Date.now();
+    const hasParts = record.partCount > 0 || record.parallel === true;
     delete record.hash; delete record.lease;
-    await storage.put(`lfs:${oid}`, record);
-    const parts = await storage.list({ prefix: partPrefix(oid) });
-    if (parts.size) await storage.delete([...parts.keys()]);
-    await scheduleGitMaintenance(storage, Date.now() + 60_000);
+    const parts = hasParts ? await storage.list({ prefix: partPrefix(oid) }) : undefined;
+    await Promise.all([
+      storage.put(`lfs:${oid}`, record),
+      parts?.size ? storage.delete([...parts.keys()]) : undefined,
+      scheduleGitMaintenance(storage, Date.now() + 60_000),
+    ]);
     return json(record);
   }
 
@@ -567,7 +678,7 @@ export class GitRepositoryDurableObject {
   private async verifyUpload(repoId: string, oid: string, record: Record, input: any): Promise<Response> {
     if (input.size !== record.size) return new Response("LFS size differs from its reservation", { status: 422 });
     if (record.verified) return json(record);
-    const object = await this.objectBucket().head(lfsKey(repoId, oid), undefined, { checksum: true });
+    const object = await (await this.ensureBucket()).head(lfsKey(repoId, oid), undefined, { checksum: true });
     if (!object?.versionId || object.size !== record.size || object.checksumSha256 !== sha256Base64(oid))
       return new Response("LFS object has not been uploaded", { status: 404 });
     return this.publish(repoId, oid, record, async () => object);
@@ -597,15 +708,28 @@ export class GitRepositoryDurableObject {
     if (!candidates.length || !changed) return false;
     const referenced = await referencedLfsOids(this.objectBucket(), repoId);
     const unreferenced = candidates.filter(([key]) => !referenced.has(key.slice(4)));
-    for (const [key, record] of unreferenced.slice(0, LFS_COLLECTION_BATCH)) {
-      // Unpublish first; if deletion stops halfway, the expired reservation is
-      // cleaned up like an abandoned upload.
-      const abandoned = { ...record, verified: false, expiresAt: 0 };
-      await storage.put(key, abandoned);
-      await cleanupLfs(storage, this.objectBucket(), this.accounting, repoId, key.slice(4), abandoned);
+    let skippedBusy = false;
+    let collectedCount = 0;
+    for (const [key] of unreferenced.slice(0, LFS_COLLECTION_BATCH)) {
+      const oid = key.slice(4);
+      if (this.mediaQueues.has(oid)) {
+        skippedBusy = true;
+        continue;
+      }
+      await this.serializeOid(oid, async () => {
+        const current = await storage.get<Record>(key);
+        if (!current?.verified || (current.touchedAt ?? 0) + LFS_COLLECTION_GRACE_MS > now) return;
+        // Unpublish first; if deletion stops halfway, the expired reservation is
+        // cleaned up like an abandoned upload.
+        const abandoned = { ...current, verified: false, expiresAt: 0 };
+        await storage.put(key, abandoned);
+        await cleanupLfs(storage, this.objectBucket(), this.accounting, repoId, oid, abandoned,
+          (work) => this.withCountLock(work));
+        collectedCount++;
+      });
     }
-    if (unreferenced.length) console.info("Git LFS objects collected", { repoId, count: Math.min(unreferenced.length, LFS_COLLECTION_BATCH) });
-    if (unreferenced.length > LFS_COLLECTION_BATCH) return true;
+    if (collectedCount) console.info("Git LFS objects collected", { repoId, count: collectedCount });
+    if (unreferenced.length > LFS_COLLECTION_BATCH || skippedBusy) return true;
     await storage.put("lfsCollectionCheckedAt", now);
     return false;
   }
@@ -658,15 +782,22 @@ export class GitRepositoryDurableObject {
       }
       const records = await storage.list<Record>({ prefix: "lfs:", startAfter: cursor, limit: 50 });
       let failed = false;
-      for (const [key, record] of records) {
+      for (const [key] of records) {
         try {
           const oid = key.slice(4);
-          if (!record.verified && record.expiresAt <= Date.now())
-            await cleanupLfs(storage, this.objectBucket(), this.accounting, repoId, oid, record);
-          else if (record.verified && record.versionId && (fullSweep || !record.gcComplete)) {
-            await this.objectBucket().pruneVersions?.(lfsKey(repoId, oid), [record.versionId]);
-            await storage.put(key, { ...record, gcComplete: true });
-          }
+          // Serialize maintenance for each OID with concurrent media requests and
+          // re-read the record so an upload that verified or renewed meanwhile is kept.
+          await this.serializeOid(oid, async () => {
+            const current = await storage.get<Record>(key);
+            if (!current) return;
+            if (!current.verified && current.expiresAt <= Date.now()) {
+              await cleanupLfs(storage, this.objectBucket(), this.accounting, repoId, oid, current,
+                (work) => this.withCountLock(work));
+            } else if (current.verified && current.versionId && (fullSweep || !current.gcComplete)) {
+              await this.objectBucket().pruneVersions?.(lfsKey(repoId, oid), [current.versionId]);
+              await storage.put(key, { ...current, gcComplete: true });
+            }
+          });
         } catch (error) { failed = true; console.error("Git media cleanup failed", { repoId, oid: key.slice(4), error }); }
         await storage.put("maintenanceCursor", key);
       }

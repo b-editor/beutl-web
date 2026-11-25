@@ -21,9 +21,14 @@ export interface GitObjectBucket {
     body: ReadableStream<Uint8Array>;
     arrayBuffer(): Promise<ArrayBuffer>;
   } | null>;
-  put(key: string, value: Uint8Array): Promise<unknown>;
-  /** Known-length compressed packs can be written without assembling another full buffer. */
-  putStream?(key: string, body: ReadableStream<Uint8Array>, length: number): Promise<unknown>;
+  put(key: string, value: Uint8Array): Promise<{ versionId?: string } | unknown>;
+  /** Known-length streams can be written without buffering, optionally pinning a SHA-256 checksum. */
+  putStream?(
+    key: string,
+    body: ReadableStream<Uint8Array>,
+    length: number,
+    options?: { checksumSha256?: string },
+  ): Promise<{ versionId?: string } | void>;
   delete(key: string | string[]): Promise<unknown>;
   deletePrefix?(prefix: string): Promise<void>;
   pruneVersions?(key: string, keepVersionIds: readonly string[]): Promise<void>;
@@ -52,7 +57,7 @@ export interface GitObjectBucket {
 export interface GitMultipartUpload {
   uploadId: string;
   uploadPart(partNumber: number, value: ReadableStream<Uint8Array>, length: number): Promise<{ partNumber: number; etag: string }>;
-  complete(parts: { partNumber: number; etag: string }[]): Promise<{ size: number; versionId?: string }>;
+  complete(parts: { partNumber: number; etag: string }[], expectedSize?: number): Promise<{ size: number; versionId?: string }>;
   abort(): Promise<void>;
 }
 

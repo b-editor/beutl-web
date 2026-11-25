@@ -158,7 +158,14 @@ const BODYLESS_METHODS = new Set(["GET", "HEAD"]);
 const STORAGE_PART_PATH = /^\/api\/v3\/storage\/uploads\/[^/]+\/parts\/\d+$/u;
 const TUS_UPLOAD_PATH = /^\/api\/v3\/git\/[^/]+\.git\/info\/lfs\/objects\/[0-9a-f]{64}\/tus(?:\/[^/]*)?$/u;
 const GIT_REPOSITORY_PATH = /^\/api\/v3\/git\/[^/]+\.git(?:\/|$)/u;
-const GIT_MEDIA_PATH = /^\/api\/v3\/git\/[^/]+\.git\/info\/lfs\/objects\/[0-9a-f]{64}\/(?:download|verify|tus(?:\/[^/]+)?)$/u;
+const GIT_DOWNLOAD_PATH = /^\/api\/v3\/git\/[^/]+\.git\/info\/lfs\/objects\/[0-9a-f]{64}\/download$/u;
+const GIT_TUS_PART_PATH = /^\/api\/v3\/git\/[^/]+\.git\/info\/lfs\/objects\/[0-9a-f]{64}\/tus\/[^/]+$/u;
+
+function workerNeedsGitS3Secrets(method: string, pathname: string): boolean {
+  if (GIT_DOWNLOAD_PATH.test(pathname)) return method === "GET" || method === "HEAD";
+  if (GIT_TUS_PART_PATH.test(pathname)) return method === "PATCH";
+  return false;
+}
 
 /** tus clients require Tus-Resumable on every response, including this boundary's 413. */
 async function bodyTooLarge(request: Request): Promise<Response> {
@@ -226,8 +233,8 @@ export default {
     if (bounded === null) return bodyTooLarge(request);
 
     const pathname = new URL(bounded.url).pathname;
-    // Git authentication uses the database. Only media transfers access S3 from this Worker.
-    const secretNames = GIT_MEDIA_PATH.test(pathname) ? S3_SECRET_NAMES
+    // Git authentication uses the database. Only Worker-streamed media bodies access S3 here.
+    const secretNames = workerNeedsGitS3Secrets(bounded.method, pathname) ? S3_SECRET_NAMES
       : GIT_REPOSITORY_PATH.test(pathname) ? [] : WORKER_SECRET_NAMES;
     const env = await resolveWorkerSecrets<Env>(bindings, secretNames);
     return withApiBindings(env, async (scopedContext) => {

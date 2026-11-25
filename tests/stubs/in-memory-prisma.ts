@@ -1376,6 +1376,38 @@ export function createInMemoryPrisma() {
     },
     $queryRaw: async (query: TemplateStringsArray, ...values: unknown[]) => {
       const sql = query.join("?");
+      const sumAccountReserved = (ownerId: string): bigint => {
+        const files = [...state.files.values()]
+          .filter((file) => file.userId === ownerId && !aiJobResultForFile(file.id))
+          .reduce((sum, file) => sum + BigInt(file.size), BigInt(0));
+        const uploads = [...state.storageUploads.values()]
+          .filter((upload) => upload.userId === ownerId && upload.completedFileId === null)
+          .reduce((sum, upload) => sum + BigInt(upload.size), BigInt(0));
+        const lfs = [...state.gitLfsStorage.values()]
+          .filter((row) => row.ownerId === ownerId)
+          .reduce((sum, row) => sum + row.size, BigInt(0));
+        const history = [...state.gitRepositories.values()]
+          .filter((row) => row.ownerId === ownerId)
+          .reduce((sum, row) => sum + row.historyBytes + row.historyReservedBytes, BigInt(0));
+        return files + uploads + lfs + history;
+      };
+      if (sql.includes('FROM "GitLfsStorage" AS "r"')) {
+        const [repoId, oid] = values as [string, string];
+        const row = state.gitLfsStorage.get(`${repoId}:${oid}`);
+        if (!row) return [];
+        const repo = state.gitRepositories.get(repoId);
+        const repoActive = Boolean(repo && repo.ownerId === row.ownerId && repo.deletedAt === null);
+        return [{
+          ownerId: row.ownerId,
+          verified: row.verified,
+          repoActive,
+          used: row.verified ? BigInt(0) : sumAccountReserved(row.ownerId),
+        }];
+      }
+      if (sql.includes('"historyBytes" + "historyReservedBytes"')) {
+        const [ownerId] = values as [string];
+        return [{ total: sumAccountReserved(ownerId) }];
+      }
       if (sql.includes('SUM(COALESCE("reservedUsageUnits", "usageUnits"))')) {
         const [since, limit] = values as [Date, number | undefined];
         const key = sql.includes('GROUP BY "kind"') ? "kind" : "userId";

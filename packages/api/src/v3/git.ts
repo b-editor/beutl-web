@@ -11,6 +11,7 @@ import {
   readTusUpload,
   tusOptions,
   verifyLfsUpload,
+  type LfsMetadataTarget,
   type LfsObject,
 } from "../git/media-worker";
 
@@ -39,7 +40,11 @@ const repositoryId = (c: Context) => c.req.param("repo")!.slice(0, -".git".lengt
  */
 const authorize = (scope: GitScope | ((c: Context<Routes>) => GitScope)) => createMiddleware<Routes>(async (c, next) => {
   const repoId = repositoryId(c);
-  const access = await findGitAccess(c.req.header("authorization") ?? null, repoId);
+  let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
+  try { waitUntil = c.executionCtx.waitUntil.bind(c.executionCtx); } catch {
+    // Next.js routes and direct unit calls have no Worker ExecutionContext.
+  }
+  const access = await findGitAccess(c.req.header("authorization") ?? null, repoId, waitUntil);
   if (!access) {
     // A Basic challenge makes Git send the credentials embedded in the remote URL.
     return c.text("Unauthorized", 401, { "WWW-Authenticate": "Basic realm=\"Beutl Git\", charset=\"UTF-8\"", "Cache-Control": "no-store" });
@@ -61,11 +66,15 @@ const tusVersion = createMiddleware(async (c, next) => {
 /** Smart HTTP and LFS batch metadata are serialized by the repository's Durable Object. */
 const forward = (c: Context<Routes>) => gitRepositoryObject(c.env, c.get("access").repoId).forward(c.req.raw, c.get("access"));
 
-const lfsObject = (c: Context<Routes>): LfsObject => ({
-  bucket: new S3GitObjectBucket(c.env),
+const lfsMetadata = (c: Context<Routes>): LfsMetadataTarget => ({
   repository: gitRepositoryObject(c.env, c.get("access").repoId),
   access: c.get("access"),
   oid: c.req.param("oid")!,
+});
+
+const lfsObject = (c: Context<Routes>): LfsObject => ({
+  bucket: new S3GitObjectBucket(c.env),
+  ...lfsMetadata(c),
 });
 
 // Paths follow Git smart HTTP and Git LFS so stock clients use the clone URL.
@@ -88,12 +97,12 @@ const git = new Hono<Routes>()
     c.json({ message: "Git LFS file locking is not supported" }, 501,
       { "Content-Type": "application/vnd.git-lfs+json", "Cache-Control": "no-store" }))
   // Stock Git LFS PUTs to a presigned B2 URL from the batch, then confirms here.
-  .post(`${LFS_OBJECT}/verify`, authorize("write"), (c) => verifyLfsUpload(c.req.raw, lfsObject(c)))
+  .post(`${LFS_OBJECT}/verify`, authorize("write"), (c) => verifyLfsUpload(c.req.raw, lfsMetadata(c)))
   .options(`${LFS_OBJECT}/tus/:resource{${UUID}}?`, authorize("write"), () => tusOptions())
-  .post(`${LFS_OBJECT}/tus`, authorize("write"), tusVersion, (c) => createTusUpload(c.req.raw, lfsObject(c)))
+  .post(`${LFS_OBJECT}/tus`, authorize("write"), tusVersion, (c) => createTusUpload(c.req.raw, lfsMetadata(c)))
   // Hono serves HEAD through GET routes; a tus resource has no GET representation.
   .get(TUS_UPLOAD, authorize("write"), tusVersion, (c): Response | Promise<Response> => c.req.method === "HEAD"
-    ? readTusUpload(lfsObject(c), c.req.param("resource"))
+    ? readTusUpload(lfsMetadata(c), c.req.param("resource"))
     : c.body(null, 405, { "Cache-Control": "no-store" }))
   .patch(TUS_UPLOAD, authorize("write"), tusVersion, (c) =>
     appendTusUpload(c.req.raw, lfsObject(c), c.req.param("resource")));

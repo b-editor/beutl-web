@@ -1,14 +1,18 @@
+import { createHash } from "node:crypto";
 import { MAX_GIT_LFS_PART_BYTES } from "@beutl/core";
 import type { GitObjectBucket } from "./git-object-store";
 import type { GitAccess, GitMediaAction, GitRepositoryObject } from "./environment";
 import { lfsKey, MAX_LFS_OBJECT_BYTES, MIN_TUS_PART_BYTES, readJson, type LfsRecord } from "./lfs";
 import { ResumableSha256, type Sha256State } from "./resumable-sha256";
+import { sha256Base64 } from "./s3-object-store";
 
 // LFS bodies stream between the client and B2 in the ordinary Worker. The
 // repository object only records reservations, offsets, receipts and hash state.
 
+/** Metadata-only target for LFS operations that never stream bodies in the Worker. */
+export type LfsMetadataTarget = { repository: GitRepositoryObject; access: GitAccess; oid: string };
 /** One LFS object of a repository whose access the route has already verified. */
-export type LfsObject = { bucket: GitObjectBucket; repository: GitRepositoryObject; access: GitAccess; oid: string };
+export type LfsObject = LfsMetadataTarget & { bucket: GitObjectBucket };
 
 const integer = (s: string | null) => s !== null && /^\d+$/u.test(s) && Number.isSafeInteger(Number(s)) ? Number(s) : -1;
 /**
@@ -30,7 +34,7 @@ const tus = (status: number, headers: HeadersInit = {}, body?: string) => new Re
   status, headers: { "Cache-Control": "no-store", ...headers },
 });
 
-function metadata(object: LfsObject, action: "status" | GitMediaAction, body?: unknown): Promise<Response> {
+function metadata(object: LfsMetadataTarget, action: "status" | GitMediaAction, body?: unknown): Promise<Response> {
   return object.repository.media(object.access, object.oid, action, body);
 }
 async function recordFrom(response: Response): Promise<LfsRecord> {
@@ -39,37 +43,75 @@ async function recordFrom(response: Response): Promise<LfsRecord> {
 }
 
 /**
- * Streams one PATCH into its B2 part while continuing the object's SHA-256, so
- * the last part yields the digest without reading the stored bytes back.
+ * Streams one PATCH into B2 while hashing its bytes. Objects that arrive in a
+ * single PATCH (<= 32 MiB) use a single checksum-pinned PUT with native SHA-256;
+ * multi-part objects continue the resumable SHA-256 into a B2 multipart upload.
  */
 async function uploadPart(
   object: LfsObject, resourceId: string, offset: number, length: number, body: ReadableStream<Uint8Array>,
   start?: Sha256State,
 ): Promise<Response> {
-  const prepare = await metadata(object, "part", { resourceId, offset, length, start });
+  const singlePut = typeof object.bucket.putStream === "function";
+  const prepare = await metadata(object, "part", { resourceId, offset, length, start, singlePut });
   if (!prepare.ok) return prepare;
-  const lease = await prepare.json() as { uploadId: string; partNumber: number; leaseId: string; hash?: Sha256State; size: number };
-  const hash = new ResumableSha256(lease.hash, offset);
+  const lease = await prepare.json() as {
+    mode?: "single"; uploadId?: string; partNumber?: number; leaseId: string; hash?: Sha256State; size: number;
+  };
+  const singleRequest = offset === 0 && length === lease.size;
+  const nativeHash = singleRequest ? createHash("sha256") : undefined;
+  const resumableHash = singleRequest ? undefined : new ResumableSha256(lease.hash, offset);
   let received = 0;
   const bounded = body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
       received += chunk.byteLength;
       if (received > length) throw new Error("tus body exceeds Content-Length");
-      hash.update(chunk);
+      if (nativeHash) nativeHash.update(chunk);
+      else resumableHash!.update(chunk);
       controller.enqueue(chunk);
     },
     flush() { if (received !== length) throw new Error("tus body is incomplete"); },
   }));
+  const key = lfsKey(object.access.repoId, object.oid);
+  const cancelLease = (payload: Record<string, unknown>) =>
+    metadata(object, "cancel", payload).catch(() => {
+      // The part failure below is what the client must see. A lost cancel only
+      // leaves the lease to expire, after which the client can retry the part.
+      return undefined;
+    });
+  if (lease.mode === "single") {
+    let stored: { versionId?: string } | void;
+    try {
+      stored = await object.bucket.putStream!(key, bounded, length, { checksumSha256: sha256Base64(object.oid) });
+    } catch (error) {
+      if (received === length) {
+        const digest = nativeHash!.digest("hex");
+        if (digest !== object.oid) {
+          return await metadata(object, "accept", { resourceId, leaseId: lease.leaseId, singlePut: true, digest });
+        }
+      }
+      await cancelLease({ resourceId, leaseId: lease.leaseId, singlePut: true });
+      throw error;
+    }
+    try {
+      const versionId = stored && typeof stored === "object" && "versionId" in stored ? stored.versionId : undefined;
+      return await metadata(object, "accept", {
+        resourceId, leaseId: lease.leaseId, singlePut: true, digest: nativeHash!.digest("hex"),
+        ...(versionId ? { versionId } : {}),
+      });
+    } catch (error) {
+      await cancelLease({ resourceId, leaseId: lease.leaseId, singlePut: true });
+      throw error;
+    }
+  }
   try {
-    const part = await object.bucket.resumeMultipartUpload(lfsKey(object.access.repoId, object.oid), lease.uploadId)
-      .uploadPart(lease.partNumber, bounded, length);
+    const part = await object.bucket.resumeMultipartUpload(key, lease.uploadId!)
+      .uploadPart(lease.partNumber!, bounded, length);
+    const digest = nativeHash ? nativeHash.digest("hex")
+      : offset + length === lease.size ? resumableHash!.digestHex() : undefined;
     return await metadata(object, "accept", { resourceId, leaseId: lease.leaseId, ...part,
-      ...(offset + length === lease.size ? { digest: hash.digestHex() } : { hash: hash.snapshot() }) });
+      ...(digest !== undefined ? { digest } : { hash: resumableHash!.snapshot() }) });
   } catch (error) {
-    // The part failure below is what the client must see. A lost cancel only
-    // leaves the lease to expire, after which the client can retry the part.
-    await metadata(object, "cancel", { resourceId, leaseId: lease.leaseId, partNumber: lease.partNumber })
-      .catch(() => undefined);
+    await cancelLease({ resourceId, leaseId: lease.leaseId, partNumber: lease.partNumber });
     throw error;
   }
 }
@@ -82,7 +124,7 @@ export function tusOptions(): Response {
   });
 }
 
-export async function createTusUpload(request: Request, object: LfsObject): Promise<Response> {
+export async function createTusUpload(request: Request, object: LfsMetadataTarget): Promise<Response> {
   if (request.headers.get("upload-defer-length")) return tus(400, {}, "Upload-Length is required");
   const response = await metadata(object, "create", { length: integer(request.headers.get("upload-length")) });
   if (!response.ok) return tus(response.status, {}, await response.text());
@@ -92,7 +134,7 @@ export async function createTusUpload(request: Request, object: LfsObject): Prom
     ...(record.verified ? {} : { "Upload-Expires": new Date(record.expiresAt).toUTCString() }) });
 }
 
-async function currentUpload(object: LfsObject, resourceId: string): Promise<LfsRecord | Response> {
+async function currentUpload(object: LfsMetadataTarget, resourceId: string): Promise<LfsRecord | Response> {
   const status = await metadata(object, "status");
   if (!status.ok) return tus(status.status);
   const record = await recordFrom(status);
@@ -100,7 +142,7 @@ async function currentUpload(object: LfsObject, resourceId: string): Promise<Lfs
 }
 
 /** HEAD reports the accepted offset and also recovers completion after a lost PATCH response. */
-export async function readTusUpload(object: LfsObject, resourceId: string): Promise<Response> {
+export async function readTusUpload(object: LfsMetadataTarget, resourceId: string): Promise<Response> {
   const record = await currentUpload(object, resourceId);
   return record instanceof Response ? record : finishTusUpload(object, record, 200);
 }
@@ -121,7 +163,7 @@ export async function appendTusUpload(request: Request, object: LfsObject, resou
 }
 
 /** The PATCH that stores the last byte also publishes the object, as tus clients expect. */
-async function finishTusUpload(object: LfsObject, record: LfsRecord, status: number): Promise<Response> {
+async function finishTusUpload(object: LfsMetadataTarget, record: LfsRecord, status: number): Promise<Response> {
   if (record.offset === record.size && !record.verified) {
     const completed = await metadata(object, "complete", { resourceId: record.resourceId });
     if (!completed.ok) return tus(completed.status, {}, await completed.text());
@@ -139,7 +181,7 @@ const lfs = (status: number, message?: string) => new Response(message === undef
 });
 
 /** The basic transfer's verify action, sent after the client PUT the object to B2. */
-export async function verifyLfsUpload(request: Request, object: LfsObject): Promise<Response> {
+export async function verifyLfsUpload(request: Request, object: LfsMetadataTarget): Promise<Response> {
   let input: any;
   try { input = await readJson(request); } catch {
     // Malformed JSON is the client's protocol error.
